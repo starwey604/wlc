@@ -16,6 +16,8 @@ pub struct Spanned<T> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Schema {
     pub version: Spanned<u32>,
+    /// Globally reserved message or enum IDs.
+    pub reserved_ids: Vec<Spanned<u16>>,
     pub declarations: Vec<Declaration>,
 }
 
@@ -45,6 +47,8 @@ impl Declaration {
 pub struct Message {
     pub name: Spanned<String>,
     pub id: Spanned<u16>,
+    /// Field numbers that cannot be reused.
+    pub reserved_numbers: Vec<Spanned<u16>>,
     pub fields: Vec<Field>,
 }
 
@@ -52,6 +56,8 @@ pub struct Message {
 pub struct Enum {
     pub name: Spanned<String>,
     pub id: Spanned<u16>,
+    /// Enum values that cannot be reused.
+    pub reserved_numbers: Vec<Spanned<i32>>,
     pub values: Vec<EnumValue>,
 }
 

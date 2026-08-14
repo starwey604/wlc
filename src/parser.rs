@@ -63,11 +63,37 @@ impl Parser {
         let mut declarations = Vec::new();
         let mut names = HashSet::new();
         let mut ids = HashSet::new();
+        let mut reserved_ids = Vec::new();
+        let mut reserved_id_values = HashSet::new();
         while !matches!(self.current().kind, TokenKind::End) {
+            if matches!(self.current().kind, TokenKind::Reserved) {
+                let reserved = self.parse_reservation("declaration ID")?;
+                if !reserved_id_values.insert(reserved.value) {
+                    return Err(self.error(
+                        reserved.span,
+                        format!("duplicate reserved declaration ID {}", reserved.value),
+                    ));
+                }
+                if ids.contains(&reserved.value) {
+                    return Err(self.error(
+                        reserved.span,
+                        format!(
+                            "declaration ID {} is both active and reserved",
+                            reserved.value
+                        ),
+                    ));
+                }
+                reserved_ids.push(reserved);
+                continue;
+            }
             let declaration = match self.current().kind {
                 TokenKind::Message => Declaration::Message(self.parse_message()?),
                 TokenKind::Enum => Declaration::Enum(self.parse_enum()?),
-                _ => return Err(self.error_current("expected `message` or `enum` declaration")),
+                _ => {
+                    return Err(
+                        self.error_current("expected `message`, `enum`, or `reserved` declaration")
+                    );
+                }
             };
             if !names.insert(declaration.name().value.clone()) {
                 return Err(self.error(
@@ -81,6 +107,15 @@ impl Parser {
                     format!("duplicate declaration id {}", declaration.id().value),
                 ));
             }
+            if reserved_id_values.contains(&declaration.id().value) {
+                return Err(self.error(
+                    declaration.id().span,
+                    format!(
+                        "declaration ID {} is both active and reserved",
+                        declaration.id().value
+                    ),
+                ));
+            }
             declarations.push(declaration);
         }
 
@@ -92,6 +127,7 @@ impl Parser {
         }
         Ok(Schema {
             version,
+            reserved_ids,
             declarations,
         })
     }
@@ -106,9 +142,31 @@ impl Parser {
         let mut fields = Vec::new();
         let mut names = HashSet::new();
         let mut numbers = HashSet::new();
+        let mut reserved_numbers = Vec::new();
+        let mut reserved_number_values = HashSet::new();
         while !matches!(self.current().kind, TokenKind::RightBrace) {
             if matches!(self.current().kind, TokenKind::End) {
                 return Err(self.error_current("expected `}` to close message"));
+            }
+            if matches!(self.current().kind, TokenKind::Reserved) {
+                let reserved = self.parse_reservation("field number")?;
+                if !reserved_number_values.insert(reserved.value) {
+                    return Err(self.error(
+                        reserved.span,
+                        format!("duplicate reserved field number {}", reserved.value),
+                    ));
+                }
+                if numbers.contains(&reserved.value) {
+                    return Err(self.error(
+                        reserved.span,
+                        format!(
+                            "field number {} is both active and reserved",
+                            reserved.value
+                        ),
+                    ));
+                }
+                reserved_numbers.push(reserved);
+                continue;
             }
             let field = self.parse_field()?;
             if !names.insert(field.name.value.clone()) {
@@ -123,10 +181,24 @@ impl Parser {
                     format!("duplicate field number {}", field.number.value),
                 ));
             }
+            if reserved_number_values.contains(&field.number.value) {
+                return Err(self.error(
+                    field.number.span,
+                    format!(
+                        "field number {} is both active and reserved",
+                        field.number.value
+                    ),
+                ));
+            }
             fields.push(field);
         }
         self.advance();
-        Ok(Message { name, id, fields })
+        Ok(Message {
+            name,
+            id,
+            reserved_numbers,
+            fields,
+        })
     }
 
     fn parse_field(&mut self) -> Result<Field, ParseError> {
@@ -169,6 +241,20 @@ impl Parser {
         })
     }
 
+    fn parse_reservation(&mut self, description: &str) -> Result<Spanned<u16>, ParseError> {
+        self.expect_keyword(TokenKind::Reserved, "`reserved`")?;
+        let number = self.positive_u16(description)?;
+        self.expect_symbol(TokenKind::Semicolon, "`;` after reserved ID")?;
+        Ok(number)
+    }
+
+    fn parse_i32_reservation(&mut self, description: &str) -> Result<Spanned<i32>, ParseError> {
+        self.expect_keyword(TokenKind::Reserved, "`reserved`")?;
+        let number = self.i32(description)?;
+        self.expect_symbol(TokenKind::Semicolon, "`;` after reserved ID")?;
+        Ok(number)
+    }
+
     fn parse_enum(&mut self) -> Result<Enum, ParseError> {
         self.expect_keyword(TokenKind::Enum, "`enum`")?;
         let name = self.identifier("enum name")?;
@@ -179,9 +265,28 @@ impl Parser {
         let mut values = Vec::new();
         let mut names = HashSet::new();
         let mut numbers = HashSet::new();
+        let mut reserved_numbers = Vec::new();
+        let mut reserved_number_values = HashSet::new();
         while !matches!(self.current().kind, TokenKind::RightBrace) {
             if matches!(self.current().kind, TokenKind::End) {
                 return Err(self.error_current("expected `}` to close enum"));
+            }
+            if matches!(self.current().kind, TokenKind::Reserved) {
+                let reserved = self.parse_i32_reservation("enum value")?;
+                if !reserved_number_values.insert(reserved.value) {
+                    return Err(self.error(
+                        reserved.span,
+                        format!("duplicate reserved enum value {}", reserved.value),
+                    ));
+                }
+                if numbers.contains(&reserved.value) {
+                    return Err(self.error(
+                        reserved.span,
+                        format!("enum value {} is both active and reserved", reserved.value),
+                    ));
+                }
+                reserved_numbers.push(reserved);
+                continue;
             }
             let value_name = self.identifier("enum value name")?;
             self.expect_symbol(TokenKind::Equal, "`=` after enum value name")?;
@@ -199,6 +304,12 @@ impl Parser {
                     format!("duplicate enum value {}", number.value),
                 ));
             }
+            if reserved_number_values.contains(&number.value) {
+                return Err(self.error(
+                    number.span,
+                    format!("enum value {} is both active and reserved", number.value),
+                ));
+            }
             values.push(EnumValue {
                 name: value_name,
                 number,
@@ -208,7 +319,12 @@ impl Parser {
         if values.is_empty() {
             return Err(self.error(name.span, "an enum must declare at least one value"));
         }
-        Ok(Enum { name, id, values })
+        Ok(Enum {
+            name,
+            id,
+            reserved_numbers,
+            values,
+        })
     }
 
     fn validate_default(

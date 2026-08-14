@@ -19,14 +19,20 @@ fn main() -> Result<()> {
     let schema = wlc::parse_schema(&source).map_err(|error| {
         miette::Report::new(error).with_source_code(NamedSource::new(
             arguments.schema.display().to_string(),
+            source.clone(),
+        ))
+    })?;
+    let model = wlc::analyze_schema(&schema).map_err(|error| {
+        miette::Report::new(error).with_source_code(NamedSource::new(
+            arguments.schema.display().to_string(),
             source,
         ))
     })?;
     println!(
         "validated {} (version {}, {} declaration(s))",
         arguments.schema.display(),
-        schema.version.value,
-        schema.declarations.len()
+        model.version,
+        model.declarations.len()
     );
     Ok(())
 }

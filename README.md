@@ -7,13 +7,16 @@ are subsequent milestones.
 ## Schema grammar
 
 ```text
-schema      = "version" positive-integer ";" declaration+
+schema      = "version" positive-integer ";" item+
+item        = declaration | reservation
 declaration = message | enum
-message     = "message" identifier "=" positive-integer "{" field* "}"
+reservation = "reserved" positive-integer ";"
+message     = "message" identifier "=" positive-integer "{" (field | reservation)* "}"
 field       = ("optional" | "repeated") identifier identifier "="
               positive-integer ("[" "default" "=" literal "]")? ";"
-enum        = "enum" identifier "=" positive-integer "{" enum-value+ "}"
+enum        = "enum" identifier "=" positive-integer "{" enum-value (enum-value | enum-reservation)* "}"
 enum-value  = identifier "=" integer ";"
+enum-reservation = "reserved" integer ";"
 literal     = integer | string | "true" | "false"
 ```
 
@@ -28,6 +31,26 @@ resolution.
 `optional` fields may specify one default. Defaults must match the built-in
 type; user-defined (enum) defaults currently use an integer literal.
 `repeated` fields cannot have defaults.
+
+## Semantic and compatibility rules
+
+All declaration and field numbers are explicit allocations: `wlc` never
+auto-assigns IDs. Semantic analysis resolves every field type to a built-in,
+message, or enum and rejects unknown types, message defaults, and enum defaults
+that do not name an existing numeric enum value. Its public model sorts
+declarations by global ID, fields by field number, and enum values by value;
+the result is therefore stable when source declarations are reordered.
+
+`reserved N;` at schema scope permanently reserves a removed message or enum
+ID. The same statement inside a message permanently reserves a field number;
+inside an enum it reserves an enum value. Compatibility checks compare a prior
+semantic model to a current model and reject ID/name/type/cardinality changes,
+or removal without a corresponding reservation. Existing reservations must
+remain reserved. Default changes are not wire changes and are allowed.
+
+The current library API is `analyze_schema(&Schema)` followed by
+`check_compatibility(&previous, &current)`. The future `wlc validate` command
+will expose the latter through a version-baseline file.
 
 ## Usage
 
