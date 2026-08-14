@@ -37,4 +37,20 @@ cargo test
 ```
 
 Diagnostics use `line:column: message` and the process exits non-zero on an
-invalid schema.
+invalid schema. At the CLI boundary, `miette` renders a source snippet and
+points at the invalid token.
+
+## Dependency policy
+
+The compiler deliberately keeps one dependency per concern:
+
+| Crate | Role | Adoption point |
+| --- | --- | --- |
+| `miette` | Source-aware, terminal-friendly diagnostics. | Used now by the CLI. |
+| `thiserror` | Typed library errors without exposing implementation details. | Used now for parser errors. |
+| `clap` | Declarative CLI and the future `compile` / `validate` subcommands. | Used now for argument parsing. |
+| `insta` | Reviewed golden snapshots for generated C headers and sources. | Development dependency; enabled when codegen lands. |
+
+We will not add a parser generator, general templating engine, or `anyhow` at
+this stage. The hand-written parser preserves exact grammar control and works
+with `miette`; generated C will be written by a small, testable emitter.

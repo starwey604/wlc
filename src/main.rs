@@ -1,39 +1,32 @@
-use std::{env, fs, process::ExitCode};
+use std::{fs, path::PathBuf};
 
-fn main() -> ExitCode {
-    let mut arguments = env::args_os();
-    let program = arguments.next().unwrap_or_default();
-    let Some(path) = arguments.next() else {
-        eprintln!("usage: {} <schema.wl>", program.to_string_lossy());
-        return ExitCode::from(2);
-    };
+use clap::Parser;
+use miette::{IntoDiagnostic, NamedSource, Result, WrapErr};
 
-    if arguments.next().is_some() {
-        eprintln!("usage: {} <schema.wl>", program.to_string_lossy());
-        return ExitCode::from(2);
-    }
+#[derive(Parser)]
+#[command(about = "Validate Wirelink schema files")]
+struct Arguments {
+    /// Schema file to validate.
+    schema: PathBuf,
+}
 
-    let source = match fs::read_to_string(&path) {
-        Ok(source) => source,
-        Err(error) => {
-            eprintln!("{}: {error}", path.to_string_lossy());
-            return ExitCode::from(2);
-        }
-    };
+fn main() -> Result<()> {
+    let arguments = Arguments::parse();
+    let source = fs::read_to_string(&arguments.schema)
+        .into_diagnostic()
+        .wrap_err_with(|| format!("could not read `{}`", arguments.schema.display()))?;
 
-    match wlc::parse_schema(&source) {
-        Ok(schema) => {
-            println!(
-                "validated {} (version {}, {} declaration(s))",
-                path.to_string_lossy(),
-                schema.version.value,
-                schema.declarations.len()
-            );
-            ExitCode::SUCCESS
-        }
-        Err(error) => {
-            eprintln!("{}: {error}", path.to_string_lossy());
-            ExitCode::from(1)
-        }
-    }
+    let schema = wlc::parse_schema(&source).map_err(|error| {
+        miette::Report::new(error).with_source_code(NamedSource::new(
+            arguments.schema.display().to_string(),
+            source,
+        ))
+    })?;
+    println!(
+        "validated {} (version {}, {} declaration(s))",
+        arguments.schema.display(),
+        schema.version.value,
+        schema.declarations.len()
+    );
+    Ok(())
 }

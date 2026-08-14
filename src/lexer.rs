@@ -109,7 +109,13 @@ impl Lexer<'_> {
             '_' | 'a'..='z' | 'A'..='Z' => self.read_identifier(),
             _ => return Err(self.error(span, format!("unexpected character `{character}`"))),
         };
-        Ok(Token { kind, span })
+        Ok(Token {
+            kind,
+            span: Span {
+                length: self.offset - span.offset,
+                ..span
+            },
+        })
     }
 
     fn skip_ignored(&mut self) -> Result<(), LexError> {
@@ -211,6 +217,8 @@ impl Lexer<'_> {
     }
     fn span(&self) -> Span {
         Span {
+            offset: self.offset,
+            length: 0,
             line: self.line,
             column: self.column,
         }

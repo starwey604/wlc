@@ -1,5 +1,8 @@
 use std::collections::HashSet;
 
+use miette::{Diagnostic, SourceSpan};
+use thiserror::Error;
+
 use crate::{
     ast::{
         Cardinality, Declaration, Enum, EnumValue, Field, Literal, Message, Schema, Span, Spanned,
@@ -7,29 +10,28 @@ use crate::{
     lexer::{LexError, Token, TokenKind, tokenize},
 };
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Diagnostic, Error, Eq, PartialEq)]
+#[error("{message}")]
+#[diagnostic(code(wlc::schema))]
 pub struct ParseError {
+    #[label("{message}")]
+    source_span: SourceSpan,
     pub span: Span,
     pub message: String,
 }
 
-impl std::fmt::Display for ParseError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "{}:{}: {}",
-            self.span.line, self.span.column, self.message
-        )
+impl From<LexError> for ParseError {
+    fn from(error: LexError) -> Self {
+        Self::new(error.span, error.message)
     }
 }
 
-impl std::error::Error for ParseError {}
-
-impl From<LexError> for ParseError {
-    fn from(error: LexError) -> Self {
+impl ParseError {
+    fn new(span: Span, message: impl Into<String>) -> Self {
         Self {
-            span: error.span,
-            message: error.message,
+            source_span: (span.offset, span.length).into(),
+            span,
+            message: message.into(),
         }
     }
 }
@@ -329,10 +331,7 @@ impl Parser {
         self.error(self.current().span, message)
     }
     fn error(&self, span: Span, message: impl Into<String>) -> ParseError {
-        ParseError {
-            span,
-            message: message.into(),
-        }
+        ParseError::new(span, message)
     }
 }
 

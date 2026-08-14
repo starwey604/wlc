@@ -1,6 +1,8 @@
 /// A source location, using one-based line and column numbers.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Span {
+    pub offset: usize,
+    pub length: usize,
     pub line: usize,
     pub column: usize,
 }
