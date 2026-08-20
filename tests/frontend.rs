@@ -1,7 +1,7 @@
 use wlc::{
     analyze_schema,
     ast::{Cardinality, Declaration, Literal},
-    check_compatibility, parse_schema,
+    check_compatibility, generate_c, parse_schema,
     semantic::Symbol,
 };
 
@@ -279,4 +279,16 @@ fn compatibility_requires_a_strictly_new_revision() {
     .unwrap();
     let errors = check_compatibility(&previous, &current).unwrap_err();
     assert!(errors.errors()[0].message.contains("must increase"));
+}
+
+#[test]
+fn generates_deterministic_c_data_model_and_api() {
+    let model = analyze_schema(&parse_schema(VALID_SCHEMA).unwrap()).unwrap();
+    let generated = generate_c(&model, "motor_api").unwrap();
+    assert!(generated.header.contains("typedef int32_t state_t;"));
+    assert!(generated.header.contains("struct status {"));
+    assert!(generated.header.contains("bool has_state;"));
+    assert!(generated.header.contains("uint32_t *samples;"));
+    assert!(generated.header.contains("wl_codec_status_t status_decode"));
+    assert!(generated.source.contains("void status_clear"));
 }
