@@ -84,7 +84,66 @@ pub struct EnumValue {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Literal {
-    Integer(i64),
+    Integer(IntegerLiteral),
     Boolean(bool),
     String(String),
+}
+
+/// A decimal integer literal kept losslessly until its declared type is known.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IntegerLiteral {
+    pub negative: bool,
+    pub magnitude: u64,
+}
+
+impl IntegerLiteral {
+    pub fn as_i32(self) -> Option<i32> {
+        if self.negative {
+            let limit = i32::MAX as u64 + 1;
+            if self.magnitude > limit {
+                None
+            } else if self.magnitude == limit {
+                Some(i32::MIN)
+            } else {
+                Some(-(self.magnitude as i32))
+            }
+        } else {
+            i32::try_from(self.magnitude).ok()
+        }
+    }
+
+    pub fn as_i64(self) -> Option<i64> {
+        if self.negative {
+            let limit = i64::MAX as u64 + 1;
+            if self.magnitude > limit {
+                None
+            } else if self.magnitude == limit {
+                Some(i64::MIN)
+            } else {
+                Some(-(self.magnitude as i64))
+            }
+        } else {
+            i64::try_from(self.magnitude).ok()
+        }
+    }
+
+    pub fn as_u32(self) -> Option<u32> {
+        (!self.negative)
+            .then(|| u32::try_from(self.magnitude).ok())
+            .flatten()
+    }
+
+    pub fn as_u64(self) -> Option<u64> {
+        (!self.negative).then_some(self.magnitude)
+    }
+}
+
+impl std::fmt::Display for IntegerLiteral {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.negative && self.magnitude != 0 {
+            write!(formatter, "-{}", self.magnitude)
+        } else {
+            write!(formatter, "{}", self.magnitude)
+        }
+    }
 }

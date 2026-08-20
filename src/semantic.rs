@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashMap};
 use miette::{Diagnostic, SourceSpan};
 use thiserror::Error;
 
-use crate::ast::{Cardinality, Declaration, Literal, Schema, Span};
+use crate::ast::{Cardinality, Declaration, Literal, Schema, Span, Spanned};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SemanticModel {
@@ -57,6 +57,7 @@ pub struct FieldSymbol {
     pub number: u16,
     pub cardinality: Cardinality,
     pub ty: ResolvedType,
+    pub default: Option<FieldDefault>,
     span: Span,
 }
 
@@ -79,13 +80,30 @@ pub struct EnumValueSymbol {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ResolvedType {
     Bool,
+    Bytes,
     String,
     Int32,
     Uint32,
     Int64,
     Uint64,
+    Fixed32,
+    Fixed64,
     Message { id: u16, name: String },
     Enum { id: u16, name: String },
+}
+
+/// A type-checked optional-field default suitable for code generation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FieldDefault {
+    Bool(bool),
+    String(String),
+    Int32(i32),
+    Uint32(u32),
+    Int64(i64),
+    Uint64(u64),
+    Fixed32(u32),
+    Fixed64(u64),
+    Enum(i32),
 }
 
 #[derive(Clone, Debug, Diagnostic, Error, Eq, PartialEq)]
@@ -132,6 +150,18 @@ pub fn analyze_schema(schema: &Schema) -> Result<SemanticModel, SemanticErrors> 
     let mut declarations = Vec::new();
 
     for declaration in &schema.declarations {
+        if is_builtin(declaration.name().value.as_str()) {
+            errors.push(SemanticError::new(
+                declaration.name().span,
+                format!(
+                    "declaration name `{}` is a built-in type",
+                    declaration.name().value
+                ),
+            ));
+        }
+    }
+
+    for declaration in &schema.declarations {
         match declaration {
             Declaration::Message(message) => {
                 let mut fields = Vec::new();
@@ -143,10 +173,9 @@ pub fn analyze_schema(schema: &Schema) -> Result<SemanticModel, SemanticErrors> 
                         ));
                         continue;
                     };
-                    validate_default(
-                        field.default.as_ref().map(|value| &value.value),
+                    let default = lower_default(
+                        field.default.as_ref(),
                         &ty,
-                        field.ty.span,
                         &declarations_by_name,
                         &mut errors,
                     );
@@ -155,6 +184,7 @@ pub fn analyze_schema(schema: &Schema) -> Result<SemanticModel, SemanticErrors> 
                         number: field.number.value,
                         cardinality: field.cardinality,
                         ty,
+                        default,
                         span: field.number.span,
                     });
                 }
@@ -197,6 +227,7 @@ pub fn analyze_schema(schema: &Schema) -> Result<SemanticModel, SemanticErrors> 
         }
     }
 
+    validate_message_nesting(&declarations, &mut errors);
     if !errors.is_empty() {
         return Err(SemanticErrors { errors });
     }
@@ -215,6 +246,15 @@ pub fn check_compatibility(
     current: &SemanticModel,
 ) -> Result<(), SemanticErrors> {
     let mut errors = Vec::new();
+    if current.version <= previous.version {
+        errors.push(SemanticError::new(
+            current.version_span,
+            format!(
+                "schema revision must increase from {} to a value greater than it",
+                previous.version
+            ),
+        ));
+    }
     for previous_symbol in &previous.declarations {
         match current.symbol_by_id(previous_symbol.id()) {
             None if !current.reserved_ids.contains(&previous_symbol.id()) => {
@@ -303,11 +343,14 @@ impl SemanticModel {
 fn resolve_type(name: &str, declarations: &HashMap<&str, &Declaration>) -> Option<ResolvedType> {
     let builtin = match name {
         "bool" => Some(ResolvedType::Bool),
+        "bytes" => Some(ResolvedType::Bytes),
         "string" => Some(ResolvedType::String),
         "int32" => Some(ResolvedType::Int32),
         "uint32" => Some(ResolvedType::Uint32),
         "int64" => Some(ResolvedType::Int64),
         "uint64" => Some(ResolvedType::Uint64),
+        "fixed32" => Some(ResolvedType::Fixed32),
+        "fixed64" => Some(ResolvedType::Fixed64),
         _ => None,
     };
     builtin.or_else(|| match declarations.get(name) {
@@ -323,34 +366,141 @@ fn resolve_type(name: &str, declarations: &HashMap<&str, &Declaration>) -> Optio
     })
 }
 
-fn validate_default(
-    default: Option<&Literal>,
+fn lower_default(
+    default: Option<&Spanned<Literal>>,
     ty: &ResolvedType,
-    type_span: Span,
     declarations: &HashMap<&str, &Declaration>,
     errors: &mut Vec<SemanticError>,
-) {
-    match (default, ty) {
-        (Some(Literal::Integer(value)), ResolvedType::Enum { name, .. }) => {
-            let Some(Declaration::Enum(enumeration)) = declarations.get(name.as_str()) else {
-                return;
+) -> Option<FieldDefault> {
+    let default = default?;
+    let invalid = |errors: &mut Vec<SemanticError>, message: String| {
+        errors.push(SemanticError::new(default.span, message));
+        None
+    };
+    match (ty, &default.value) {
+        (ResolvedType::Bool, Literal::Boolean(value)) => Some(FieldDefault::Bool(*value)),
+        (ResolvedType::String, Literal::String(value)) => Some(FieldDefault::String(value.clone())),
+        (ResolvedType::Bytes, _) => {
+            invalid(errors, "bytes fields cannot declare defaults".to_owned())
+        }
+        (ResolvedType::Int32, Literal::Integer(value)) => value
+            .as_i32()
+            .map(FieldDefault::Int32)
+            .or_else(|| invalid(errors, format!("default value {value} does not fit int32"))),
+        (ResolvedType::Uint32, Literal::Integer(value)) => value
+            .as_u32()
+            .map(FieldDefault::Uint32)
+            .or_else(|| invalid(errors, format!("default value {value} does not fit uint32"))),
+        (ResolvedType::Int64, Literal::Integer(value)) => value
+            .as_i64()
+            .map(FieldDefault::Int64)
+            .or_else(|| invalid(errors, format!("default value {value} does not fit int64"))),
+        (ResolvedType::Uint64, Literal::Integer(value)) => value
+            .as_u64()
+            .map(FieldDefault::Uint64)
+            .or_else(|| invalid(errors, format!("default value {value} does not fit uint64"))),
+        (ResolvedType::Fixed32, Literal::Integer(value)) => {
+            value.as_u32().map(FieldDefault::Fixed32).or_else(|| {
+                invalid(
+                    errors,
+                    format!("default value {value} does not fit fixed32"),
+                )
+            })
+        }
+        (ResolvedType::Fixed64, Literal::Integer(value)) => {
+            value.as_u64().map(FieldDefault::Fixed64).or_else(|| {
+                invalid(
+                    errors,
+                    format!("default value {value} does not fit fixed64"),
+                )
+            })
+        }
+        (ResolvedType::Enum { name, .. }, Literal::Integer(value)) => {
+            let Some(value) = value.as_i32() else {
+                return invalid(
+                    errors,
+                    format!("default value {value} does not fit enum `{name}`"),
+                );
             };
-            if !enumeration
-                .values
-                .iter()
-                .any(|candidate| candidate.number.value as i64 == *value)
-            {
-                errors.push(SemanticError::new(
-                    type_span,
+            let declared = matches!(declarations.get(name.as_str()), Some(Declaration::Enum(enumeration)) if enumeration.values.iter().any(|candidate| candidate.number.value == value));
+            if declared {
+                Some(FieldDefault::Enum(value))
+            } else {
+                invalid(
+                    errors,
                     format!("default value {value} is not declared by enum `{name}`"),
-                ));
+                )
             }
         }
-        (Some(_), ResolvedType::Message { .. }) => errors.push(SemanticError::new(
-            type_span,
-            "message fields cannot declare defaults",
-        )),
-        _ => {}
+        (ResolvedType::Message { .. }, _) => {
+            invalid(errors, "message fields cannot declare defaults".to_owned())
+        }
+        _ => invalid(
+            errors,
+            "default value does not match the declared field type".to_owned(),
+        ),
+    }
+}
+
+fn is_builtin(name: &str) -> bool {
+    matches!(
+        name,
+        "bool"
+            | "bytes"
+            | "string"
+            | "int32"
+            | "uint32"
+            | "int64"
+            | "uint64"
+            | "fixed32"
+            | "fixed64"
+    )
+}
+
+fn validate_message_nesting(declarations: &[Symbol], errors: &mut Vec<SemanticError>) {
+    let messages: HashMap<u16, &MessageSymbol> = declarations
+        .iter()
+        .filter_map(|symbol| match symbol {
+            Symbol::Message(message) => Some((message.id, message)),
+            Symbol::Enum(_) => None,
+        })
+        .collect();
+    for message in messages.values() {
+        let mut path = vec![message.id];
+        validate_message_children(*message, 0, &messages, &mut path, errors);
+    }
+}
+
+fn validate_message_children(
+    message: &MessageSymbol,
+    depth: usize,
+    messages: &HashMap<u16, &MessageSymbol>,
+    path: &mut Vec<u16>,
+    errors: &mut Vec<SemanticError>,
+) {
+    for field in &message.fields {
+        let ResolvedType::Message { id, name } = &field.ty else {
+            continue;
+        };
+        if path.contains(id) {
+            errors.push(SemanticError::new(
+                field.span,
+                format!("message nesting is recursive through `{name}`"),
+            ));
+            continue;
+        }
+        if depth + 1 > 8 {
+            errors.push(SemanticError::new(
+                field.span,
+                "message nesting depth exceeds the v1 limit of eight",
+            ));
+            continue;
+        }
+        if let Some(child) = messages.get(id) {
+            path.push(*id);
+            validate_message_children(child, depth + 1, messages, path, errors);
+            path.pop();
+        }
     }
 }
 

@@ -5,7 +5,8 @@ use thiserror::Error;
 
 use crate::{
     ast::{
-        Cardinality, Declaration, Enum, EnumValue, Field, Literal, Message, Schema, Span, Spanned,
+        Cardinality, Declaration, Enum, EnumValue, Field, IntegerLiteral, Literal, Message, Schema,
+        Span, Spanned,
     },
     lexer::{LexError, Token, TokenKind, tokenize},
 };
@@ -225,7 +226,6 @@ impl Parser {
             self.expect_keyword(TokenKind::Default, "`default` option")?;
             self.expect_symbol(TokenKind::Equal, "`=` after `default`")?;
             let default = self.literal()?;
-            self.validate_default(&ty, &default)?;
             self.expect_symbol(TokenKind::RightBracket, "`]` after field option")?;
             Some(default)
         } else {
@@ -327,29 +327,6 @@ impl Parser {
         })
     }
 
-    fn validate_default(
-        &self,
-        ty: &Spanned<String>,
-        default: &Spanned<Literal>,
-    ) -> Result<(), ParseError> {
-        let compatible = match (&*ty.value, &default.value) {
-            ("bool", Literal::Boolean(_)) | ("string", Literal::String(_)) => true,
-            ("int32" | "uint32" | "int64" | "uint64", Literal::Integer(value)) => {
-                !(ty.value.starts_with('u') && *value < 0)
-            }
-            _ if is_builtin(&ty.value) => false,
-            _ => matches!(default.value, Literal::Integer(_)),
-        };
-        if compatible {
-            Ok(())
-        } else {
-            Err(self.error(
-                default.span,
-                format!("default value is not valid for type `{}`", ty.value),
-            ))
-        }
-    }
-
     fn identifier(&mut self, expected: &str) -> Result<Spanned<String>, ParseError> {
         let token = self.current().clone();
         if let TokenKind::Identifier(value) = token.kind {
@@ -387,8 +364,12 @@ impl Parser {
     fn positive_u16(&mut self, description: &str) -> Result<Spanned<u16>, ParseError> {
         let value = self.integer(description)?;
         let span = value.span;
-        match u16::try_from(value.value) {
-            Ok(value) if value > 0 => Ok(Spanned { value, span }),
+        match value
+            .value
+            .as_u32()
+            .and_then(|value| u16::try_from(value).ok())
+        {
+            Some(value) if value > 0 => Ok(Spanned { value, span }),
             _ => Err(self.error(value.span, format!("{description} must be in 1..=65535"))),
         }
     }
@@ -396,8 +377,8 @@ impl Parser {
     fn positive_u32(&mut self, description: &str) -> Result<Spanned<u32>, ParseError> {
         let value = self.integer(description)?;
         let span = value.span;
-        match u32::try_from(value.value) {
-            Ok(value) if value > 0 => Ok(Spanned { value, span }),
+        match value.value.as_u32() {
+            Some(value) if value > 0 => Ok(Spanned { value, span }),
             _ => Err(self.error(
                 value.span,
                 format!("{description} must be in 1..=4294967295"),
@@ -408,12 +389,14 @@ impl Parser {
     fn i32(&mut self, description: &str) -> Result<Spanned<i32>, ParseError> {
         let value = self.integer(description)?;
         let span = value.span;
-        i32::try_from(value.value)
+        value
+            .value
+            .as_i32()
             .map(|value| Spanned { value, span })
-            .map_err(|_| self.error(span, format!("{description} is outside the i32 range")))
+            .ok_or_else(|| self.error(span, format!("{description} is outside the i32 range")))
     }
 
-    fn integer(&mut self, description: &str) -> Result<Spanned<i64>, ParseError> {
+    fn integer(&mut self, description: &str) -> Result<Spanned<IntegerLiteral>, ParseError> {
         let token = self.current().clone();
         if let TokenKind::Number(value) = token.kind {
             self.advance();
@@ -449,11 +432,4 @@ impl Parser {
     fn error(&self, span: Span, message: impl Into<String>) -> ParseError {
         ParseError::new(span, message)
     }
-}
-
-fn is_builtin(ty: &str) -> bool {
-    matches!(
-        ty,
-        "bool" | "string" | "int32" | "uint32" | "int64" | "uint64"
-    )
 }

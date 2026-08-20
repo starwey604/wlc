@@ -190,3 +190,93 @@ fn compatibility_rejects_reused_declaration_ids_and_changed_field_numbers() {
             .any(|error| error.message.contains("changed kind"))
     );
 }
+
+#[test]
+fn semantic_analysis_accepts_v1_builtins_and_full_width_defaults() {
+    let schema = parse_schema(
+        r#"version 1;
+        enum Mode = 1 { OFF = -2147483648; ON = 2147483647; }
+        message Scalars = 2 {
+          optional bool enabled = 1 [default = false];
+          optional uint64 maximum = 2 [default = 18446744073709551615];
+          optional int64 minimum = 3 [default = -9223372036854775808];
+          optional fixed32 mask = 4 [default = 4294967295];
+          optional fixed64 wide_mask = 5 [default = 18446744073709551615];
+          optional string label = 6 [default = "电机"];
+          optional Mode mode = 7 [default = -2147483648];
+          optional bytes payload = 8;
+        }"#,
+    )
+    .unwrap();
+    analyze_schema(&schema).expect("all v1 builtins should resolve");
+}
+
+#[test]
+fn semantic_analysis_rejects_invalid_defaults_and_message_cycles() {
+    let invalid_defaults = parse_schema(
+        "version 1; message Value = 1 { optional uint32 u = 1 [default = -1]; optional bytes b = 2 [default = 0]; }",
+    )
+    .unwrap();
+    let errors = analyze_schema(&invalid_defaults).unwrap_err();
+    assert!(
+        errors
+            .errors()
+            .iter()
+            .any(|error| error.message.contains("uint32"))
+    );
+    assert!(
+        errors
+            .errors()
+            .iter()
+            .any(|error| error.message.contains("bytes fields"))
+    );
+
+    let cycle = parse_schema(
+        "version 1; message A = 1 { optional B b = 1; } message B = 2 { optional A a = 1; }",
+    )
+    .unwrap();
+    let errors = analyze_schema(&cycle).unwrap_err();
+    assert!(
+        errors
+            .errors()
+            .iter()
+            .any(|error| error.message.contains("recursive"))
+    );
+}
+
+#[test]
+fn semantic_analysis_enforces_eight_nested_message_levels() {
+    let mut source = String::from("version 1;");
+    for id in 1..=10 {
+        let next = id + 1;
+        if id == 10 {
+            source.push_str(&format!(" message M{id} = {id} {{}}"));
+        } else {
+            source.push_str(&format!(
+                " message M{id} = {id} {{ optional M{next} child = 1; }}"
+            ));
+        }
+    }
+    let schema = parse_schema(&source).unwrap();
+    let errors = analyze_schema(&schema).unwrap_err();
+    assert!(
+        errors
+            .errors()
+            .iter()
+            .any(|error| error.message.contains("depth exceeds"))
+    );
+}
+
+#[test]
+fn compatibility_requires_a_strictly_new_revision() {
+    let previous = analyze_schema(
+        &parse_schema("version 2; message Status = 1 { optional bool ready = 1; }").unwrap(),
+    )
+    .unwrap();
+    let current = analyze_schema(
+        &parse_schema("version 2; message Status = 1 { optional bool ready = 1; }").unwrap(),
+    )
+    .unwrap();
+    let errors = check_compatibility(&previous, &current).unwrap_err();
+    assert!(errors.errors()[0].message.contains("must increase"));
+}

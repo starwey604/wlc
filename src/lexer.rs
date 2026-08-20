@@ -1,9 +1,9 @@
-use crate::ast::Span;
+use crate::ast::{IntegerLiteral, Span};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum TokenKind {
     Identifier(String),
-    Number(i64),
+    Number(IntegerLiteral),
     String(String),
     Version,
     Message,
@@ -153,11 +153,14 @@ impl Lexer<'_> {
         }
     }
 
-    fn read_number(&mut self, span: Span) -> Result<i64, LexError> {
+    fn read_number(&mut self, span: Span) -> Result<IntegerLiteral, LexError> {
         let start = self.offset;
-        if self.peek() == Some('-') {
+        let negative = if self.peek() == Some('-') {
             self.advance();
-        }
+            true
+        } else {
+            false
+        };
         let digits_start = self.offset;
         while matches!(self.peek(), Some('0'..='9')) {
             self.advance();
@@ -165,9 +168,14 @@ impl Lexer<'_> {
         if digits_start == self.offset {
             return Err(self.error(span, "expected digits after `-`"));
         }
-        self.source[start..self.offset]
+        let magnitude_start = if negative { start + 1 } else { start };
+        let magnitude = self.source[magnitude_start..self.offset]
             .parse()
-            .map_err(|_| self.error(span, "integer literal is out of range"))
+            .map_err(|_| self.error(span, "integer literal is out of range"))?;
+        Ok(IntegerLiteral {
+            negative,
+            magnitude,
+        })
     }
 
     fn read_string(&mut self, span: Span) -> Result<String, LexError> {
