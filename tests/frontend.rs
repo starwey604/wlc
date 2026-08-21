@@ -5,6 +5,8 @@ use wlc::{
     semantic::Symbol,
 };
 
+use proptest::prelude::*;
+
 const VALID_SCHEMA: &str = r#"
 // A complete, valid schema.
 version 1;
@@ -304,4 +306,29 @@ fn generator_normalizes_acronyms_and_c_keywords() {
     assert!(generated.header.contains("uint32_t switch_;"));
     assert!(generated.header.contains("HTTP_STATUS_MESSAGE_ID"));
     assert!(generated.source.contains("#include \"http_api.h\""));
+}
+
+proptest! {
+    #[test]
+    fn parser_never_panics_for_arbitrary_utf8(source in ".*") {
+        let _ = parse_schema(&source);
+    }
+
+    #[test]
+    fn full_width_numeric_defaults_are_accepted(value in any::<u64>()) {
+        let source = format!(
+            "version 1; message Value = 1 {{ optional uint64 field = 1 [default = {value}]; }}"
+        );
+        let schema = parse_schema(&source).expect("generated schema is syntactically valid");
+        analyze_schema(&schema).expect("all u64 defaults must fit uint64");
+    }
+
+    #[test]
+    fn signed_numeric_defaults_are_accepted(value in any::<i64>()) {
+        let source = format!(
+            "version 1; message Value = 1 {{ optional int64 field = 1 [default = {value}]; }}"
+        );
+        let schema = parse_schema(&source).expect("generated schema is syntactically valid");
+        analyze_schema(&schema).expect("all i64 defaults must fit int64");
+    }
 }

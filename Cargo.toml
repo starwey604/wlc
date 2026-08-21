@@ -14,3 +14,4 @@ path = "src/lib.rs"
 
 [dev-dependencies]
 insta = "1.48"
+proptest = "1.11"
