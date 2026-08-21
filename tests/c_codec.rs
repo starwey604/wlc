@@ -79,6 +79,7 @@ int main(void) {
     if (packet_decode(malformed, sizeof(malformed), &decoded) != WL_CODEC_ERR_MALFORMED) return 11; }
   return 0;
 }
+
 "#,
     )
     .unwrap();
@@ -97,4 +98,24 @@ int main(void) {
         .unwrap();
     assert!(status.success(), "generated C must compile cleanly");
     assert!(Command::new(executable).status().unwrap().success());
+}
+
+#[test]
+fn generated_c_compiles_an_empty_message() {
+    let model = analyze_schema(&parse_schema("version 1; message Empty = 1 {}").unwrap()).unwrap();
+    let generated = generate_c(&model, "empty").unwrap();
+    let directory = tempdir().unwrap();
+    fs::write(directory.path().join("empty.h"), generated.header).unwrap();
+    fs::write(directory.path().join("empty.c"), generated.source).unwrap();
+    let include = env!("CARGO_MANIFEST_DIR").replace("/wlc", "/include");
+    let status = Command::new("cc")
+        .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-I"])
+        .arg(include)
+        .arg("-I")
+        .arg(directory.path())
+        .arg("-fsyntax-only")
+        .arg(directory.path().join("empty.c"))
+        .status()
+        .unwrap();
+    assert!(status.success());
 }

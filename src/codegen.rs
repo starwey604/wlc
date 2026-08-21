@@ -122,6 +122,12 @@ fn emit_source(module: &str, messages: &[&MessageSymbol]) -> String {
 
 fn emit_descriptor(output: &mut String, message: &MessageSymbol) {
     let name = type_name(&message.name);
+    if message.fields.is_empty() {
+        output.push_str(&format!(
+            "static const wlc_desc_t {name}_desc = {{ NULL, 0U }};\n\n"
+        ));
+        return;
+    }
     output.push_str(&format!("static const wlc_field_t {name}_fields[] = {{\n"));
     for field in &message.fields {
         let field_name = c_identifier(&field.name);
