@@ -72,7 +72,10 @@ The compiler deliberately keeps one dependency per concern:
 | `miette` | Source-aware, terminal-friendly diagnostics. | Used now by the CLI. |
 | `thiserror` | Typed library errors without exposing implementation details. | Used now for parser errors. |
 | `clap` | Declarative CLI and the future `compile` / `validate` subcommands. | Used now for argument parsing. |
+| `heck` | Stable snake-case and macro-case conversion for generated C symbols. | Used now by code generation. |
 | `insta` | Reviewed golden snapshots for generated C headers and sources. | Development dependency; enabled when codegen lands. |
+| `proptest` | Property tests for parser robustness and scalar default boundaries. | Development dependency; used now. |
+| `assert_cmd`, `tempfile` | Isolated end-to-end tests of the CLI and its generated output. | Development dependencies; used now. |
 
 We will not add a parser generator, general templating engine, or `anyhow` at
 this stage. The hand-written parser preserves exact grammar control and works
