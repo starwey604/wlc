@@ -292,3 +292,16 @@ fn generates_deterministic_c_data_model_and_api() {
     assert!(generated.header.contains("wl_codec_status_t status_decode"));
     assert!(generated.source.contains("void status_clear"));
 }
+
+#[test]
+fn generator_normalizes_acronyms_and_c_keywords() {
+    let model = analyze_schema(
+        &parse_schema("version 1; message HTTPStatus = 1 { optional uint32 switch = 1; }").unwrap(),
+    )
+    .unwrap();
+    let generated = generate_c(&model, "HTTP API").unwrap();
+    assert!(generated.header.contains("struct http_status"));
+    assert!(generated.header.contains("uint32_t switch_;"));
+    assert!(generated.header.contains("HTTP_STATUS_MESSAGE_ID"));
+    assert!(generated.source.contains("#include \"http_api.h\""));
+}

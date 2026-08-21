@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
+use heck::{ToShoutySnakeCase, ToSnakeCase};
 use miette::Diagnostic;
 use thiserror::Error;
 
@@ -233,22 +234,65 @@ fn type_name(name: &str) -> String {
     c_identifier(name)
 }
 fn c_identifier(name: &str) -> String {
-    let mut output = String::new();
-    let mut previous_lower = false;
-    for character in name.chars() {
-        if character.is_ascii_uppercase() {
-            if previous_lower {
-                output.push('_');
-            }
-            output.push(character.to_ascii_lowercase());
-            previous_lower = false;
-        } else if character.is_ascii_alphanumeric() || character == '_' {
-            output.push(character.to_ascii_lowercase());
-            previous_lower = character.is_ascii_lowercase() || character.is_ascii_digit();
-        }
+    let mut output: String = name
+        .to_snake_case()
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric() || *character == '_')
+        .collect();
+    if output.is_empty() {
+        return output;
+    }
+    if output.as_bytes()[0].is_ascii_digit() {
+        output.insert(0, '_');
+    }
+    if is_c_keyword(&output) {
+        output.push('_');
     }
     output
 }
 fn upper_snake(name: &str) -> String {
-    c_identifier(name).to_ascii_uppercase()
+    c_identifier(name).to_shouty_snake_case()
+}
+
+fn is_c_keyword(name: &str) -> bool {
+    matches!(
+        name,
+        "auto"
+            | "break"
+            | "case"
+            | "char"
+            | "const"
+            | "continue"
+            | "default"
+            | "do"
+            | "double"
+            | "else"
+            | "enum"
+            | "extern"
+            | "float"
+            | "for"
+            | "goto"
+            | "if"
+            | "inline"
+            | "int"
+            | "long"
+            | "register"
+            | "restrict"
+            | "return"
+            | "short"
+            | "signed"
+            | "sizeof"
+            | "static"
+            | "struct"
+            | "switch"
+            | "typedef"
+            | "union"
+            | "unsigned"
+            | "void"
+            | "volatile"
+            | "while"
+            | "_bool"
+            | "_complex"
+            | "_imaginary"
+    )
 }
