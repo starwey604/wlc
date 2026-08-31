@@ -32,22 +32,36 @@ enum Command {
         #[arg(long)]
         profile: Option<PathBuf>,
     },
+    /// Print stable, non-security diagnostic identities.
+    Identity {
+        schema: PathBuf,
+        /// Include an optional resolved binding-profile identity.
+        #[arg(long)]
+        profile: Option<PathBuf>,
+    },
+}
+
+enum Operation {
+    Validate,
+    Compile(PathBuf),
+    Identity,
 }
 
 fn main() -> Result<()> {
     let arguments = Arguments::parse();
-    let (schema_path, previous, profile, output) = match arguments.command {
+    let (schema_path, previous, profile, operation) = match arguments.command {
         Command::Validate {
             schema,
             previous,
             profile,
-        } => (schema, previous, profile, None),
+        } => (schema, previous, profile, Operation::Validate),
         Command::Compile {
             schema,
             out_dir,
             previous,
             profile,
-        } => (schema, previous, profile, Some(out_dir)),
+        } => (schema, previous, profile, Operation::Compile(out_dir)),
+        Command::Identity { schema, profile } => (schema, None, profile, Operation::Identity),
     };
     let source = fs::read_to_string(&schema_path)
         .into_diagnostic()
@@ -101,40 +115,54 @@ fn main() -> Result<()> {
     } else {
         None
     };
-    if let Some(output) = output {
-        fs::create_dir_all(&output).into_diagnostic()?;
-        let stem = schema_path
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .unwrap_or("wirelink_generated");
-        let generated = wlc::generate_c(&model, stem).map_err(miette::Report::new)?;
-        fs::write(output.join(format!("{stem}.h")), generated.header).into_diagnostic()?;
-        fs::write(output.join(format!("{stem}.c")), generated.source).into_diagnostic()?;
-        fs::write(
-            output.join(format!("{stem}_bindings.h")),
-            generated.bindings_header,
-        )
-        .into_diagnostic()?;
-        fs::write(
-            output.join(format!("{stem}_bindings.c")),
-            generated.bindings_source,
-        )
-        .into_diagnostic()?;
-        println!(
-            "generated {}.h/.c and {}_bindings.h/.c in {}",
-            stem,
-            stem,
-            output.display()
-        );
-    } else {
-        println!(
+    let identity_operation = matches!(operation, Operation::Identity);
+    match operation {
+        Operation::Compile(output) => {
+            fs::create_dir_all(&output).into_diagnostic()?;
+            let stem = schema_path
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .unwrap_or("wirelink_generated");
+            let generated = wlc::generate_c(&model, stem).map_err(miette::Report::new)?;
+            fs::write(output.join(format!("{stem}.h")), generated.header).into_diagnostic()?;
+            fs::write(output.join(format!("{stem}.c")), generated.source).into_diagnostic()?;
+            fs::write(
+                output.join(format!("{stem}_bindings.h")),
+                generated.bindings_header,
+            )
+            .into_diagnostic()?;
+            fs::write(
+                output.join(format!("{stem}_bindings.c")),
+                generated.bindings_source,
+            )
+            .into_diagnostic()?;
+            println!(
+                "generated {}.h/.c and {}_bindings.h/.c in {}",
+                stem,
+                stem,
+                output.display()
+            );
+        }
+        Operation::Validate => println!(
             "validated {} (version {}, {} declaration(s))",
             schema_path.display(),
             model.version,
             model.declarations.len()
-        );
+        ),
+        Operation::Identity => {
+            println!("identity algorithm: {}", wlc::IDENTITY_ALGORITHM);
+            println!("schema identity: 0x{:016x}", wlc::schema_identity(&model));
+            if let Some(profile_model) = &profile_model {
+                println!(
+                    "binding profile identity: 0x{:016x}",
+                    wlc::binding_profile_identity(profile_model)
+                );
+            }
+        }
     }
-    if let (Some(profile_path), Some(profile_model)) = (&profile, &profile_model) {
+    if !identity_operation
+        && let (Some(profile_path), Some(profile_model)) = (&profile, &profile_model)
+    {
         println!(
             "validated binding profile {} (version {}, {} binding(s))",
             profile_path.display(),

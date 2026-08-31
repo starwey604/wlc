@@ -228,6 +228,23 @@ including through nested messages. RPC operation IDs must map to optional
 an enum status domain must declare numeric value zero for success. Request and
 response delivery are explicit and may be `reliable` or `unreliable`.
 
+WLC also exposes `schema_identity(&SemanticModel)` and
+`binding_profile_identity(&BindingProfileModel)`. The CLI prints the same
+values for diagnostics:
+
+```sh
+cargo run -- identity control.wl --profile device.bind.wl
+```
+
+The `fnv1a64-v1` identities hash normalized semantic models, so whitespace and
+declaration order do not affect them. The schema identity is exact rather than
+compatibility-aware: revisions, names, defaults, reservations, and wire types
+all participate. The profile identity covers resolved IDs, field mappings,
+roles, and delivery policy. They are deliberately not placed on the wire and
+are not cryptographic hashes, authentication values, or substitutes for WLC's
+compatibility checker. Report both values together when diagnosing generated
+artifacts.
+
 ## Dependency policy
 
 The compiler deliberately keeps one dependency per concern:

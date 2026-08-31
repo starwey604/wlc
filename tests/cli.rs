@@ -206,3 +206,42 @@ fn profile_diagnostics_point_at_the_sidecar_source() {
     assert!(stderr.contains("invalid.bind.wl"));
     assert!(stderr.contains("borrowed or caller-owned storage"));
 }
+
+#[test]
+fn identity_command_reports_stable_schema_and_profile_values() {
+    let directory = tempdir().expect("temporary directory");
+    let schema_path = directory.path().join("control.wl");
+    let profile_path = directory.path().join("device.bind.wl");
+    let schema_source = "version 1; message Control = 1 { packed float32 values[6] = 1; }";
+    let profile_source = "profile version 1; latest Control { delivery = unreliable; }";
+    fs::write(&schema_path, schema_source).unwrap();
+    fs::write(&profile_path, profile_source).unwrap();
+
+    let schema = wlc::analyze_schema(&wlc::parse_schema(schema_source).unwrap()).unwrap();
+    let profile = wlc::analyze_binding_profile(
+        &wlc::parse_binding_profile(profile_source).unwrap(),
+        &schema,
+    )
+    .unwrap();
+    let output = Command::cargo_bin("wlc")
+        .unwrap()
+        .args([
+            "identity",
+            schema_path.to_str().unwrap(),
+            "--profile",
+            profile_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!(
+            "identity algorithm: {}\nschema identity: 0x{:016x}\nbinding profile identity: 0x{:016x}\n",
+            wlc::IDENTITY_ALGORITHM,
+            wlc::schema_identity(&schema),
+            wlc::binding_profile_identity(&profile)
+        )
+    );
+}

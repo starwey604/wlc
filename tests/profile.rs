@@ -1,7 +1,9 @@
 use wlc::{
-    analyze_binding_profile, analyze_schema, parse_binding_profile, parse_schema,
+    IDENTITY_ALGORITHM, analyze_binding_profile, analyze_schema, binding_profile_identity,
+    parse_binding_profile, parse_schema,
     profile::BindingDeclaration,
     profile_semantic::{DeliveryPolicy, RetainedRouteKind, RpcStatusDomain},
+    schema_identity,
 };
 
 const SCHEMA: &str = r#"
@@ -348,4 +350,115 @@ rpc Bad {
                 .any(|error| error.message.contains(expected))
         );
     }
+}
+
+#[test]
+fn semantic_identities_are_stable_and_have_reviewed_golden_values() {
+    let schema = schema_model();
+    let profile =
+        analyze_binding_profile(&parse_binding_profile(PROFILE).unwrap(), &schema).unwrap();
+    assert_eq!(IDENTITY_ALGORITHM, "fnv1a64-v1");
+    assert_eq!(schema_identity(&schema), 0x792a_0fdd_6f09_b0be);
+    assert_eq!(binding_profile_identity(&profile), 0xeadf_5664_4de5_8304);
+}
+
+#[test]
+fn identities_ignore_source_order_but_cover_exact_semantics_and_policy() {
+    let first_schema = analyze_schema(
+        &parse_schema(
+            "version 7; enum State = 1 { OFF = 0; ON = 1; } message Sample = 2 { optional State state = 2 [default = 0]; optional uint32 sequence = 1; } message Ack = 3 { optional uint32 operation_id = 1; optional int32 status = 2; } message Request = 4 { optional uint32 operation_id = 1; }",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let reordered_schema = analyze_schema(
+        &parse_schema(
+            "version 7; message Request = 4 { optional uint32 operation_id = 1; } message Ack = 3 { optional int32 status = 2; optional uint32 operation_id = 1; } message Sample = 2 { optional uint32 sequence = 1; optional State state = 2 [default = 0]; } enum State = 1 { ON = 1; OFF = 0; }",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        schema_identity(&first_schema),
+        schema_identity(&reordered_schema)
+    );
+
+    let changed_revision = analyze_schema(
+        &parse_schema(
+            "version 8; enum State = 1 { OFF = 0; ON = 1; } message Sample = 2 { optional State state = 2 [default = 0]; optional uint32 sequence = 1; } message Ack = 3 { optional uint32 operation_id = 1; optional int32 status = 2; } message Request = 4 { optional uint32 operation_id = 1; }",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_ne!(
+        schema_identity(&first_schema),
+        schema_identity(&changed_revision)
+    );
+
+    let profile_a = analyze_binding_profile(
+        &parse_binding_profile(
+            r#"profile version 1;
+fifo Sample { delivery = unreliable; }
+rpc Read {
+  request = Request;
+  response = Ack;
+  request_operation_id = operation_id;
+  response_operation_id = operation_id;
+  response_status = status;
+  request_delivery = reliable;
+  response_delivery = reliable;
+}
+"#,
+        )
+        .unwrap(),
+        &first_schema,
+    )
+    .unwrap();
+    let profile_b = analyze_binding_profile(
+        &parse_binding_profile(
+            r#"profile version 1;
+rpc Read {
+  response_status = status;
+  response = Ack;
+  response_delivery = reliable;
+  request_operation_id = operation_id;
+  request_delivery = reliable;
+  request = Request;
+  response_operation_id = operation_id;
+}
+fifo Sample { delivery = unreliable; }
+"#,
+        )
+        .unwrap(),
+        &reordered_schema,
+    )
+    .unwrap();
+    assert_eq!(
+        binding_profile_identity(&profile_a),
+        binding_profile_identity(&profile_b)
+    );
+
+    let changed_policy = analyze_binding_profile(
+        &parse_binding_profile(
+            r#"profile version 1;
+fifo Sample { delivery = reliable; }
+rpc Read {
+  request = Request;
+  response = Ack;
+  request_operation_id = operation_id;
+  response_operation_id = operation_id;
+  response_status = status;
+  request_delivery = reliable;
+  response_delivery = reliable;
+}
+"#,
+        )
+        .unwrap(),
+        &first_schema,
+    )
+    .unwrap();
+    assert_ne!(
+        binding_profile_identity(&profile_a),
+        binding_profile_identity(&changed_policy)
+    );
 }
