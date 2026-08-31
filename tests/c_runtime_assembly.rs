@@ -331,3 +331,136 @@ int main(void) {
     let run = Command::new(&executable).status().unwrap();
     assert!(run.success(), "generated assembly exited with {run}");
 }
+
+#[test]
+fn generated_runtime_assembly_clears_instance_after_component_init_failure() {
+    let directory = tempdir().unwrap();
+    let schema = analyze_schema(
+        &parse_schema("version 1; message State = 1 { optional uint32 sequence = 1; }").unwrap(),
+    )
+    .unwrap();
+    let profile = analyze_binding_profile(
+        &parse_binding_profile("profile version 1; latest State { delivery = unreliable; }")
+            .unwrap(),
+        &schema,
+    )
+    .unwrap();
+    let codec = generate_c(&schema, "rollback").unwrap();
+    let runtime = generate_runtime_c(&schema, &profile, "rollback").unwrap();
+
+    fs::write(directory.path().join("rollback.h"), codec.header).unwrap();
+    fs::write(directory.path().join("rollback.c"), codec.source).unwrap();
+    fs::write(
+        directory.path().join("rollback_bindings.h"),
+        codec.bindings_header,
+    )
+    .unwrap();
+    fs::write(directory.path().join("rollback_runtime.h"), runtime.header).unwrap();
+    fs::write(directory.path().join("rollback_runtime.c"), runtime.source).unwrap();
+    fs::write(
+        directory.path().join("main.c"),
+        r#"#include "rollback_runtime.h"
+
+#include <stdint.h>
+#include <string.h>
+
+void wl_event_release(wl_ctx_t *ctx, const wl_event_t *event) {
+  (void)ctx;
+  (void)event;
+}
+
+int wl_latest_requirements(const wl_latest_config_t *config,
+                           wl_latest_requirements_t *out_requirements) {
+  if (config == NULL || out_requirements == NULL || config->value_size == 0U ||
+      config->value_alignment == 0U)
+    return WL_ERR_INVALID_ARG;
+  out_requirements->storage_size = 256U;
+  out_requirements->slot_stride = 64U;
+  out_requirements->slot_count = WL_LATEST_SLOT_COUNT;
+  return WL_OK;
+}
+
+int wl_latest_init(wl_latest_t *mailbox, const wl_latest_config_t *config,
+                   const wl_latest_storage_t *storage) {
+  (void)config;
+  (void)storage;
+  memset(mailbox, 0x3C, sizeof(*mailbox));
+  return WL_ERR_NOT_SUPPORTED;
+}
+
+int wl_latest_write_claim(wl_latest_t *mailbox,
+                          wl_latest_write_claim_t *out_claim) {
+  (void)mailbox;
+  (void)out_claim;
+  return WL_ERR_NOT_INITIALIZED;
+}
+
+int wl_latest_write_publish(wl_latest_t *mailbox,
+                            const wl_latest_write_claim_t *claim) {
+  (void)mailbox;
+  (void)claim;
+  return WL_ERR_NOT_INITIALIZED;
+}
+
+int wl_latest_write_abort(wl_latest_t *mailbox,
+                          const wl_latest_write_claim_t *claim) {
+  (void)mailbox;
+  (void)claim;
+  return WL_ERR_NOT_INITIALIZED;
+}
+
+int main(void) {
+  union {
+    max_align_t align;
+    uint8_t bytes[256];
+  } storage_bytes;
+  rollback_runtime_config_t config = {0};
+  rollback_runtime_requirements_t requirements = {0};
+  rollback_runtime_instance_t instance;
+  rollback_runtime_storage_t storage;
+  const uint8_t *instance_bytes = (const uint8_t *)(const void *)&instance;
+  size_t index;
+
+  memset(&instance, 0xA5, sizeof(instance));
+  if (rollback_runtime_requirements(&config, &requirements) != WL_OK ||
+      requirements.storage_size != sizeof(storage_bytes.bytes))
+    return 1;
+  storage = (rollback_runtime_storage_t){storage_bytes.bytes,
+                                         requirements.storage_size};
+  if (rollback_runtime_init(&instance, &config, &storage) !=
+      WL_ERR_NOT_SUPPORTED)
+    return 2;
+  for (index = 0U; index < sizeof(instance); ++index) {
+    if (instance_bytes[index] != 0U) return 3;
+  }
+  return 0;
+}
+"#,
+    )
+    .unwrap();
+
+    let root = wirelink_root();
+    let executable = directory.path().join("runtime-rollback-test");
+    let status = Command::new("cc")
+        .args([
+            "-std=c11",
+            "-Wall",
+            "-Wextra",
+            "-Wpedantic",
+            "-Werror",
+            "-I",
+        ])
+        .arg(root.join("include"))
+        .arg("-I")
+        .arg(directory.path())
+        .arg(directory.path().join("rollback.c"))
+        .arg(directory.path().join("rollback_runtime.c"))
+        .arg(directory.path().join("main.c"))
+        .arg("-o")
+        .arg(&executable)
+        .status()
+        .unwrap();
+    assert!(status.success(), "rollback fixture must compile cleanly");
+    let run = Command::new(&executable).status().unwrap();
+    assert!(run.success(), "rollback fixture exited with {run}");
+}
