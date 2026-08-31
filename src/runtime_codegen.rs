@@ -653,14 +653,14 @@ fn emit_assembly_source(output: &mut String, profile: &BindingProfileModel, modu
             RetainedRouteKind::Latest => {
                 write!(
                     output,
-                    "  {{\n    const wl_latest_config_t route_config = {{sizeof({message}_t), _Alignof({message}_t), config->{message}_latest_initial_generation}};\n    wl_latest_requirements_t route_requirements;\n    wl_latest_storage_t route_storage;\n    result = wl_latest_requirements(&route_config, &route_requirements);\n    if (result != WL_OK) return result;\n    route_storage.data = layout.{message}_latest_storage;\n    route_storage.size = route_requirements.storage_size;\n    result = wl_latest_init(&instance->{message}_latest, &route_config, &route_storage);\n    if (result != WL_OK) return result;\n    instance->runtime.{message}_latest = &instance->{message}_latest;\n  }}\n"
+                    "  {{\n    const wl_latest_config_t route_config = {{sizeof({message}_t), _Alignof({message}_t), config->{message}_latest_initial_generation}};\n    wl_latest_requirements_t route_requirements;\n    wl_latest_storage_t route_storage;\n    result = wl_latest_requirements(&route_config, &route_requirements);\n    if (result != WL_OK) goto init_failed;\n    route_storage.data = layout.{message}_latest_storage;\n    route_storage.size = route_requirements.storage_size;\n    result = wl_latest_init(&instance->{message}_latest, &route_config, &route_storage);\n    if (result != WL_OK) goto init_failed;\n    instance->runtime.{message}_latest = &instance->{message}_latest;\n  }}\n"
                 )
                 .unwrap();
             }
             RetainedRouteKind::Fifo => {
                 write!(
                     output,
-                    "  {{\n    const wl_fifo_config_t route_config = {{sizeof({message}_t), _Alignof({message}_t), config->{message}_fifo_capacity}};\n    wl_fifo_requirements_t route_requirements;\n    wl_fifo_storage_t route_storage;\n    result = wl_fifo_requirements(&route_config, &route_requirements);\n    if (result != WL_OK) return result;\n    route_storage.data = layout.{message}_fifo_storage;\n    route_storage.size = route_requirements.storage_size;\n    result = wl_fifo_init(&instance->{message}_fifo, &route_config, &route_storage);\n    if (result != WL_OK) return result;\n    instance->runtime.{message}_fifo = &instance->{message}_fifo;\n  }}\n"
+                    "  {{\n    const wl_fifo_config_t route_config = {{sizeof({message}_t), _Alignof({message}_t), config->{message}_fifo_capacity}};\n    wl_fifo_requirements_t route_requirements;\n    wl_fifo_storage_t route_storage;\n    result = wl_fifo_requirements(&route_config, &route_requirements);\n    if (result != WL_OK) goto init_failed;\n    route_storage.data = layout.{message}_fifo_storage;\n    route_storage.size = route_requirements.storage_size;\n    result = wl_fifo_init(&instance->{message}_fifo, &route_config, &route_storage);\n    if (result != WL_OK) goto init_failed;\n    instance->runtime.{message}_fifo = &instance->{message}_fifo;\n  }}\n"
                 )
                 .unwrap();
             }
@@ -670,7 +670,7 @@ fn emit_assembly_source(output: &mut String, profile: &BindingProfileModel, modu
     if !profile.rpc_services.is_empty() {
         write!(
             output,
-            "  if (config->rpc_client_enabled != 0U) {{\n    const wl_rpc_client_config_t client_config = {{\n      (wl_rpc_client_slot_t *)layout.rpc_client_slots,\n      config->rpc_client_slot_count,\n      (uint8_t *)layout.rpc_client_responses,\n      layout.rpc_client_responses_size,\n      config->rpc_client_response_capacity,\n      config->rpc_client_next_operation_id\n    }};\n    if (wl_rpc_client_init(&instance->rpc_client, &client_config) != WL_RPC_OK) return WL_ERR_INVALID_ARG;\n    instance->runtime.rpc_client = &instance->rpc_client;\n  }}\n  if (config->rpc_server_enabled != 0U) {{\n    const wl_rpc_server_config_t server_config = {{\n      (wl_rpc_server_pending_slot_t *)layout.rpc_server_pending_slots,\n      config->rpc_server_pending_slot_count,\n      (wl_rpc_server_cache_slot_t *)layout.rpc_server_cache_slots,\n      config->rpc_server_cache_slot_count,\n      (uint8_t *)layout.rpc_server_responses,\n      layout.rpc_server_responses_size,\n      config->rpc_server_response_capacity,\n      config->rpc_server_pending_timeout_ms,\n      config->rpc_server_cache_ttl_ms,\n      config->rpc_server_cache_policy\n    }};\n    if (wl_rpc_server_init(&instance->rpc_server, &server_config) != WL_RPC_OK) return WL_ERR_INVALID_ARG;\n    instance->runtime.rpc_server = &instance->rpc_server;\n  }}\n"
+            "  if (config->rpc_client_enabled != 0U) {{\n    const wl_rpc_client_config_t client_config = {{\n      (wl_rpc_client_slot_t *)layout.rpc_client_slots,\n      config->rpc_client_slot_count,\n      (uint8_t *)layout.rpc_client_responses,\n      layout.rpc_client_responses_size,\n      config->rpc_client_response_capacity,\n      config->rpc_client_next_operation_id\n    }};\n    if (wl_rpc_client_init(&instance->rpc_client, &client_config) != WL_RPC_OK) {{\n      result = WL_ERR_INVALID_ARG;\n      goto init_failed;\n    }}\n    instance->runtime.rpc_client = &instance->rpc_client;\n  }}\n  if (config->rpc_server_enabled != 0U) {{\n    const wl_rpc_server_config_t server_config = {{\n      (wl_rpc_server_pending_slot_t *)layout.rpc_server_pending_slots,\n      config->rpc_server_pending_slot_count,\n      (wl_rpc_server_cache_slot_t *)layout.rpc_server_cache_slots,\n      config->rpc_server_cache_slot_count,\n      (uint8_t *)layout.rpc_server_responses,\n      layout.rpc_server_responses_size,\n      config->rpc_server_response_capacity,\n      config->rpc_server_pending_timeout_ms,\n      config->rpc_server_cache_ttl_ms,\n      config->rpc_server_cache_policy\n    }};\n    if (wl_rpc_server_init(&instance->rpc_server, &server_config) != WL_RPC_OK) {{\n      result = WL_ERR_INVALID_ARG;\n      goto init_failed;\n    }}\n    instance->runtime.rpc_server = &instance->rpc_server;\n  }}\n"
         )
         .unwrap();
         for service in &profile.rpc_services {
@@ -682,7 +682,14 @@ fn emit_assembly_source(output: &mut String, profile: &BindingProfileModel, modu
             .unwrap();
         }
     }
-    output.push_str("  return WL_OK;\n}\n\n");
+    output.push_str(concat!(
+        "  return WL_OK;\n",
+        "\n",
+        "init_failed:\n",
+        "  memset(instance, 0, sizeof(*instance));\n",
+        "  return result;\n",
+        "}\n\n",
+    ));
 }
 
 fn emit_source(profile: &BindingProfileModel, module: &str) -> String {

@@ -170,6 +170,12 @@ message State = 1 { optional uint32 sequence = 1; }
     assert!(first.header.contains("STABLE_API_BINDING_PROFILE_IDENTITY"));
     assert!(first.header.contains("STABLE_API_IDENTITY_ALGORITHM"));
     assert!(first.header.contains("Terminal consumer for RX events"));
+    assert!(first.source.contains("goto init_failed;"));
+    assert!(
+        first
+            .source
+            .contains("init_failed:\n  memset(instance, 0, sizeof(*instance));")
+    );
 }
 
 #[test]
