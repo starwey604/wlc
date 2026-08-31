@@ -482,3 +482,84 @@ int main() {
         "generated bindings header must be C++20-clean"
     );
 }
+
+#[test]
+fn generated_names_avoid_c11_macros_and_cxx20_keywords() {
+    let directory = tempdir().unwrap();
+    let schema = parse_schema(
+        r#"version 1;
+message Class = 1 {
+  optional uint32 template = 1;
+}
+message Bool = 2 {
+  optional uint32 concept = 1;
+}
+"#,
+    )
+    .unwrap();
+    let model = analyze_schema(&schema).unwrap();
+    let generated = generate_c(&model, "keyword_api").unwrap();
+    assert!(generated.header.contains("struct class_"));
+    assert!(generated.header.contains("uint32_t template_;"));
+    assert!(generated.header.contains("struct bool_"));
+    fs::write(directory.path().join("keyword_api.h"), generated.header).unwrap();
+    fs::write(directory.path().join("keyword_api.c"), generated.source).unwrap();
+    fs::write(
+        directory.path().join("keyword_api_bindings.h"),
+        generated.bindings_header,
+    )
+    .unwrap();
+    fs::write(
+        directory.path().join("keyword_api_bindings.c"),
+        generated.bindings_source,
+    )
+    .unwrap();
+    fs::write(
+        directory.path().join("header.cpp"),
+        "#include \"keyword_api_bindings.h\"\nint main() { return 0; }\n",
+    )
+    .unwrap();
+
+    let c_status = Command::new("cc")
+        .args([
+            "-std=c11",
+            "-Wall",
+            "-Wextra",
+            "-Wpedantic",
+            "-Werror",
+            "-fsyntax-only",
+            "-I",
+        ])
+        .arg(wirelink_include())
+        .arg("-I")
+        .arg(directory.path())
+        .arg(directory.path().join("keyword_api.c"))
+        .arg(directory.path().join("keyword_api_bindings.c"))
+        .status()
+        .unwrap();
+    assert!(
+        c_status.success(),
+        "keyword schema must be strict C11-clean"
+    );
+
+    let cxx_status = Command::new("c++")
+        .args([
+            "-std=c++20",
+            "-Wall",
+            "-Wextra",
+            "-Wpedantic",
+            "-Werror",
+            "-fsyntax-only",
+            "-I",
+        ])
+        .arg(wirelink_include())
+        .arg("-I")
+        .arg(directory.path())
+        .arg(directory.path().join("header.cpp"))
+        .status()
+        .unwrap();
+    assert!(
+        cxx_status.success(),
+        "keyword schema must be strict C++20-clean"
+    );
+}
