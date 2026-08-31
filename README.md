@@ -187,6 +187,47 @@ cargo clippy --all-targets --all-features -- -D warnings
 Diagnostics use `line:column: message`; at the CLI boundary `miette` renders a
 source snippet at the invalid token.
 
+## Optional binding profiles
+
+Application routing policy lives in a separate, versioned sidecar rather than
+the frozen `.wl` wire-schema grammar. A profile currently describes retained
+`LATEST`/`FIFO` routes and RPC message/field mappings:
+
+```text
+profile version 1;
+
+latest ArmMitCommand {
+  delivery = unreliable;
+}
+
+fifo AlarmEvent {
+  delivery = reliable;
+}
+
+rpc Home {
+  request = HomeRequest;
+  response = HomeResponse;
+  request_operation_id = operation_id;
+  response_operation_id = operation_id;
+  response_status = status;
+  request_delivery = reliable;
+  response_delivery = reliable;
+}
+```
+
+Use `--profile path/to/device.bind.wl` with `validate` or `compile`. At this
+stage the option validates and resolves the profile for future runtime-binding
+generation; it intentionally does not change or add to the four existing C
+artifacts. The same wire schema can therefore use different host and device
+profiles without changing message IDs or payload bytes.
+
+`LATEST` and `FIFO` retain decoded values after the RX callback. WLC rejects a
+retained route whose message contains `bytes`, `string`, or `repeated` storage,
+including through nested messages. RPC operation IDs must map to optional
+`uint32` fields. Its response status must map to an optional `int32` or enum;
+an enum status domain must declare numeric value zero for success. Request and
+response delivery are explicit and may be `reliable` or `unreliable`.
+
 ## Dependency policy
 
 The compiler deliberately keeps one dependency per concern:
