@@ -173,7 +173,13 @@ rpc Start {
             "profile must not affect {artifact}"
         );
     }
-    assert_eq!(fs::read_dir(&profiled_output).unwrap().count(), 4);
+    let runtime_header = fs::read_to_string(profiled_output.join("control_runtime.h")).unwrap();
+    let runtime_source = fs::read_to_string(profiled_output.join("control_runtime.c")).unwrap();
+    assert!(runtime_header.contains("CONTROL_SCHEMA_IDENTITY"));
+    assert!(runtime_header.contains("wl_latest_t *control_latest;"));
+    assert!(runtime_source.contains("control_runtime_dispatch_event"));
+    assert_eq!(fs::read_dir(&plain_output).unwrap().count(), 4);
+    assert_eq!(fs::read_dir(&profiled_output).unwrap().count(), 6);
 }
 
 #[test]

@@ -937,10 +937,10 @@ fn validate_names(model: &SemanticModel) -> Result<(), CodegenError> {
     Ok(())
 }
 
-fn type_name(name: &str) -> String {
+pub(crate) fn type_name(name: &str) -> String {
     c_identifier(name)
 }
-fn c_identifier(name: &str) -> String {
+pub(crate) fn c_identifier(name: &str) -> String {
     let mut output: String = name
         .to_snake_case()
         .chars()
@@ -957,7 +957,7 @@ fn c_identifier(name: &str) -> String {
     }
     output
 }
-fn upper_snake(name: &str) -> String {
+pub(crate) fn upper_snake(name: &str) -> String {
     c_identifier(name).to_shouty_snake_case()
 }
 

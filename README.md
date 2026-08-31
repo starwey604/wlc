@@ -215,11 +215,15 @@ rpc Home {
 }
 ```
 
-Use `--profile path/to/device.bind.wl` with `validate` or `compile`. At this
-stage the option validates and resolves the profile for future runtime-binding
-generation; it intentionally does not change or add to the four existing C
-artifacts. The same wire schema can therefore use different host and device
-profiles without changing message IDs or payload bytes.
+Use `--profile path/to/device.bind.wl` with `validate` or `compile`. Profiled
+compilation adds `<module>_runtime.h/.c` while leaving the four existing codec
+and binding artifacts byte-for-byte unchanged. The runtime header embeds the
+separate schema/profile diagnostic identities. Its generated dispatcher
+decodes a retained message directly into a `wl_latest_t` or `wl_fifo_t` write
+claim, publishes only after successful decode, aborts every failed claim, and
+releases each valid RX event exactly once. The same wire schema can therefore
+use different host and device profiles without changing message IDs or
+payload bytes.
 
 `LATEST` and `FIFO` retain decoded values after the RX callback. WLC rejects a
 retained route whose message contains `bytes`, `string`, or `repeated` storage,

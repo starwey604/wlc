@@ -124,6 +124,11 @@ fn main() -> Result<()> {
                 .and_then(|value| value.to_str())
                 .unwrap_or("wirelink_generated");
             let generated = wlc::generate_c(&model, stem).map_err(miette::Report::new)?;
+            let generated_runtime = profile_model
+                .as_ref()
+                .map(|profile| wlc::generate_runtime_c(&model, profile, stem))
+                .transpose()
+                .map_err(miette::Report::new)?;
             fs::write(output.join(format!("{stem}.h")), generated.header).into_diagnostic()?;
             fs::write(output.join(format!("{stem}.c")), generated.source).into_diagnostic()?;
             fs::write(
@@ -136,12 +141,32 @@ fn main() -> Result<()> {
                 generated.bindings_source,
             )
             .into_diagnostic()?;
-            println!(
-                "generated {}.h/.c and {}_bindings.h/.c in {}",
-                stem,
-                stem,
-                output.display()
-            );
+            if let Some(generated_runtime) = generated_runtime {
+                fs::write(
+                    output.join(format!("{stem}_runtime.h")),
+                    generated_runtime.header,
+                )
+                .into_diagnostic()?;
+                fs::write(
+                    output.join(format!("{stem}_runtime.c")),
+                    generated_runtime.source,
+                )
+                .into_diagnostic()?;
+                println!(
+                    "generated {}.h/.c, {}_bindings.h/.c, and {}_runtime.h/.c in {}",
+                    stem,
+                    stem,
+                    stem,
+                    output.display()
+                );
+            } else {
+                println!(
+                    "generated {}.h/.c and {}_bindings.h/.c in {}",
+                    stem,
+                    stem,
+                    output.display()
+                );
+            }
         }
         Operation::Validate => println!(
             "validated {} (version {}, {} declaration(s))",
