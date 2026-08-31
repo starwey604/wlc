@@ -58,3 +58,38 @@ fn validate_accepts_a_compatible_predecessor() {
         .assert()
         .success();
 }
+
+#[test]
+fn compile_and_validate_support_dense_numeric_fields() {
+    let directory = tempdir().expect("temporary directory");
+    let previous = directory.path().join("previous.wl");
+    let current = directory.path().join("control.wl");
+    let output = directory.path().join("generated");
+    fs::write(
+        &previous,
+        "version 1; message Control = 1 { optional float32 timestamp = 1; packed float32 joints[30] = 2; }",
+    )
+    .expect("write predecessor");
+    fs::write(
+        &current,
+        "version 2; message Control = 1 { optional float32 timestamp = 1; packed float32 joints[30] = 2; optional float64 clock = 3; }",
+    )
+    .expect("write current schema");
+
+    Command::cargo_bin("wlc")
+        .expect("wlc binary")
+        .args([
+            "compile",
+            current.to_str().unwrap(),
+            "--out-dir",
+            output.to_str().unwrap(),
+            "--previous",
+            previous.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let header = fs::read_to_string(output.join("control.h")).expect("generated header");
+    assert!(header.contains("float joints[30];"));
+    assert!(header.contains("double clock;"));
+}

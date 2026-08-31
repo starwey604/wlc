@@ -1,82 +1,136 @@
 # wlc
 
-`wlc` is the Wirelink schema compiler. This baseline implements parsing and
-front-end validation only; semantic type resolution, IR, and C code generation
-are subsequent milestones.
+`wlc` is the Wirelink schema compiler. It parses and validates `.wl` schemas,
+checks a revision against its predecessor, and generates allocation-free C11
+payload codecs.
 
 ## Schema grammar
 
 ```text
-schema      = "version" positive-integer ";" item+
-item        = declaration | reservation
-declaration = message | enum
-reservation = "reserved" positive-integer ";"
-message     = "message" identifier "=" positive-integer "{" (field | reservation)* "}"
-field       = ("optional" | "repeated") identifier identifier "="
-              positive-integer ("[" "default" "=" literal "]")? ";"
-enum        = "enum" identifier "=" positive-integer "{" enum-value (enum-value | enum-reservation)* "}"
-enum-value  = identifier "=" integer ";"
+schema         = "version" positive-integer ";" item+
+item           = declaration | reservation
+declaration    = message | enum
+reservation    = "reserved" positive-integer ";"
+message        = "message" identifier "=" positive-integer
+                 "{" (field | reservation)* "}"
+field          = optional-field | repeated-field | packed-field
+optional-field = "optional" type identifier "=" positive-integer
+                 ("[" "default" "=" literal "]")? ";"
+repeated-field = "repeated" type identifier "=" positive-integer ";"
+packed-field   = "packed" packed-type identifier "[" positive-integer "]"
+                 "=" positive-integer ";"
+packed-type    = "float32" | "float64" | "fixed32" | "fixed64"
+enum           = "enum" identifier "=" positive-integer
+                 "{" enum-value (enum-value | enum-reservation)* "}"
+enum-value     = identifier "=" integer ";"
 enum-reservation = "reserved" integer ";"
-literal     = integer | string | "true" | "false"
+literal        = integer | string | "true" | "false"
 ```
 
-Line comments start with `//`. `version` must be the first declaration and is
-currently a positive integer. Message and enum identifiers share one global
-namespace and one non-zero 16-bit ID namespace. Field IDs are non-zero 16-bit
-numbers, unique within their message. Enum names and values are unique within
-their enum. Valid built-in field types are `bool`, `string`, `int32`, `uint32`,
-`int64`, and `uint64`; user-defined type names are accepted for later semantic
-resolution.
+For example, a six-axis control vector is declared as:
 
-`optional` fields may specify one default. Defaults must match the built-in
-type; user-defined (enum) defaults currently use an integer literal.
-`repeated` fields cannot have defaults.
+```wl
+message JointControl = 16 {
+  packed float32 position[6] = 1;
+  packed float32 velocity[6] = 2;
+}
+```
+
+Line comments start with `//`. `version` must be first and positive. Message
+and enum identifiers share one global namespace and one nonzero 16-bit ID
+namespace. Field IDs are nonzero 16-bit numbers and unique within a message.
+Packed element counts are in `1..=65535`.
+
+The built-in types are `bool`, `bytes`, `string`, `int32`, `uint32`, `int64`,
+`uint64`, `fixed32`, `fixed64`, `float32`, and `float64`. `float32` and
+`float64` generate C `float` and `double`. Generated headers enforce 4/8-byte
+IEEE-754 binary32/binary64 value formats with compile-time assertions. Codecs
+move floating-point bits through `memcpy`; they never use aliasing casts or
+numeric conversions, so signed zero, infinities, and NaN payload bits round
+trip exactly.
+
+Optional scalar defaults must match their type. Explicit floating-point
+defaults are intentionally not accepted until the schema has a canonical,
+locale-independent floating literal syntax; absent floats clear to positive
+zero. `bytes`, repeated fields, and packed fields cannot have defaults.
+
+## Wire rules
+
+The encoder emits fields in field-number order. Each field starts with an
+unsigned LEB128 key `(field_number << 3) | wire_type`. Integers retain their
+existing varint representation. `fixed32` and `float32` use wire type 5 and
+four big-endian bytes; `fixed64` and `float64` use wire type 1 and eight
+big-endian bytes. Adding float support does not alter any existing scalar or
+repeated wire bytes.
+
+A packed declaration is one optional field occurrence, represented in C by a
+presence flag and an inline array:
+
+```c
+bool has_position;
+float position[6];
+```
+
+On the wire it always uses type 2 and contains one length prefix followed by
+exactly `count` fixed-width, big-endian elements. A decoder rejects duplicate
+occurrences, a wrong wire type, or any byte length other than
+`count * sizeof(element)`. There is no caller pointer, count, capacity, heap
+allocation, or per-element tag. Thus `packed float32 values[30] = 7;` encodes
+as 122 bytes when present: one-byte tag, one-byte length (`120`), and 120 data
+bytes.
+
+Ordinary `repeated` fields keep their previous representation: a caller-owned
+pointer/count/capacity in C and one complete tag/value pair per element.
 
 ## Semantic and compatibility rules
 
-All declaration and field numbers are explicit allocations: `wlc` never
-auto-assigns IDs. Semantic analysis resolves every field type to a built-in,
-message, or enum and rejects unknown types, message defaults, and enum defaults
-that do not name an existing numeric enum value. Its public model sorts
-declarations by global ID, fields by field number, and enum values by value;
-the result is therefore stable when source declarations are reordered.
+All declaration and field numbers are explicit allocations; `wlc` never
+auto-assigns IDs. Semantic analysis resolves every field type and rejects
+unknown types, recursive or overly deep messages, invalid defaults, and
+non-fixed-width packed element types. The public semantic model is sorted by
+IDs and field numbers, so source reordering does not change generated output.
 
-`reserved N;` at schema scope permanently reserves a removed message or enum
-ID. The same statement inside a message permanently reserves a field number;
-inside an enum it reserves an enum value. Compatibility checks compare a prior
-semantic model to a current model and reject ID/name/type/cardinality changes,
-or removal without a corresponding reservation. Existing reservations must
-remain reserved. Default changes are not wire changes and are allowed.
+`reserved N;` permanently reserves a removed declaration ID, field number, or
+enum value at its respective scope. Compatibility checks reject ID, name,
+type, and cardinality changes or removal without a reservation. A packed
+field's element type and fixed count are both part of its wire identity;
+changing either is incompatible. Existing reservations must remain reserved.
 
-The current library API is `analyze_schema(&Schema)` followed by
-`check_compatibility(&previous, &current)`. The future `wlc validate` command
-will expose the latter through a version-baseline file.
+The library API is `parse_schema()`, `analyze_schema()`,
+`check_compatibility()`, and `generate_c()`.
 
-## Usage
+## CLI usage
 
 ```sh
-cargo run -- path/to/schema.wl
+# Validate one schema.
+cargo run -- validate path/to/schema.wl
+
+# Validate compatibility and generate schema.h/schema.c.
+cargo run -- compile path/to/schema.wl \
+  --previous path/to/previous.wl \
+  --out-dir generated
+
 cargo test
+cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-Diagnostics use `line:column: message` and the process exits non-zero on an
-invalid schema. At the CLI boundary, `miette` renders a source snippet and
-points at the invalid token.
+Diagnostics use `line:column: message`; at the CLI boundary `miette` renders a
+source snippet at the invalid token.
 
 ## Dependency policy
 
 The compiler deliberately keeps one dependency per concern:
 
-| Crate | Role | Adoption point |
-| --- | --- | --- |
-| `miette` | Source-aware, terminal-friendly diagnostics. | Used now by the CLI. |
-| `thiserror` | Typed library errors without exposing implementation details. | Used now for parser errors. |
-| `clap` | Declarative CLI and the future `compile` / `validate` subcommands. | Used now for argument parsing. |
-| `heck` | Stable snake-case and macro-case conversion for generated C symbols. | Used now by code generation. |
-| `insta` | Reviewed golden snapshots for generated C headers and sources. | Development dependency; enabled when codegen lands. |
-| `proptest` | Property tests for parser robustness and scalar default boundaries. | Development dependency; used now. |
-| `assert_cmd`, `tempfile` | Isolated end-to-end tests of the CLI and its generated output. | Development dependencies; used now. |
+| Crate | Role |
+| --- | --- |
+| `miette` | Source-aware, terminal-friendly diagnostics. |
+| `thiserror` | Typed library errors. |
+| `clap` | Declarative `compile` and `validate` CLI. |
+| `heck` | Stable generated C symbol conversion. |
+| `insta` | Reviewed generator golden snapshots. |
+| `proptest` | Parser robustness and scalar-boundary properties. |
+| `assert_cmd`, `tempfile` | Isolated CLI and generated-C tests. |
 
-We will not add a parser generator, general templating engine, or `anyhow` at
-this stage. The hand-written parser preserves exact grammar control and works
-with `miette`; generated C will be written by a small, testable emitter.
+The hand-written parser keeps the grammar explicit. Generated C is emitted by
+a small self-contained runtime and depends only on `wirelink/codec.h` for
+status and borrowed byte/string types.

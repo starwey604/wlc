@@ -88,6 +88,8 @@ pub enum ResolvedType {
     Uint64,
     Fixed32,
     Fixed64,
+    Float32,
+    Float64,
     Message { id: u16, name: String },
     Enum { id: u16, name: String },
 }
@@ -173,6 +175,23 @@ pub fn analyze_schema(schema: &Schema) -> Result<SemanticModel, SemanticErrors> 
                         ));
                         continue;
                     };
+                    if matches!(field.cardinality, Cardinality::Packed(_))
+                        && !matches!(
+                            &ty,
+                            ResolvedType::Float32
+                                | ResolvedType::Float64
+                                | ResolvedType::Fixed32
+                                | ResolvedType::Fixed64
+                        )
+                    {
+                        errors.push(SemanticError::new(
+                            field.ty.span,
+                            format!(
+                                "packed field `{}` must use float32, float64, fixed32, or fixed64",
+                                field.name.value
+                            ),
+                        ));
+                    }
                     let default = lower_default(
                         field.default.as_ref(),
                         &ty,
@@ -299,18 +318,18 @@ pub fn check_compatibility(
                 }
             }
         }
-        if let Some(current_symbol) = current.symbol_by_name(previous_symbol.name()) {
-            if current_symbol.id() != previous_symbol.id() {
-                errors.push(SemanticError::new(
-                    current_symbol.span(),
-                    format!(
-                        "declaration `{}` changed ID from {} to {}",
-                        previous_symbol.name(),
-                        previous_symbol.id(),
-                        current_symbol.id()
-                    ),
-                ));
-            }
+        if let Some(current_symbol) = current.symbol_by_name(previous_symbol.name())
+            && current_symbol.id() != previous_symbol.id()
+        {
+            errors.push(SemanticError::new(
+                current_symbol.span(),
+                format!(
+                    "declaration `{}` changed ID from {} to {}",
+                    previous_symbol.name(),
+                    previous_symbol.id(),
+                    current_symbol.id()
+                ),
+            ));
         }
     }
     for reserved_id in &previous.reserved_ids {
@@ -351,6 +370,8 @@ fn resolve_type(name: &str, declarations: &HashMap<&str, &Declaration>) -> Optio
         "uint64" => Some(ResolvedType::Uint64),
         "fixed32" => Some(ResolvedType::Fixed32),
         "fixed64" => Some(ResolvedType::Fixed64),
+        "float32" => Some(ResolvedType::Float32),
+        "float64" => Some(ResolvedType::Float64),
         _ => None,
     };
     builtin.or_else(|| match declarations.get(name) {
@@ -415,6 +436,16 @@ fn lower_default(
                 )
             })
         }
+        (ResolvedType::Float32, _) => invalid(
+            errors,
+            "float32 fields cannot declare defaults; use explicit presence and a runtime value"
+                .to_owned(),
+        ),
+        (ResolvedType::Float64, _) => invalid(
+            errors,
+            "float64 fields cannot declare defaults; use explicit presence and a runtime value"
+                .to_owned(),
+        ),
         (ResolvedType::Enum { name, .. }, Literal::Integer(value)) => {
             let Some(value) = value.as_i32() else {
                 return invalid(
@@ -454,6 +485,8 @@ fn is_builtin(name: &str) -> bool {
             | "uint64"
             | "fixed32"
             | "fixed64"
+            | "float32"
+            | "float64"
     )
 }
 
@@ -467,7 +500,7 @@ fn validate_message_nesting(declarations: &[Symbol], errors: &mut Vec<SemanticEr
         .collect();
     for message in messages.values() {
         let mut path = vec![message.id];
-        validate_message_children(*message, 0, &messages, &mut path, errors);
+        validate_message_children(message, 0, &messages, &mut path, errors);
     }
 }
 
@@ -537,19 +570,15 @@ fn check_message_compatibility(
             .fields
             .iter()
             .find(|field| field.name == previous_field.name)
+            && current_field.number != previous_field.number
         {
-            if current_field.number != previous_field.number {
-                errors.push(SemanticError::new(
-                    current_field.span,
-                    format!(
-                        "field `{}` in message `{}` changed number from {} to {}",
-                        previous_field.name,
-                        current.name,
-                        previous_field.number,
-                        current_field.number
-                    ),
-                ));
-            }
+            errors.push(SemanticError::new(
+                current_field.span,
+                format!(
+                    "field `{}` in message `{}` changed number from {} to {}",
+                    previous_field.name, current.name, previous_field.number, current_field.number
+                ),
+            ));
         }
     }
 }

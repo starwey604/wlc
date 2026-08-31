@@ -41,6 +41,58 @@ fn parses_all_frontend_constructs() {
 }
 
 #[test]
+fn parses_float_scalars_and_fixed_packed_arrays() {
+    let schema = parse_schema(
+        "version 1; message Control = 1 { optional float32 position = 1; optional float64 time = 2; packed float32 joints[6] = 3; packed fixed64 ticks[2] = 4; }",
+    )
+    .expect("dense numeric schema");
+    let Declaration::Message(message) = &schema.declarations[0] else {
+        panic!("expected message");
+    };
+    assert_eq!(message.fields[0].ty.value, "float32");
+    assert_eq!(message.fields[1].ty.value, "float64");
+    assert_eq!(message.fields[2].cardinality, Cardinality::Packed(6));
+    assert_eq!(message.fields[3].cardinality, Cardinality::Packed(2));
+    analyze_schema(&schema).expect("float and supported packed types resolve");
+}
+
+#[test]
+fn packed_arrays_require_a_valid_count_and_fixed_width_numeric_type() {
+    for source in [
+        "version 1; message Bad = 1 { packed float32 values[0] = 1; }",
+        "version 1; message Bad = 1 { packed float32 values[65536] = 1; }",
+    ] {
+        let error = parse_schema(source).unwrap_err();
+        assert!(error.message.contains("packed element count"));
+    }
+
+    let schema = parse_schema(
+        "version 1; message Bad = 1 { packed uint32 values[6] = 1; packed string names[2] = 2; }",
+    )
+    .unwrap();
+    let errors = analyze_schema(&schema).unwrap_err();
+    assert_eq!(errors.errors().len(), 2);
+    assert!(errors.errors().iter().all(|error| {
+        error
+            .message
+            .contains("must use float32, float64, fixed32, or fixed64")
+    }));
+}
+
+#[test]
+fn float_defaults_are_rejected_until_a_canonical_literal_format_is_defined() {
+    let schema =
+        parse_schema("version 1; message Bad = 1 { optional float32 value = 1 [default = 0]; }")
+            .unwrap();
+    let errors = analyze_schema(&schema).unwrap_err();
+    assert!(
+        errors.errors()[0]
+            .message
+            .contains("float32 fields cannot declare defaults")
+    );
+}
+
+#[test]
 fn reports_precise_location_for_invalid_schema() {
     let error = parse_schema("version 1;\nmessage Ping = 1 {\n  optional bool ready = 0;\n}\n")
         .unwrap_err();
@@ -284,6 +336,37 @@ fn compatibility_requires_a_strictly_new_revision() {
 }
 
 #[test]
+fn compatibility_treats_packed_kind_and_count_as_wire_identity() {
+    let previous = analyze_schema(
+        &parse_schema("version 1; message Control = 1 { packed float32 joints[6] = 1; }").unwrap(),
+    )
+    .unwrap();
+    let same_shape = analyze_schema(
+        &parse_schema(
+            "version 2; message Control = 1 { packed float32 joints[6] = 1; optional float64 time = 2; }",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    check_compatibility(&previous, &same_shape).expect("adding an optional field is compatible");
+
+    for source in [
+        "version 2; message Control = 1 { packed float32 joints[7] = 1; }",
+        "version 2; message Control = 1 { packed fixed32 joints[6] = 1; }",
+        "version 2; message Control = 1 { repeated float32 joints = 1; }",
+    ] {
+        let current = analyze_schema(&parse_schema(source).unwrap()).unwrap();
+        let errors = check_compatibility(&previous, &current).unwrap_err();
+        assert!(
+            errors
+                .errors()
+                .iter()
+                .any(|error| error.message.contains("changed wire identity"))
+        );
+    }
+}
+
+#[test]
 fn generates_deterministic_c_data_model_and_api() {
     let model = analyze_schema(&parse_schema(VALID_SCHEMA).unwrap()).unwrap();
     let generated = generate_c(&model, "motor_api").unwrap();
@@ -306,6 +389,26 @@ fn generator_normalizes_acronyms_and_c_keywords() {
     assert!(generated.header.contains("uint32_t switch_;"));
     assert!(generated.header.contains("HTTP_STATUS_MESSAGE_ID"));
     assert!(generated.source.contains("#include \"http_api.h\""));
+}
+
+#[test]
+fn generator_emits_ieee_scalars_and_inline_packed_arrays() {
+    let model = analyze_schema(
+        &parse_schema(
+            "version 1; message Control = 1 { optional float32 position = 1; optional float64 time = 2; packed float32 joints[6] = 3; packed fixed64 ticks[2] = 4; }",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let generated = generate_c(&model, "control").unwrap();
+    assert!(generated.header.contains("float position;"));
+    assert!(generated.header.contains("double time;"));
+    assert!(generated.header.contains("float joints[6];"));
+    assert!(generated.header.contains("uint64_t ticks[2];"));
+    assert!(generated.header.contains("IEEE-754 binary32"));
+    assert!(generated.header.contains("IEEE-754 binary64"));
+    assert!(generated.source.contains("WLC_PACKED"));
+    assert!(generated.source.contains("memcpy(&bits32, value"));
 }
 
 proptest! {

@@ -212,16 +212,40 @@ impl Parser {
                 self.advance();
                 Cardinality::Repeated
             }
-            _ => return Err(self.error_current("field must start with `optional` or `repeated`")),
+            TokenKind::Packed => {
+                self.advance();
+                // The count follows the field name, after its type has been parsed.
+                Cardinality::Packed(0)
+            }
+            _ => {
+                return Err(
+                    self.error_current("field must start with `optional`, `repeated`, or `packed`")
+                );
+            }
         };
         let ty = self.identifier("field type")?;
         let name = self.identifier("field name")?;
+        let cardinality = if matches!(cardinality, Cardinality::Packed(_)) {
+            self.expect_symbol(TokenKind::LeftBracket, "`[` before packed element count")?;
+            let count = self.positive_u16("packed element count")?;
+            self.expect_symbol(TokenKind::RightBracket, "`]` after packed element count")?;
+            Cardinality::Packed(count.value)
+        } else {
+            cardinality
+        };
         self.expect_symbol(TokenKind::Equal, "`=` after field name")?;
         let number = self.positive_u16("field number")?;
         let default = if matches!(self.current().kind, TokenKind::LeftBracket) {
             self.advance();
-            if cardinality == Cardinality::Repeated {
-                return Err(self.error_current("repeated fields cannot declare a default value"));
+            if cardinality != Cardinality::Optional {
+                let kind = if cardinality == Cardinality::Repeated {
+                    "repeated"
+                } else {
+                    "packed"
+                };
+                return Err(
+                    self.error_current(format!("{kind} fields cannot declare a default value"))
+                );
             }
             self.expect_keyword(TokenKind::Default, "`default` option")?;
             self.expect_symbol(TokenKind::Equal, "`=` after `default`")?;

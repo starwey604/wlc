@@ -74,6 +74,9 @@ pub struct Field {
 pub enum Cardinality {
     Optional,
     Repeated,
+    /// One optional, length-delimited occurrence containing exactly `count`
+    /// fixed-width numeric elements.
+    Packed(u16),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
