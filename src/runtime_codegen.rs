@@ -439,6 +439,12 @@ fn emit_header(schema: &SemanticModel, profile: &BindingProfileModel, module: &s
         }
     }
     writeln!(output, "}} {module}_runtime_t;\n").unwrap();
+    output.push_str(
+        "/* Terminal consumer for RX events: with non-null ctx/event every RX\n\
+         * outcome releases the event exactly once. Do not chain another dispatcher\n\
+         * or release it again. Non-RX events are never released; matching RPC TX\n\
+         * terminal events advance the client but the caller still owns wl_tx_take(). */\n",
+    );
     writeln!(
         output,
         "{module}_runtime_result_t {module}_runtime_dispatch_event(wl_ctx_t *ctx, const wl_event_t *event, {module}_runtime_t *runtime, wl_time_ms_t now_ms);\n"

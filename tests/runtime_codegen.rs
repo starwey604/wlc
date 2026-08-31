@@ -160,6 +160,7 @@ message State = 1 { optional uint32 sequence = 1; }
     assert!(first.header.contains("STABLE_API_SCHEMA_IDENTITY"));
     assert!(first.header.contains("STABLE_API_BINDING_PROFILE_IDENTITY"));
     assert!(first.header.contains("STABLE_API_IDENTITY_ALGORITHM"));
+    assert!(first.header.contains("Terminal consumer for RX events"));
 }
 
 #[test]

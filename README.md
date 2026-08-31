@@ -351,7 +351,7 @@ The compiler deliberately keeps one dependency per concern:
 | --- | --- |
 | `miette` | Source-aware, terminal-friendly diagnostics. |
 | `thiserror` | Typed library errors. |
-| `clap` | Declarative `compile` and `validate` CLI. |
+| `clap` | Declarative `validate`, `compile`, and `identity` CLI. |
 | `heck` | Stable generated C symbol conversion. |
 | `insta` | Reviewed generator golden snapshots. |
 | `proptest` | Parser robustness and scalar-boundary properties. |
