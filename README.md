@@ -84,12 +84,13 @@ pointer/count/capacity in C and one complete tag/value pair per element.
 
 ## Generated typed bindings
 
-Compilation produces four deterministic files. `<module>.h/.c` contain only
-the payload data model and codec and continue to depend solely on
-`wirelink/codec.h`. `<module>_bindings.h/.c` form a separate, optional
-translation unit which depends on the public `wirelink/wirelink.h` API. A
-codec-only firmware therefore does not pull send, dispatch, or Wirelink core
-symbols into its link.
+Compilation produces deterministic `<module>.h/.c`,
+`<module>_bindings.h/.c`, and `<module>_manifest.json` files. A profile adds
+`<module>_runtime.h/.c`. The codec files contain only the payload data model
+and codec and continue to depend solely on `wirelink/codec.h`. The binding
+files form a separate, optional translation unit which depends on the public
+`wirelink/wirelink.h` API. A codec-only firmware therefore does not pull send,
+dispatch, or Wirelink core symbols into its link.
 
 The bindings header declares a module-prefixed router. Each message route has
 a strongly typed `int32_t` callback, caller-owned message scratch, and an
@@ -270,6 +271,26 @@ RPC slot counts, response capacities, expiry policy, and canonical-request
 capacity are deployment configuration and deliberately do not participate in
 the schema or binding-profile identity. Applications may still construct the
 lower-level `<module>_runtime_t` manually when they need a custom layout.
+
+Runtime results have a small common header (`domain`, event/message identity,
+and `detail_kind`) followed by a tagged union. Inspect
+`result.detail.retained` only for `*_RUNTIME_DETAIL_RETAINED`, and
+`result.detail.rpc` only for `*_RUNTIME_DETAIL_RPC`; `*_RUNTIME_DETAIL_NONE`
+has no domain payload. A retained-only profile therefore does not carry the
+larger RPC result fields. Generated runtime headers likewise include only the
+LATEST, FIFO, and RPC public headers selected by that profile. The fixed
+`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `2` for this layout; regenerate
+all runtime sources and update field access together when that value changes.
+
+`tests/runtime_size.rs` keeps deterministic size regression gates. On
+`arm-none-eabi-gcc 16.2.0` with Cortex-M4, Thumb, and `-Os`, its representative
+LATEST + FIFO + RPC runtime measures 1905 bytes for dispatch/RPC hot-path code,
+1100 bytes for static assembly helpers, and 3005 bytes combined. The gates are
+2048, 1200, and 3200 bytes respectively. Host layout gates cap a retained-only
+result at 24 bytes and an RPC/combined result at 96 bytes. These are generator
+regression fixtures, not whole-firmware estimates: generated functions use
+individual sections, so a normal `--gc-sections` link omits APIs that the
+application never references.
 
 `<module>_runtime_dispatch_event()` is the terminal owner of every RX event
 passed with non-null `ctx` and `event`. Every RX outcome—including an unknown
