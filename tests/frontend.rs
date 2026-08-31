@@ -396,6 +396,8 @@ fn generates_deterministic_c_data_model_and_api() {
             .bindings_source
             .contains("motor_api_dispatch_event")
     );
+    assert!(generated.bindings_source.ends_with('\n'));
+    assert!(!generated.bindings_source.ends_with("\n\n"));
     assert!(!generated.source.contains("wl_send_unreliable"));
 }
 

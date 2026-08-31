@@ -227,6 +227,9 @@ fn emit_bindings_source(module: &str, messages: &[&MessageSymbol]) -> String {
             "{module}_send_result_t {module}_{name}_send_direct(wl_ctx_t *ctx, const {name}_t *message, wl_delivery_t delivery) {{\n  {module}_send_result_t result = {{ {prefix}_SEND_CORE_ERROR, WL_CODEC_OK, WL_OK, WL_OK, 1U, 0U, 0U }};\n  wl_tx_payload_claim_t claim = {{0}};\n  result.core_result = wl_tx_payload_claim(ctx, {macro_name}_MESSAGE_ID, delivery, &claim);\n  if (result.core_result != WL_OK) return result;\n  result.codec_status = {name}_encode(message, claim.span.data, claim.span.length, &result.payload_length);\n  if (result.codec_status != WL_CODEC_OK) {{\n    result.domain = {prefix}_SEND_CODEC_ERROR;\n    result.abort_result = wl_tx_payload_abort(ctx, &claim);\n    return result;\n  }}\n  result.core_result = wl_tx_payload_commit(ctx, &claim, result.payload_length, delivery == WL_DELIVERY_RELIABLE ? &result.handle : NULL);\n  if (result.core_result != WL_OK) {{\n    result.abort_result = wl_tx_payload_abort(ctx, &claim);\n    return result;\n  }}\n  result.domain = {prefix}_SEND_OK;\n  return result;\n}}\n\n"
         ));
     }
+    while output.ends_with("\n\n") {
+        output.pop();
+    }
     output
 }
 
