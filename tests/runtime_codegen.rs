@@ -169,6 +169,24 @@ message State = 1 { optional uint32 sequence = 1; }
     assert!(first.header.contains("STABLE_API_SCHEMA_IDENTITY"));
     assert!(first.header.contains("STABLE_API_BINDING_PROFILE_IDENTITY"));
     assert!(first.header.contains("STABLE_API_IDENTITY_ALGORITHM"));
+    assert!(
+        first
+            .header
+            .contains("STABLE_API_RUNTIME_CODEGEN_ABI_VERSION")
+    );
+    assert!(first.header.contains("#include <wirelink/fifo.h>"));
+    assert!(!first.header.contains("#include <wirelink/latest.h>"));
+    assert!(!first.header.contains("#include <wirelink/rpc.h>"));
+    assert!(
+        first
+            .header
+            .contains("stable_api_runtime_retained_detail_t retained;")
+    );
+    assert!(
+        !first
+            .header
+            .contains("stable_api_runtime_rpc_detail_t rpc;")
+    );
     assert!(first.header.contains("Terminal consumer for RX events"));
     assert!(first.source.contains("goto init_failed;"));
     assert!(
@@ -204,6 +222,19 @@ rpc Local {
         &schema,
     );
     let generated = generate_runtime_c(&schema, &profile, "local_rpc").unwrap();
+    assert!(generated.header.contains("#include <wirelink/rpc.h>"));
+    assert!(!generated.header.contains("#include <wirelink/fifo.h>"));
+    assert!(!generated.header.contains("#include <wirelink/latest.h>"));
+    assert!(
+        generated
+            .header
+            .contains("local_rpc_runtime_rpc_detail_t rpc;")
+    );
+    assert!(
+        !generated
+            .header
+            .contains("runtime_retained_detail_t retained;")
+    );
     assert!(
         generated
             .source

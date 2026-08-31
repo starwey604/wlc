@@ -108,9 +108,10 @@ static int dispatch_latest(wl_ctx_t *ctx, typed_runtime_runtime_t *runtime,
   event.payload = payload;
   event.payload_len = length;
   result = typed_runtime_runtime_dispatch_event(ctx, &event, runtime, 0U);
-  if (result.domain == TYPED_RUNTIME_RUNTIME_OK) return 0;
+  if (result.domain == TYPED_RUNTIME_RUNTIME_OK &&
+      result.detail_kind == TYPED_RUNTIME_RUNTIME_DETAIL_RETAINED) return 0;
   if (result.domain == TYPED_RUNTIME_RUNTIME_STORAGE_ERROR)
-    return result.storage_result;
+    return result.detail.retained.storage_result;
   return 2;
 }
 
@@ -131,7 +132,10 @@ static int dispatch_alarm(wl_ctx_t *ctx, typed_runtime_runtime_t *runtime,
   event.payload = payload;
   event.payload_len = length;
   result = typed_runtime_runtime_dispatch_event(ctx, &event, runtime, 0U);
-  return result.domain == TYPED_RUNTIME_RUNTIME_OK ? 0 : result.storage_result;
+  return result.domain == TYPED_RUNTIME_RUNTIME_OK &&
+                 result.detail_kind == TYPED_RUNTIME_RUNTIME_DETAIL_RETAINED
+             ? 0
+             : result.detail.retained.storage_result;
 }
 
 int main(void) {
@@ -173,8 +177,8 @@ int main(void) {
   event.payload_len = sizeof(malformed);
   result = typed_runtime_runtime_dispatch_event(&ctx, &event, &runtime, 0U);
   if (result.domain != TYPED_RUNTIME_RUNTIME_CODEC_ERROR ||
-      result.codec_status != WL_CODEC_ERR_MALFORMED ||
-      result.abort_result != WL_OK || releases != 2U) return 6;
+      result.detail.retained.codec_status != WL_CODEC_ERR_MALFORMED ||
+      result.detail.retained.abort_result != WL_OK || releases != 2U) return 6;
   if (dispatch_latest(&ctx, &runtime, 8U) != 0 || releases != 3U) return 7;
 
   event.type = WL_EVT_RELIABLE_RX;
@@ -197,7 +201,8 @@ int main(void) {
   event.message_id = 999U;
   result = typed_runtime_runtime_dispatch_event(&ctx, &event, &runtime, 0U);
   if (result.domain != TYPED_RUNTIME_RUNTIME_UNKNOWN_MESSAGE ||
-      releases != 8U) return 13;
+      result.detail_kind != TYPED_RUNTIME_RUNTIME_DETAIL_NONE || releases != 8U)
+    return 13;
   result = typed_runtime_runtime_dispatch_event(&ctx, &event, NULL, 0U);
   if (result.domain != TYPED_RUNTIME_RUNTIME_INVALID_ARGUMENT ||
       releases != 9U) return 14;
