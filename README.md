@@ -232,6 +232,27 @@ including through nested messages. RPC operation IDs must map to optional
 an enum status domain must declare numeric value zero for success. Request and
 response delivery are explicit and may be `reliable` or `unreliable`.
 
+For each RPC service the runtime header emits typed scratch/direct client-start
+functions, a request callback route, and typed server complete/reject/retry
+functions. Client start allocates an operation ID and writes it into the mutable
+request before encoding. The returned result always retains that ID; a failed
+send leaves a terminal client slot that the application can inspect and
+release. Response dispatch validates the mapped ID and status, copies the raw
+payload into `wl_rpc_client_t` before releasing the RX event, and leaves typed
+response scratch under caller ownership.
+
+Server dispatch decodes and canonically re-encodes the complete request before
+computing a separately domain-tagged payload fingerprint. `NEW` invokes the
+typed callback, `PENDING_DUPLICATE` suppresses it, `REPLAY` sends cached bytes,
+and `CONFLICT` reports an RPC-domain error. Complete/reject encode exactly once,
+move those bytes into the server cache, and send the identical cached sequence;
+cached retry is public for a failed or deferred transport send. Request decode,
+response decode, and canonical encode backing are supplied through the
+generated runtime struct, so borrowed RPC fields remain valid only until the
+callback/dispatcher returns. Reliable delivery confirms the Wirelink transfer,
+not application acceptance; application rejection is represented by the
+schema status and replay cache.
+
 WLC also exposes `schema_identity(&SemanticModel)` and
 `binding_profile_identity(&BindingProfileModel)`. The CLI prints the same
 values for diagnostics:

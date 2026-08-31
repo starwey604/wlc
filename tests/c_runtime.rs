@@ -24,10 +24,16 @@ fifo Alarm { delivery = reliable; }
 "#;
 
 fn wirelink_root() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .to_path_buf()
+    fs::canonicalize(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("include"),
+    )
+    .unwrap()
+    .parent()
+    .unwrap()
+    .to_path_buf()
 }
 
 #[test]
@@ -101,7 +107,7 @@ static int dispatch_latest(wl_ctx_t *ctx, typed_runtime_runtime_t *runtime,
   event.message_id = LATEST_VALUE_MESSAGE_ID;
   event.payload = payload;
   event.payload_len = length;
-  result = typed_runtime_runtime_dispatch_event(ctx, &event, runtime);
+  result = typed_runtime_runtime_dispatch_event(ctx, &event, runtime, 0U);
   if (result.domain == TYPED_RUNTIME_RUNTIME_OK) return 0;
   if (result.domain == TYPED_RUNTIME_RUNTIME_STORAGE_ERROR)
     return result.storage_result;
@@ -124,7 +130,7 @@ static int dispatch_alarm(wl_ctx_t *ctx, typed_runtime_runtime_t *runtime,
   event.message_id = ALARM_MESSAGE_ID;
   event.payload = payload;
   event.payload_len = length;
-  result = typed_runtime_runtime_dispatch_event(ctx, &event, runtime);
+  result = typed_runtime_runtime_dispatch_event(ctx, &event, runtime, 0U);
   return result.domain == TYPED_RUNTIME_RUNTIME_OK ? 0 : result.storage_result;
 }
 
@@ -165,14 +171,14 @@ int main(void) {
   event.message_id = LATEST_VALUE_MESSAGE_ID;
   event.payload = malformed;
   event.payload_len = sizeof(malformed);
-  result = typed_runtime_runtime_dispatch_event(&ctx, &event, &runtime);
+  result = typed_runtime_runtime_dispatch_event(&ctx, &event, &runtime, 0U);
   if (result.domain != TYPED_RUNTIME_RUNTIME_CODEC_ERROR ||
       result.codec_status != WL_CODEC_ERR_MALFORMED ||
       result.abort_result != WL_OK || releases != 2U) return 6;
   if (dispatch_latest(&ctx, &runtime, 8U) != 0 || releases != 3U) return 7;
 
   event.type = WL_EVT_RELIABLE_RX;
-  result = typed_runtime_runtime_dispatch_event(&ctx, &event, &runtime);
+  result = typed_runtime_runtime_dispatch_event(&ctx, &event, &runtime, 0U);
   if (result.domain != TYPED_RUNTIME_RUNTIME_DELIVERY_MISMATCH ||
       releases != 4U) return 8;
 
@@ -189,14 +195,14 @@ int main(void) {
 
   event.type = WL_EVT_UNRELIABLE_RX;
   event.message_id = 999U;
-  result = typed_runtime_runtime_dispatch_event(&ctx, &event, &runtime);
+  result = typed_runtime_runtime_dispatch_event(&ctx, &event, &runtime, 0U);
   if (result.domain != TYPED_RUNTIME_RUNTIME_UNKNOWN_MESSAGE ||
       releases != 8U) return 13;
-  result = typed_runtime_runtime_dispatch_event(&ctx, &event, NULL);
+  result = typed_runtime_runtime_dispatch_event(&ctx, &event, NULL, 0U);
   if (result.domain != TYPED_RUNTIME_RUNTIME_INVALID_ARGUMENT ||
       releases != 9U) return 14;
   event.type = WL_EVT_TX_SUCCESS;
-  result = typed_runtime_runtime_dispatch_event(&ctx, &event, &runtime);
+  result = typed_runtime_runtime_dispatch_event(&ctx, &event, &runtime, 0U);
   if (result.domain != TYPED_RUNTIME_RUNTIME_NON_RX || releases != 9U) return 15;
 
   {
