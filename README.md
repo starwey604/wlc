@@ -226,7 +226,8 @@ rpc Home {
 
 Use `--profile path/to/device.bind.wl` with `validate` or `compile`. Profiled
 compilation adds `<module>_runtime.h/.c` while leaving the four existing codec
-and binding artifacts byte-for-byte unchanged. The runtime header embeds the
+and binding artifacts byte-for-byte unchanged. Every compile also writes a
+deterministic `<module>_manifest.json`. The runtime header embeds the
 separate schema/profile diagnostic identities. Its generated dispatcher
 decodes a retained message directly into a `wl_latest_t` or `wl_fifo_t` write
 claim, publishes only after successful decode, aborts every failed claim, and
@@ -381,8 +382,14 @@ artifacts.
 For profiled output, treat `(identity algorithm, schema identity, binding
 profile identity)` as one diagnostic tuple. The profile identity is resolved
 against a schema and is not meaningful alone. Compatible schema revisions may
-have different exact identities; record the WLC version separately when exact
-generated-artifact provenance matters.
+have different exact identities. `wlc --version` reports the compiler package
+release. The generated manifest records that release, the codegen ABI, both
+available identities, and a sorted list of artifact byte sizes and
+domain-tagged FNV digests. It deliberately omits timestamps, absolute source
+paths, host details, and output-directory paths, so identical inputs and WLC
+versions produce byte-identical manifests in different workspaces. The
+artifact digests are diagnostic integrity values, not cryptographic hashes or
+signatures.
 
 ## Dependency policy
 

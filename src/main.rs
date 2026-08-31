@@ -5,6 +5,7 @@ use miette::{IntoDiagnostic, NamedSource, Result, WrapErr};
 
 #[derive(Parser)]
 #[command(
+    version,
     about = "Validate Wirelink schemas and profiles, generate C artifacts, and print diagnostic identities"
 )]
 struct Arguments {
@@ -24,7 +25,7 @@ enum Command {
         #[arg(long)]
         profile: Option<PathBuf>,
     },
-    /// Generate codec and typed-binding C; --profile also generates the application runtime.
+    /// Generate C and a deterministic manifest; --profile also generates the application runtime.
     Compile {
         schema: PathBuf,
         /// Destination directory for generated artifacts.
@@ -134,31 +135,38 @@ fn main() -> Result<()> {
                 .map(|profile| wlc::generate_runtime_c(&model, profile, stem))
                 .transpose()
                 .map_err(miette::Report::new)?;
-            fs::write(output.join(format!("{stem}.h")), generated.header).into_diagnostic()?;
-            fs::write(output.join(format!("{stem}.c")), generated.source).into_diagnostic()?;
-            fs::write(
-                output.join(format!("{stem}_bindings.h")),
-                generated.bindings_header,
-            )
-            .into_diagnostic()?;
-            fs::write(
-                output.join(format!("{stem}_bindings.c")),
-                generated.bindings_source,
-            )
-            .into_diagnostic()?;
+            let has_runtime = generated_runtime.is_some();
+            let mut artifacts = vec![
+                (format!("{stem}.h"), generated.header),
+                (format!("{stem}.c"), generated.source),
+                (format!("{stem}_bindings.h"), generated.bindings_header),
+                (format!("{stem}_bindings.c"), generated.bindings_source),
+            ];
             if let Some(generated_runtime) = generated_runtime {
-                fs::write(
-                    output.join(format!("{stem}_runtime.h")),
-                    generated_runtime.header,
-                )
-                .into_diagnostic()?;
-                fs::write(
-                    output.join(format!("{stem}_runtime.c")),
-                    generated_runtime.source,
-                )
-                .into_diagnostic()?;
+                artifacts.push((format!("{stem}_runtime.h"), generated_runtime.header));
+                artifacts.push((format!("{stem}_runtime.c"), generated_runtime.source));
+            }
+            let manifest_artifacts = artifacts
+                .iter()
+                .map(|(path, contents)| wlc::ManifestArtifact {
+                    path,
+                    contents: contents.as_bytes(),
+                })
+                .collect::<Vec<_>>();
+            let manifest = wlc::generate_codegen_manifest(
+                stem,
+                wlc::schema_identity(&model),
+                profile_model.as_ref().map(wlc::binding_profile_identity),
+                &manifest_artifacts,
+            );
+            for (path, contents) in artifacts {
+                fs::write(output.join(path), contents).into_diagnostic()?;
+            }
+            fs::write(output.join(format!("{stem}_manifest.json")), manifest).into_diagnostic()?;
+            if has_runtime {
                 println!(
-                    "generated {}.h/.c, {}_bindings.h/.c, and {}_runtime.h/.c in {}",
+                    "generated {}.h/.c, {}_bindings.h/.c, {}_runtime.h/.c, and {}_manifest.json in {}",
+                    stem,
                     stem,
                     stem,
                     stem,
@@ -166,7 +174,8 @@ fn main() -> Result<()> {
                 );
             } else {
                 println!(
-                    "generated {}.h/.c and {}_bindings.h/.c in {}",
+                    "generated {}.h/.c, {}_bindings.h/.c, and {}_manifest.json in {}",
+                    stem,
                     stem,
                     stem,
                     output.display()

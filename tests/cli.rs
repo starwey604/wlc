@@ -4,6 +4,21 @@ use assert_cmd::Command;
 use tempfile::tempdir;
 
 #[test]
+fn version_reports_the_package_release() {
+    let output = Command::cargo_bin("wlc")
+        .unwrap()
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("wlc {}\n", env!("CARGO_PKG_VERSION"))
+    );
+}
+
+#[test]
 fn compile_help_describes_profile_runtime_generation() {
     let output = Command::cargo_bin("wlc")
         .unwrap()
@@ -13,6 +28,7 @@ fn compile_help_describes_profile_runtime_generation() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("--profile also generates the application runtime"));
+    assert!(stdout.contains("deterministic manifest"));
     assert!(stdout.contains("generate <module>_runtime.h/.c"));
     assert!(stdout.contains("Destination directory for generated artifacts"));
 }
@@ -45,12 +61,18 @@ fn compile_writes_named_c_artifacts() {
         fs::read_to_string(output.join("motor_api_bindings.h")).expect("generated bindings header");
     let bindings_source =
         fs::read_to_string(output.join("motor_api_bindings.c")).expect("generated bindings source");
+    let manifest =
+        fs::read_to_string(output.join("motor_api_manifest.json")).expect("generated manifest");
     assert!(header.contains("STATUS_MESSAGE_ID 1U"));
     assert!(source.contains("#include \"motor_api.h\""));
     assert!(bindings_header.contains("motor_api_dispatch_event"));
     assert!(bindings_header.contains("motor_api_status_send_reliable"));
     assert!(bindings_source.contains("#include \"motor_api_bindings.h\""));
     assert!(!source.contains("wl_send_reliable"));
+    assert!(manifest.contains("\"format\": \"wirelink-codegen-manifest-v1\""));
+    assert!(manifest.contains("\"module\": \"motor_api\""));
+    assert!(manifest.contains("\"binding_profile\": null"));
+    assert!(manifest.contains("\"path\": \"motor_api.h\""));
 }
 
 #[test]
@@ -192,8 +214,46 @@ rpc Start {
     assert!(runtime_header.contains("CONTROL_SCHEMA_IDENTITY"));
     assert!(runtime_header.contains("wl_latest_t *control_latest;"));
     assert!(runtime_source.contains("control_runtime_dispatch_event"));
-    assert_eq!(fs::read_dir(&plain_output).unwrap().count(), 4);
-    assert_eq!(fs::read_dir(&profiled_output).unwrap().count(), 6);
+    let plain_manifest = fs::read_to_string(plain_output.join("control_manifest.json")).unwrap();
+    let profiled_manifest =
+        fs::read_to_string(profiled_output.join("control_manifest.json")).unwrap();
+    assert!(plain_manifest.contains("\"binding_profile\": null"));
+    assert!(profiled_manifest.contains("\"binding_profile\": \"0x"));
+    assert!(profiled_manifest.contains("\"path\": \"control_runtime.c\""));
+    assert_ne!(plain_manifest, profiled_manifest);
+    assert_eq!(fs::read_dir(&plain_output).unwrap().count(), 5);
+    assert_eq!(fs::read_dir(&profiled_output).unwrap().count(), 7);
+}
+
+#[test]
+fn compile_manifest_is_reproducible_across_output_directories() {
+    let directory = tempdir().unwrap();
+    let schema = directory.path().join("stable.wl");
+    let first = directory.path().join("first");
+    let second = directory.path().join("second");
+    fs::write(
+        &schema,
+        "version 1; message State = 1 { optional uint32 sequence = 1; }",
+    )
+    .unwrap();
+
+    for output in [&first, &second] {
+        Command::cargo_bin("wlc")
+            .unwrap()
+            .args([
+                "compile",
+                schema.to_str().unwrap(),
+                "--out-dir",
+                output.to_str().unwrap(),
+            ])
+            .assert()
+            .success();
+    }
+
+    assert_eq!(
+        fs::read(first.join("stable_manifest.json")).unwrap(),
+        fs::read(second.join("stable_manifest.json")).unwrap()
+    );
 }
 
 #[test]
