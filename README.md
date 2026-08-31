@@ -180,6 +180,15 @@ cargo run -- compile path/to/schema.wl \
   --previous path/to/previous.wl \
   --out-dir generated
 
+# Resolve an application policy sidecar and add the generated runtime files.
+cargo run -- compile path/to/schema.wl \
+  --profile path/to/device.bind.wl \
+  --out-dir generated
+
+# Print the exact schema/profile diagnostic identity pair.
+cargo run -- identity path/to/schema.wl \
+  --profile path/to/device.bind.wl
+
 cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
@@ -225,12 +234,30 @@ releases each valid RX event exactly once. The same wire schema can therefore
 use different host and device profiles without changing message IDs or
 payload bytes.
 
+`<module>_runtime_dispatch_event()` is the terminal owner of every RX event
+passed with non-null `ctx` and `event`. Every RX outcome—including an unknown
+ID, null runtime, missing route or scratch, delivery mismatch, decode/storage/
+RPC/application error, and replay-send failure—calls `wl_event_release()`
+exactly once. It is not a chainable try-dispatch: do not release the event
+yourself or pass it to the ordinary `<module>_dispatch_event()` afterward.
+Null `ctx` or `event` cannot dispose of an RX lease; non-RX events are never
+released. Feeding TX terminal events to the runtime advances a matching RPC
+client slot, but does not reclaim the core transaction; the caller must still
+call `wl_tx_take()` when required by the Wirelink transaction lifecycle.
+
 `LATEST` and `FIFO` retain decoded values after the RX callback. WLC rejects a
 retained route whose message contains `bytes`, `string`, or `repeated` storage,
 including through nested messages. RPC operation IDs must map to optional
 `uint32` fields. Its response status must map to an optional `int32` or enum;
 an enum status domain must declare numeric value zero for success. Request and
 response delivery are explicit and may be `reliable` or `unreliable`.
+
+`delivery = reliable` selects and validates Wirelink reliable DATA only. The
+peer ACK is scheduled after admission to RX event storage and before typed
+decode or application retention. FIFO full, LATEST coalescing or claim failure,
+missing storage, codec/handler/RPC failure, and replay-send failure therefore
+do not NACK the packet or restart link ARQ. Use an RPC response/status,
+capacity policy, and application deadline for peer-visible completion.
 
 For each RPC service the runtime header emits typed scratch/direct client-start
 functions, a request callback route, and typed server complete/reject/retry
@@ -240,6 +267,24 @@ send leaves a terminal client slot that the application can inspect and
 release. Response dispatch validates the mapped ID and status, copies the raw
 payload into `wl_rpc_client_t` before releasing the RX event, and leaves typed
 response scratch under caller ownership.
+
+The caller provides request, response, and canonical-encode scratch. Borrowed
+`bytes` and `string` fields in request/response scratch remain valid only until
+the callback or dispatcher returns. Canonical scratch must be writable and
+large enough for the complete decoded request; re-encoding drops unknown
+fields and makes field order irrelevant to duplicate classification. Scratch
+client sends may reuse their encode buffer after return. Direct client start
+encodes into a core claim and is therefore available only when the selected
+Wirelink envelope supports direct TX. Both start forms mutate the request's
+operation ID. If encoding or sending then fails, the allocated client slot is
+terminal but still must be inspected/released with `wl_rpc_client_release()`.
+
+Response dispatch copies the original encoded bytes into the client's fixed
+response storage before releasing RX. That copy remains valid until client
+release; decode it again for a durable typed view rather than retaining
+borrowed pointers from response scratch. Server complete/reject mutate the
+response operation ID and status, then cease borrowing the response and encode
+scratch after the call returns.
 
 Server dispatch decodes and canonically re-encodes the complete request before
 computing a separately domain-tagged payload fingerprint. `NEW` invokes the
@@ -252,6 +297,28 @@ generated runtime struct, so borrowed RPC fields remain valid only until the
 callback/dispatcher returns. Reliable delivery confirms the Wirelink transfer,
 not application acceptance; application rejection is represented by the
 schema status and replay cache.
+
+All generated `now_ms` arguments, `wl_poll()`, RPC poll functions, and deadline
+hints must use one monotonic millisecond clock and epoch. Generated dispatch
+passes time into server duplicate tracking but does not advance client/server
+expiry; the application must call `wl_rpc_client_poll()` and
+`wl_rpc_server_poll()` explicitly. Generated clients do not automatically
+repeat an end-to-end RPC after timeout: link ARQ, the client deadline, and the
+server replay cache are separate mechanisms.
+
+`NEW` calls the request handler; zero accepts and leaves the operation pending,
+while nonzero abandons it without manufacturing a response.
+`PENDING_DUPLICATE` suppresses another execution. `REPLAY` sends the exact
+cached response bytes, and `CONFLICT` reports reuse of an operation ID for a
+different canonical request. Complete/reject cache before sending, so a core
+send failure leaves a replayable response; call the generated cached-retry
+helper with the returned `server_response`. Its `response_data` is borrowed
+only until the next server mutation, poll, or expiry, so copy it before a
+deferred retry. Cache TTL/eviction, process restart, or explicit expiry ends
+replay protection; this is bounded duplicate suppression, not durable
+exactly-once execution. The domain-tagged FNV request fingerprint is likewise
+a non-security classifier rather than authentication or a collision-resistant
+digest.
 
 WLC also exposes `schema_identity(&SemanticModel)` and
 `binding_profile_identity(&BindingProfileModel)`. The CLI prints the same
@@ -269,6 +336,12 @@ roles, and delivery policy. They are deliberately not placed on the wire and
 are not cryptographic hashes, authentication values, or substitutes for WLC's
 compatibility checker. Report both values together when diagnosing generated
 artifacts.
+
+For profiled output, treat `(identity algorithm, schema identity, binding
+profile identity)` as one diagnostic tuple. The profile identity is resolved
+against a schema and is not meaningful alone. Compatible schema revisions may
+have different exact identities; record the WLC version separately when exact
+generated-artifact provenance matters.
 
 ## Dependency policy
 

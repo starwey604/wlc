@@ -4,6 +4,20 @@ use assert_cmd::Command;
 use tempfile::tempdir;
 
 #[test]
+fn compile_help_describes_profile_runtime_generation() {
+    let output = Command::cargo_bin("wlc")
+        .unwrap()
+        .args(["compile", "--help"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("--profile also generates the application runtime"));
+    assert!(stdout.contains("generate <module>_runtime.h/.c"));
+    assert!(stdout.contains("Destination directory for generated artifacts"));
+}
+
+#[test]
 fn compile_writes_named_c_artifacts() {
     let directory = tempdir().expect("temporary directory");
     let schema = directory.path().join("motor_api.wl");

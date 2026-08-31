@@ -4,7 +4,9 @@ use clap::Parser;
 use miette::{IntoDiagnostic, NamedSource, Result, WrapErr};
 
 #[derive(Parser)]
-#[command(about = "Validate and compile Wirelink schema files")]
+#[command(
+    about = "Validate Wirelink schemas and profiles, generate C artifacts, and print diagnostic identities"
+)]
 struct Arguments {
     #[command(subcommand)]
     command: Command,
@@ -15,27 +17,30 @@ enum Command {
     /// Validate a schema and optionally check it against its predecessor.
     Validate {
         schema: PathBuf,
+        /// Check SCHEMA for compatibility with this predecessor.
         #[arg(long)]
         previous: Option<PathBuf>,
-        /// Validate an optional application binding-profile sidecar.
+        /// Resolve and validate PROFILE against SCHEMA.
         #[arg(long)]
         profile: Option<PathBuf>,
     },
-    /// Generate standalone C codecs and optional Wirelink-core bindings.
+    /// Generate codec and typed-binding C; --profile also generates the application runtime.
     Compile {
         schema: PathBuf,
+        /// Destination directory for generated artifacts.
         #[arg(long)]
         out_dir: PathBuf,
+        /// Check SCHEMA for compatibility with this predecessor.
         #[arg(long)]
         previous: Option<PathBuf>,
-        /// Validate an optional application binding-profile sidecar.
+        /// Resolve PROFILE and generate <module>_runtime.h/.c.
         #[arg(long)]
         profile: Option<PathBuf>,
     },
-    /// Print stable, non-security diagnostic identities.
+    /// Print exact diagnostic identities; not a compatibility or security check.
     Identity {
         schema: PathBuf,
-        /// Include an optional resolved binding-profile identity.
+        /// Print the resolved profile identity alongside the schema identity.
         #[arg(long)]
         profile: Option<PathBuf>,
     },
