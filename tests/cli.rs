@@ -27,8 +27,16 @@ fn compile_writes_named_c_artifacts() {
 
     let header = fs::read_to_string(output.join("motor_api.h")).expect("generated header");
     let source = fs::read_to_string(output.join("motor_api.c")).expect("generated source");
+    let bindings_header =
+        fs::read_to_string(output.join("motor_api_bindings.h")).expect("generated bindings header");
+    let bindings_source =
+        fs::read_to_string(output.join("motor_api_bindings.c")).expect("generated bindings source");
     assert!(header.contains("STATUS_MESSAGE_ID 1U"));
     assert!(source.contains("#include \"motor_api.h\""));
+    assert!(bindings_header.contains("motor_api_dispatch_event"));
+    assert!(bindings_header.contains("motor_api_status_send_reliable"));
+    assert!(bindings_source.contains("#include \"motor_api_bindings.h\""));
+    assert!(!source.contains("wl_send_reliable"));
 }
 
 #[test]
@@ -92,4 +100,6 @@ fn compile_and_validate_support_dense_numeric_fields() {
     let header = fs::read_to_string(output.join("control.h")).expect("generated header");
     assert!(header.contains("float joints[30];"));
     assert!(header.contains("double clock;"));
+    assert!(output.join("control_bindings.h").is_file());
+    assert!(output.join("control_bindings.c").is_file());
 }

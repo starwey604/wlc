@@ -2,7 +2,7 @@
 
 `wlc` is the Wirelink schema compiler. It parses and validates `.wl` schemas,
 checks a revision against its predecessor, and generates allocation-free C11
-payload codecs.
+payload codecs plus optional typed Wirelink bindings.
 
 ## Schema grammar
 
@@ -82,6 +82,76 @@ bytes.
 Ordinary `repeated` fields keep their previous representation: a caller-owned
 pointer/count/capacity in C and one complete tag/value pair per element.
 
+## Generated typed bindings
+
+Compilation produces four deterministic files. `<module>.h/.c` contain only
+the payload data model and codec and continue to depend solely on
+`wirelink/codec.h`. `<module>_bindings.h/.c` form a separate, optional
+translation unit which depends on the public `wirelink/wirelink.h` API. A
+codec-only firmware therefore does not pull send, dispatch, or Wirelink core
+symbols into its link.
+
+The bindings header declares a module-prefixed router. Each message route has
+a strongly typed `int32_t` callback, caller-owned message scratch, and an
+opaque user pointer:
+
+```c
+static int32_t on_status(void *user, const status_t *status,
+                         wl_delivery_t delivery);
+
+motor_api_router_t router = {0};
+static status_t status_scratch;
+static uint32_t sample_storage[8];
+
+status_scratch.samples = sample_storage;
+status_scratch.samples_capacity = 8U;
+router.status = (motor_api_status_route_t){
+    &status_scratch, on_status, application
+};
+```
+
+`<module>_dispatch_event(ctx, event, router)` accepts events returned by
+`wl_poll()`. For every RX event and valid non-null `ctx`/`event`, it decodes,
+optionally invokes the handler, and calls `wl_event_release()` exactly once on
+success, unknown ID, missing route or scratch, codec failure, and handler
+failure. A null router is a missing route, not a leak. TX and other non-RX
+events return `*_DISPATCH_NON_RX` and are not released. Null `ctx` or `event`
+is an API error; callers must not use it to dispose of a leased event.
+
+Before decoding, the codec clears field presence and repeated counts while
+retaining caller-configured repeated pointers and capacities, including
+repeated storage nested in message scratch. Borrowed `bytes` and `string`
+fields are valid only during the typed callback. The callback must not retain
+them, release the event, or recursively dispatch the same context. Returning
+zero reports success; any other `int32_t` value is preserved as a handler-
+domain result.
+
+The dispatch result keeps unknown message, missing route, missing scratch,
+codec, and handler outcomes in separate domains and preserves the codec or
+handler status. Per-domain router counters saturate at `UINT32_MAX` rather
+than wrapping.
+
+Every message also has module-prefixed `send_unreliable` and `send_reliable`
+wrappers. They encode into a caller-supplied `<module>_encode_scratch_t`, then
+call the matching core API with the permanent message ID. The returned struct
+preserves the codec status, raw core result, encoded length, and reliable
+handle. `core_called` is zero when scratch encoding failed, in which case
+`core_result` must be ignored; it is one once the core was invoked.
+
+`<module>_<message>_send_direct()` is the native-packet fast path. It takes an
+explicit `wl_delivery_t`, claims the final core TX payload span, encodes into
+that span, and commits it without the scratch-to-core copy. COBS stream users
+keep using the scratch wrappers. A claim error such as `WL_ERR_NOT_SUPPORTED`
+is returned unchanged in `core_result`. Codec failure always aborts the claim;
+`abort_result` exposes that cleanup result, and a failed commit also attempts
+an abort in case the core still owns the claim. For ordinary scratch sends,
+`abort_result` remains `WL_OK`.
+
+A reliable wrapper returning `*_SEND_OK` means the send was submitted. Later
+link ACK or `WL_EVT_TX_SUCCESS` still proves link delivery only—not successful
+application execution. Reliability remains a call-site policy and is never
+stored in the schema or payload wire format.
+
 ## Semantic and compatibility rules
 
 All declaration and field numbers are explicit allocations; `wlc` never
@@ -105,7 +175,7 @@ The library API is `parse_schema()`, `analyze_schema()`,
 # Validate one schema.
 cargo run -- validate path/to/schema.wl
 
-# Validate compatibility and generate schema.h/schema.c.
+# Validate compatibility and generate codec plus typed-binding C files.
 cargo run -- compile path/to/schema.wl \
   --previous path/to/previous.wl \
   --out-dir generated
@@ -131,6 +201,7 @@ The compiler deliberately keeps one dependency per concern:
 | `proptest` | Parser robustness and scalar-boundary properties. |
 | `assert_cmd`, `tempfile` | Isolated CLI and generated-C tests. |
 
-The hand-written parser keeps the grammar explicit. Generated C is emitted by
-a small self-contained runtime and depends only on `wirelink/codec.h` for
-status and borrowed byte/string types.
+The hand-written parser keeps the grammar explicit. Generated codec C is
+emitted with a small self-contained runtime and depends only on
+`wirelink/codec.h` for status and borrowed byte/string types. Typed bindings
+remain separately linkable and use only Wirelink public headers.

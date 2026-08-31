@@ -18,7 +18,7 @@ enum Command {
         #[arg(long)]
         previous: Option<PathBuf>,
     },
-    /// Generate a C header and source file.
+    /// Generate standalone C codecs and optional Wirelink-core bindings.
     Compile {
         schema: PathBuf,
         #[arg(long)]
@@ -79,8 +79,18 @@ fn main() -> Result<()> {
         let generated = wlc::generate_c(&model, stem).map_err(miette::Report::new)?;
         fs::write(output.join(format!("{stem}.h")), generated.header).into_diagnostic()?;
         fs::write(output.join(format!("{stem}.c")), generated.source).into_diagnostic()?;
+        fs::write(
+            output.join(format!("{stem}_bindings.h")),
+            generated.bindings_header,
+        )
+        .into_diagnostic()?;
+        fs::write(
+            output.join(format!("{stem}_bindings.c")),
+            generated.bindings_source,
+        )
+        .into_diagnostic()?;
         println!(
-            "generated {}.h and {}.c in {}",
+            "generated {}.h/.c and {}_bindings.h/.c in {}",
             stem,
             stem,
             output.display()

@@ -376,6 +376,49 @@ fn generates_deterministic_c_data_model_and_api() {
     assert!(generated.header.contains("uint32_t *samples;"));
     assert!(generated.header.contains("wl_codec_status_t status_decode"));
     assert!(generated.source.contains("void status_clear"));
+    assert!(
+        generated
+            .bindings_header
+            .contains("motor_api_status_handler_fn")
+    );
+    assert!(
+        generated
+            .bindings_header
+            .contains("motor_api_status_send_unreliable")
+    );
+    assert!(
+        generated
+            .bindings_header
+            .contains("motor_api_status_send_direct")
+    );
+    assert!(
+        generated
+            .bindings_source
+            .contains("motor_api_dispatch_event")
+    );
+    assert!(!generated.source.contains("wl_send_unreliable"));
+}
+
+#[test]
+fn generated_codec_and_bindings_are_declaration_order_independent() {
+    let first = analyze_schema(
+        &parse_schema(
+            "version 1; message Child = 2 { optional uint32 value = 1; } message Parent = 1 { optional Child child = 1; }",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let second = analyze_schema(
+        &parse_schema(
+            "version 1; message Parent = 1 { optional Child child = 1; } message Child = 2 { optional uint32 value = 1; }",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        generate_c(&first, "stable_api").unwrap(),
+        generate_c(&second, "stable_api").unwrap()
+    );
 }
 
 #[test]
