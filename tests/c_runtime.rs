@@ -266,6 +266,11 @@ int main(void) {
     assert!(status.success(), "generated runtime must compile cleanly");
     assert!(Command::new(executable).status().unwrap().success());
 
+    fs::write(
+        directory.path().join("runtime_header.cpp"),
+        "#include \"typed_runtime_runtime.h\"\nint main() { return 0; }\n",
+    )
+    .unwrap();
     let cxx = Command::new("c++")
         .args([
             "-std=c++20",
@@ -279,7 +284,7 @@ int main(void) {
         .arg(root.join("include"))
         .arg("-I")
         .arg(directory.path())
-        .arg(directory.path().join("typed_runtime_runtime.h"))
+        .arg(directory.path().join("runtime_header.cpp"))
         .status()
         .unwrap();
     assert!(

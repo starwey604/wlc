@@ -559,6 +559,11 @@ int main(void) {
     let run = Command::new(&executable).status().unwrap();
     assert!(run.success(), "generated RPC runtime exited with {run}");
 
+    fs::write(
+        directory.path().join("rpc_header.cpp"),
+        "#include \"rpc_fixture_runtime.h\"\nint main() { return 0; }\n",
+    )
+    .unwrap();
     let cxx = Command::new("c++")
         .args([
             "-std=c++20",
@@ -572,7 +577,7 @@ int main(void) {
         .arg(root.join("include"))
         .arg("-I")
         .arg(directory.path())
-        .arg(directory.path().join("rpc_fixture_runtime.h"))
+        .arg(directory.path().join("rpc_header.cpp"))
         .status()
         .unwrap();
     assert!(cxx.success(), "generated RPC header must be C++20-clean");
