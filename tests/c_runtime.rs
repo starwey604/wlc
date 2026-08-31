@@ -102,7 +102,10 @@ static int dispatch_latest(wl_ctx_t *ctx, typed_runtime_runtime_t *runtime,
   event.payload = payload;
   event.payload_len = length;
   result = typed_runtime_runtime_dispatch_event(ctx, &event, runtime);
-  return result.domain == TYPED_RUNTIME_RUNTIME_OK ? 0 : 2;
+  if (result.domain == TYPED_RUNTIME_RUNTIME_OK) return 0;
+  if (result.domain == TYPED_RUNTIME_RUNTIME_STORAGE_ERROR)
+    return result.storage_result;
+  return 2;
 }
 
 static int dispatch_alarm(wl_ctx_t *ctx, typed_runtime_runtime_t *runtime,
@@ -195,6 +198,36 @@ int main(void) {
   event.type = WL_EVT_TX_SUCCESS;
   result = typed_runtime_runtime_dispatch_event(&ctx, &event, &runtime);
   if (result.domain != TYPED_RUNTIME_RUNTIME_NON_RX || releases != 9U) return 15;
+
+  {
+    wl_latest_t undersized = {0};
+    uint32_t slots[WL_LATEST_SLOT_COUNT] = {0};
+    const wl_latest_config_t config = {
+      sizeof(slots[0]), _Alignof(uint32_t), 0U
+    };
+    const wl_latest_storage_t storage = { slots, sizeof(slots) };
+    if (wl_latest_init(&undersized, &config, &storage) != WL_OK) return 16;
+    runtime.latest_value_latest = &undersized;
+    if (dispatch_latest(&ctx, &runtime, 9U) != WL_ERR_BUF_TOO_SMALL ||
+        releases != 10U) return 17;
+  }
+  {
+    wl_latest_t misaligned = {0};
+    union {
+      max_align_t align;
+      uint8_t bytes[WL_LATEST_SLOT_COUNT * sizeof(latest_value_t) + 1U];
+    } slots = {0};
+    const wl_latest_config_t config = {
+      sizeof(latest_value_t), 1U, 0U
+    };
+    const wl_latest_storage_t storage = {
+      slots.bytes + 1U, sizeof(slots.bytes) - 1U
+    };
+    if (wl_latest_init(&misaligned, &config, &storage) != WL_OK) return 18;
+    runtime.latest_value_latest = &misaligned;
+    if (dispatch_latest(&ctx, &runtime, 10U) != WL_ERR_INVALID_ARG ||
+        releases != 11U) return 19;
+  }
   return 0;
 }
 "#,
