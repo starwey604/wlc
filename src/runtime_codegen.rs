@@ -79,6 +79,16 @@ fn validate_runtime_names(
         format!("{module}_runtime_domain_t"),
         format!("{module}_runtime_result_t"),
         format!("{module}_runtime_t"),
+        format!("{module}_runtime_config_t"),
+        format!("{module}_runtime_requirements_t"),
+        format!("{module}_runtime_storage_t"),
+        format!("{module}_runtime_instance_t"),
+        format!("{module}_runtime_storage_cursor_t"),
+        format!("{module}_runtime_layout_t"),
+        format!("{module}_runtime_storage_region"),
+        format!("{module}_runtime_layout"),
+        format!("{module}_runtime_requirements"),
+        format!("{module}_runtime_init"),
         format!("{module}_runtime_dispatch_event"),
         format!("{module}_runtime_result"),
         format!("WIRELINK_GENERATED_{prefix}_RUNTIME_H"),
@@ -439,6 +449,7 @@ fn emit_header(schema: &SemanticModel, profile: &BindingProfileModel, module: &s
         }
     }
     writeln!(output, "}} {module}_runtime_t;\n").unwrap();
+    emit_assembly_header(&mut output, profile, module);
     output.push_str(concat!(
         "/* Terminal consumer for RX events: with non-null ctx/event every RX\n",
         " * outcome releases the event exactly once. Do not chain another dispatcher\n",
@@ -455,6 +466,86 @@ fn emit_header(schema: &SemanticModel, profile: &BindingProfileModel, module: &s
     }
     output.push_str("#ifdef __cplusplus\n}\n#endif\n\n#endif\n");
     output
+}
+
+fn emit_assembly_header(output: &mut String, profile: &BindingProfileModel, module: &str) {
+    output.push_str(concat!(
+        "/* Static runtime assembly. requirements() validates every sizing field and\n",
+        " * reports the exact caller-owned byte storage needed by init(). Configuration\n",
+        " * and storage descriptors may be temporary; instance and storage must outlive\n",
+        " * all runtime activity and must not be copied after successful initialization. */\n",
+        "typedef struct {\n",
+        "  uint8_t _reserved;\n",
+    ));
+    for route in &profile.retained_routes {
+        let message = type_name(&route.message_name);
+        match route.kind {
+            RetainedRouteKind::Latest => {
+                writeln!(output, "  uint32_t {message}_latest_initial_generation;").unwrap();
+            }
+            RetainedRouteKind::Fifo => {
+                writeln!(output, "  uint32_t {message}_fifo_capacity;").unwrap();
+            }
+        }
+    }
+    if !profile.rpc_services.is_empty() {
+        output.push_str(concat!(
+            "  uint8_t rpc_client_enabled;\n",
+            "  uint16_t rpc_client_slot_count;\n",
+            "  uint16_t rpc_client_response_capacity;\n",
+            "  uint32_t rpc_client_next_operation_id;\n",
+            "  uint8_t rpc_server_enabled;\n",
+            "  uint16_t rpc_server_pending_slot_count;\n",
+            "  uint16_t rpc_server_cache_slot_count;\n",
+            "  uint16_t rpc_server_response_capacity;\n",
+            "  uint32_t rpc_server_pending_timeout_ms;\n",
+            "  uint32_t rpc_server_cache_ttl_ms;\n",
+            "  wl_rpc_cache_policy_t rpc_server_cache_policy;\n",
+        ));
+        for service in &profile.rpc_services {
+            let service_name = c_identifier(&service.name);
+            writeln!(
+                output,
+                "  size_t {service_name}_canonical_request_capacity;"
+            )
+            .unwrap();
+            writeln!(
+                output,
+                "  {module}_{service_name}_request_handler_fn {service_name}_request_handler;"
+            )
+            .unwrap();
+            writeln!(output, "  void *{service_name}_user_data;").unwrap();
+        }
+    }
+    writeln!(output, "}} {module}_runtime_config_t;\n").unwrap();
+    write!(
+        output,
+        "typedef struct {{\n  size_t storage_size;\n  size_t storage_alignment;\n}} {module}_runtime_requirements_t;\n\ntypedef struct {{\n  void *data;\n  size_t size;\n}} {module}_runtime_storage_t;\n\ntypedef struct {{\n  {module}_runtime_t runtime;\n"
+    )
+    .unwrap();
+    for route in &profile.retained_routes {
+        let message = type_name(&route.message_name);
+        let (ty, kind) = match route.kind {
+            RetainedRouteKind::Latest => ("wl_latest_t", "latest"),
+            RetainedRouteKind::Fifo => ("wl_fifo_t", "fifo"),
+        };
+        writeln!(output, "  {ty} {message}_{kind};").unwrap();
+    }
+    if !profile.rpc_services.is_empty() {
+        output.push_str("  wl_rpc_client_t rpc_client;\n  wl_rpc_server_t rpc_server;\n");
+        for service in &profile.rpc_services {
+            let service_name = c_identifier(&service.name);
+            let request = type_name(&service.request_name);
+            let response = type_name(&service.response_name);
+            writeln!(output, "  {request}_t {service_name}_request_scratch;").unwrap();
+            writeln!(output, "  {response}_t {service_name}_response_scratch;").unwrap();
+        }
+    }
+    writeln!(
+        output,
+        "}} {module}_runtime_instance_t;\n\nint {module}_runtime_requirements(const {module}_runtime_config_t *config, {module}_runtime_requirements_t *out_requirements);\nint {module}_runtime_init({module}_runtime_instance_t *instance, const {module}_runtime_config_t *config, const {module}_runtime_storage_t *storage);\n"
+    )
+    .unwrap();
 }
 
 fn emit_rpc_header_types(output: &mut String, module: &str, service: &RpcService) {
@@ -479,10 +570,125 @@ fn emit_rpc_header_functions(output: &mut String, module: &str, service: &RpcSer
     .unwrap();
 }
 
+fn emit_assembly_source(output: &mut String, profile: &BindingProfileModel, module: &str) {
+    write!(
+        output,
+        "typedef struct {{\n  uint8_t *base;\n  size_t size;\n  size_t offset;\n}} {module}_runtime_storage_cursor_t;\n\ntypedef struct {{\n"
+    )
+    .unwrap();
+    for route in &profile.retained_routes {
+        let message = type_name(&route.message_name);
+        let kind = match route.kind {
+            RetainedRouteKind::Latest => "latest",
+            RetainedRouteKind::Fifo => "fifo",
+        };
+        writeln!(output, "  void *{message}_{kind}_storage;").unwrap();
+    }
+    if !profile.rpc_services.is_empty() {
+        output.push_str(concat!(
+            "  void *rpc_client_slots;\n",
+            "  void *rpc_client_responses;\n",
+            "  size_t rpc_client_responses_size;\n",
+            "  void *rpc_server_pending_slots;\n",
+            "  void *rpc_server_cache_slots;\n",
+            "  void *rpc_server_responses;\n",
+            "  size_t rpc_server_responses_size;\n",
+        ));
+        for service in &profile.rpc_services {
+            let service_name = c_identifier(&service.name);
+            writeln!(output, "  void *{service_name}_canonical_request_storage;").unwrap();
+        }
+    }
+    write!(
+        output,
+        "}} {module}_runtime_layout_t;\n\nstatic int {module}_runtime_storage_region({module}_runtime_storage_cursor_t *cursor, size_t alignment, size_t count, size_t element_size, void **out_data, size_t *out_size) {{\n  size_t aligned;\n  size_t region_size;\n  if (cursor == NULL || alignment == 0U || (alignment & (alignment - 1U)) != 0U) return WL_ERR_INVALID_ARG;\n  if (out_data != NULL) *out_data = NULL;\n  if (out_size != NULL) *out_size = 0U;\n  if (count != 0U && element_size > SIZE_MAX / count) return WL_ERR_INVALID_ARG;\n  region_size = count * element_size;\n  if (cursor->offset > SIZE_MAX - (alignment - 1U)) return WL_ERR_INVALID_ARG;\n  aligned = (cursor->offset + (alignment - 1U)) & ~(alignment - 1U);\n  if (region_size > SIZE_MAX - aligned) return WL_ERR_INVALID_ARG;\n  if (aligned + region_size > cursor->size) return WL_ERR_BUF_TOO_SMALL;\n  if (out_data != NULL && cursor->base != NULL) *out_data = cursor->base + aligned;\n  if (out_size != NULL) *out_size = region_size;\n  cursor->offset = aligned + region_size;\n  return WL_OK;\n}}\n\nstatic int {module}_runtime_layout(const {module}_runtime_config_t *config, uint8_t *base, size_t size, {module}_runtime_layout_t *out_layout, {module}_runtime_requirements_t *out_requirements) {{\n  {module}_runtime_storage_cursor_t cursor = {{base, size, 0U}};\n  size_t alignment = 1U;\n  int result;\n  if (out_layout != NULL) memset(out_layout, 0, sizeof(*out_layout));\n  if (out_requirements != NULL) memset(out_requirements, 0, sizeof(*out_requirements));\n  if (config == NULL) return WL_ERR_INVALID_ARG;\n"
+    )
+    .unwrap();
+
+    for route in &profile.retained_routes {
+        let message = type_name(&route.message_name);
+        match route.kind {
+            RetainedRouteKind::Latest => {
+                write!(
+                    output,
+                    "  {{\n    const wl_latest_config_t route_config = {{sizeof({message}_t), _Alignof({message}_t), config->{message}_latest_initial_generation}};\n    wl_latest_requirements_t route_requirements;\n    result = wl_latest_requirements(&route_config, &route_requirements);\n    if (result != WL_OK) return result;\n    if (alignment < _Alignof({message}_t)) alignment = _Alignof({message}_t);\n    result = {module}_runtime_storage_region(&cursor, _Alignof({message}_t), 1U, route_requirements.storage_size, out_layout == NULL ? NULL : &out_layout->{message}_latest_storage, NULL);\n    if (result != WL_OK) return result;\n  }}\n"
+                )
+                .unwrap();
+            }
+            RetainedRouteKind::Fifo => {
+                write!(
+                    output,
+                    "  {{\n    const wl_fifo_config_t route_config = {{sizeof({message}_t), _Alignof({message}_t), config->{message}_fifo_capacity}};\n    wl_fifo_requirements_t route_requirements;\n    result = wl_fifo_requirements(&route_config, &route_requirements);\n    if (result != WL_OK) return result;\n    if (alignment < _Alignof({message}_t)) alignment = _Alignof({message}_t);\n    result = {module}_runtime_storage_region(&cursor, _Alignof({message}_t), 1U, route_requirements.storage_size, out_layout == NULL ? NULL : &out_layout->{message}_fifo_storage, NULL);\n    if (result != WL_OK) return result;\n  }}\n"
+                )
+                .unwrap();
+            }
+        }
+    }
+
+    if !profile.rpc_services.is_empty() {
+        write!(
+            output,
+            "  if (config->rpc_client_enabled > 1U || config->rpc_server_enabled > 1U) return WL_ERR_INVALID_ARG;\n  if (config->rpc_client_enabled != 0U) {{\n    if (config->rpc_client_slot_count == 0U || config->rpc_client_response_capacity == 0U) return WL_ERR_INVALID_ARG;\n    if (alignment < _Alignof(wl_rpc_client_slot_t)) alignment = _Alignof(wl_rpc_client_slot_t);\n    result = {module}_runtime_storage_region(&cursor, _Alignof(wl_rpc_client_slot_t), config->rpc_client_slot_count, sizeof(wl_rpc_client_slot_t), out_layout == NULL ? NULL : &out_layout->rpc_client_slots, NULL);\n    if (result != WL_OK) return result;\n    result = {module}_runtime_storage_region(&cursor, 1U, config->rpc_client_slot_count, config->rpc_client_response_capacity, out_layout == NULL ? NULL : &out_layout->rpc_client_responses, out_layout == NULL ? NULL : &out_layout->rpc_client_responses_size);\n    if (result != WL_OK) return result;\n  }}\n  if (config->rpc_server_enabled != 0U) {{\n    if (config->rpc_server_pending_slot_count == 0U || config->rpc_server_cache_slot_count == 0U || config->rpc_server_response_capacity == 0U) return WL_ERR_INVALID_ARG;\n    if ((config->rpc_server_pending_timeout_ms != 0U && config->rpc_server_pending_timeout_ms >= UINT32_C(0x80000000)) || (config->rpc_server_cache_ttl_ms != 0U && config->rpc_server_cache_ttl_ms >= UINT32_C(0x80000000))) return WL_ERR_INVALID_ARG;\n    if (config->rpc_server_cache_policy != WL_RPC_CACHE_REJECT_NEW && config->rpc_server_cache_policy != WL_RPC_CACHE_EVICT_OLDEST) return WL_ERR_INVALID_ARG;\n    if (alignment < _Alignof(wl_rpc_server_pending_slot_t)) alignment = _Alignof(wl_rpc_server_pending_slot_t);\n    if (alignment < _Alignof(wl_rpc_server_cache_slot_t)) alignment = _Alignof(wl_rpc_server_cache_slot_t);\n    result = {module}_runtime_storage_region(&cursor, _Alignof(wl_rpc_server_pending_slot_t), config->rpc_server_pending_slot_count, sizeof(wl_rpc_server_pending_slot_t), out_layout == NULL ? NULL : &out_layout->rpc_server_pending_slots, NULL);\n    if (result != WL_OK) return result;\n    result = {module}_runtime_storage_region(&cursor, _Alignof(wl_rpc_server_cache_slot_t), config->rpc_server_cache_slot_count, sizeof(wl_rpc_server_cache_slot_t), out_layout == NULL ? NULL : &out_layout->rpc_server_cache_slots, NULL);\n    if (result != WL_OK) return result;\n    result = {module}_runtime_storage_region(&cursor, 1U, config->rpc_server_cache_slot_count, config->rpc_server_response_capacity, out_layout == NULL ? NULL : &out_layout->rpc_server_responses, out_layout == NULL ? NULL : &out_layout->rpc_server_responses_size);\n    if (result != WL_OK) return result;\n"
+        )
+        .unwrap();
+        for service in &profile.rpc_services {
+            let service_name = c_identifier(&service.name);
+            write!(
+                output,
+                "    if (config->{service_name}_canonical_request_capacity == 0U) return WL_ERR_INVALID_ARG;\n    result = {module}_runtime_storage_region(&cursor, 1U, 1U, config->{service_name}_canonical_request_capacity, out_layout == NULL ? NULL : &out_layout->{service_name}_canonical_request_storage, NULL);\n    if (result != WL_OK) return result;\n"
+            )
+            .unwrap();
+        }
+        output.push_str("  }\n");
+    }
+    write!(
+        output,
+        "  if (out_requirements != NULL) {{\n    out_requirements->storage_size = cursor.offset;\n    out_requirements->storage_alignment = alignment;\n  }}\n  return WL_OK;\n}}\n\nint {module}_runtime_requirements(const {module}_runtime_config_t *config, {module}_runtime_requirements_t *out_requirements) {{\n  {module}_runtime_config_t config_copy;\n  if (config == NULL || out_requirements == NULL) return WL_ERR_INVALID_ARG;\n  config_copy = *config;\n  *out_requirements = ({module}_runtime_requirements_t){{0}};\n  return {module}_runtime_layout(&config_copy, NULL, SIZE_MAX, NULL, out_requirements);\n}}\n\nint {module}_runtime_init({module}_runtime_instance_t *instance, const {module}_runtime_config_t *config, const {module}_runtime_storage_t *storage) {{\n  {module}_runtime_config_t config_copy;\n  {module}_runtime_storage_t storage_copy;\n  {module}_runtime_requirements_t requirements;\n  {module}_runtime_layout_t layout;\n  uintptr_t instance_address;\n  uintptr_t storage_address;\n  int result;\n  if (instance == NULL || config == NULL || storage == NULL) return WL_ERR_INVALID_ARG;\n  config_copy = *config;\n  storage_copy = *storage;\n  config = &config_copy;\n  storage = &storage_copy;\n  result = {module}_runtime_requirements(config, &requirements);\n  if (result != WL_OK) return result;\n  if (storage->size < requirements.storage_size) return WL_ERR_BUF_TOO_SMALL;\n  if (requirements.storage_size != 0U) {{\n    if (storage->data == NULL || ((uintptr_t)storage->data & (requirements.storage_alignment - 1U)) != 0U) return WL_ERR_INVALID_ARG;\n    instance_address = (uintptr_t)(void *)instance;\n    storage_address = (uintptr_t)storage->data;\n    if ((storage_address <= instance_address && instance_address - storage_address < requirements.storage_size) || (instance_address < storage_address && storage_address - instance_address < sizeof(*instance))) return WL_ERR_INVALID_ARG;\n  }}\n  result = {module}_runtime_layout(config, (uint8_t *)storage->data, storage->size, &layout, NULL);\n  if (result != WL_OK) return result;\n  memset(instance, 0, sizeof(*instance));\n"
+    )
+    .unwrap();
+
+    for route in &profile.retained_routes {
+        let message = type_name(&route.message_name);
+        match route.kind {
+            RetainedRouteKind::Latest => {
+                write!(
+                    output,
+                    "  {{\n    const wl_latest_config_t route_config = {{sizeof({message}_t), _Alignof({message}_t), config->{message}_latest_initial_generation}};\n    wl_latest_requirements_t route_requirements;\n    wl_latest_storage_t route_storage;\n    result = wl_latest_requirements(&route_config, &route_requirements);\n    if (result != WL_OK) return result;\n    route_storage.data = layout.{message}_latest_storage;\n    route_storage.size = route_requirements.storage_size;\n    result = wl_latest_init(&instance->{message}_latest, &route_config, &route_storage);\n    if (result != WL_OK) return result;\n    instance->runtime.{message}_latest = &instance->{message}_latest;\n  }}\n"
+                )
+                .unwrap();
+            }
+            RetainedRouteKind::Fifo => {
+                write!(
+                    output,
+                    "  {{\n    const wl_fifo_config_t route_config = {{sizeof({message}_t), _Alignof({message}_t), config->{message}_fifo_capacity}};\n    wl_fifo_requirements_t route_requirements;\n    wl_fifo_storage_t route_storage;\n    result = wl_fifo_requirements(&route_config, &route_requirements);\n    if (result != WL_OK) return result;\n    route_storage.data = layout.{message}_fifo_storage;\n    route_storage.size = route_requirements.storage_size;\n    result = wl_fifo_init(&instance->{message}_fifo, &route_config, &route_storage);\n    if (result != WL_OK) return result;\n    instance->runtime.{message}_fifo = &instance->{message}_fifo;\n  }}\n"
+                )
+                .unwrap();
+            }
+        }
+    }
+
+    if !profile.rpc_services.is_empty() {
+        write!(
+            output,
+            "  if (config->rpc_client_enabled != 0U) {{\n    const wl_rpc_client_config_t client_config = {{\n      (wl_rpc_client_slot_t *)layout.rpc_client_slots,\n      config->rpc_client_slot_count,\n      (uint8_t *)layout.rpc_client_responses,\n      layout.rpc_client_responses_size,\n      config->rpc_client_response_capacity,\n      config->rpc_client_next_operation_id\n    }};\n    if (wl_rpc_client_init(&instance->rpc_client, &client_config) != WL_RPC_OK) return WL_ERR_INVALID_ARG;\n    instance->runtime.rpc_client = &instance->rpc_client;\n  }}\n  if (config->rpc_server_enabled != 0U) {{\n    const wl_rpc_server_config_t server_config = {{\n      (wl_rpc_server_pending_slot_t *)layout.rpc_server_pending_slots,\n      config->rpc_server_pending_slot_count,\n      (wl_rpc_server_cache_slot_t *)layout.rpc_server_cache_slots,\n      config->rpc_server_cache_slot_count,\n      (uint8_t *)layout.rpc_server_responses,\n      layout.rpc_server_responses_size,\n      config->rpc_server_response_capacity,\n      config->rpc_server_pending_timeout_ms,\n      config->rpc_server_cache_ttl_ms,\n      config->rpc_server_cache_policy\n    }};\n    if (wl_rpc_server_init(&instance->rpc_server, &server_config) != WL_RPC_OK) return WL_ERR_INVALID_ARG;\n    instance->runtime.rpc_server = &instance->rpc_server;\n  }}\n"
+        )
+        .unwrap();
+        for service in &profile.rpc_services {
+            let service_name = c_identifier(&service.name);
+            write!(
+                output,
+                "  if (config->rpc_server_enabled != 0U) {{\n    instance->runtime.{service_name}.request_scratch = &instance->{service_name}_request_scratch;\n    instance->runtime.{service_name}.canonical_request_scratch.data = (uint8_t *)layout.{service_name}_canonical_request_storage;\n    instance->runtime.{service_name}.canonical_request_scratch.capacity = config->{service_name}_canonical_request_capacity;\n    instance->runtime.{service_name}.request_handler = config->{service_name}_request_handler;\n    instance->runtime.{service_name}.user_data = config->{service_name}_user_data;\n  }}\n  if (config->rpc_client_enabled != 0U) instance->runtime.{service_name}.response_scratch = &instance->{service_name}_response_scratch;\n"
+            )
+            .unwrap();
+        }
+    }
+    output.push_str("  return WL_OK;\n}\n\n");
+}
+
 fn emit_source(profile: &BindingProfileModel, module: &str) -> String {
     let prefix = upper_snake(module);
     let mut output = format!(
-        "#include \"{module}_runtime.h\"\n\nstatic {module}_runtime_result_t {module}_runtime_result(const wl_event_t *event) {{\n  {module}_runtime_result_t result = {{0}};\n  result.domain = {prefix}_RUNTIME_INVALID_ARGUMENT;\n  result.codec_status = WL_CODEC_OK;\n  result.storage_result = WL_OK;\n  result.abort_result = WL_OK;\n  result.rpc_result = WL_RPC_OK;\n  result.core_result = WL_OK;\n  result.rpc_disposition = WL_RPC_SERVER_NEW;\n  if (event != NULL) {{\n    result.message_id = event->message_id;\n    result.event_type = event->type;\n  }}\n  return result;\n}}\n\n"
+        "#include \"{module}_runtime.h\"\n\n#include <string.h>\n\nstatic {module}_runtime_result_t {module}_runtime_result(const wl_event_t *event) {{\n  {module}_runtime_result_t result = {{0}};\n  result.domain = {prefix}_RUNTIME_INVALID_ARGUMENT;\n  result.codec_status = WL_CODEC_OK;\n  result.storage_result = WL_OK;\n  result.abort_result = WL_OK;\n  result.rpc_result = WL_RPC_OK;\n  result.core_result = WL_OK;\n  result.rpc_disposition = WL_RPC_SERVER_NEW;\n  if (event != NULL) {{\n    result.message_id = event->message_id;\n    result.event_type = event->type;\n  }}\n  return result;\n}}\n\n"
     );
     if !profile.rpc_services.is_empty() {
         write!(
@@ -491,6 +697,7 @@ fn emit_source(profile: &BindingProfileModel, module: &str) -> String {
         )
         .unwrap();
     }
+    emit_assembly_source(&mut output, profile, module);
     write!(
         output,
         "{module}_runtime_result_t {module}_runtime_dispatch_event(wl_ctx_t *ctx, const wl_event_t *event, {module}_runtime_t *runtime, wl_time_ms_t now_ms) {{\n  {module}_runtime_result_t result = {module}_runtime_result(event);\n  if (event == NULL) return result;\n"

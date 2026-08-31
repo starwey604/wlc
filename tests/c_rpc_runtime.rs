@@ -513,13 +513,26 @@ int main(void) {
   wl_rpc_client_t client = {0};
   wl_rpc_server_t server = {0};
   rpc_fixture_runtime_t runtime = {0};
+  rpc_fixture_runtime_instance_t disabled_instance = {0};
+  rpc_fixture_runtime_config_t disabled_config = {0};
+  rpc_fixture_runtime_requirements_t disabled_requirements = {0};
+  const rpc_fixture_runtime_storage_t disabled_storage = {NULL, 0U};
   compute_request_t request_scratch = {0};
   compute_response_t response_scratch = {0};
   uint8_t canonical[64];
   int result;
+  if (rpc_fixture_runtime_requirements(&disabled_config,
+                                       &disabled_requirements) != WL_OK ||
+      disabled_requirements.storage_size != 0U ||
+      disabled_requirements.storage_alignment != 1U ||
+      rpc_fixture_runtime_init(&disabled_instance, &disabled_config,
+                               &disabled_storage) != WL_OK ||
+      disabled_instance.runtime.rpc_client != NULL ||
+      disabled_instance.runtime.rpc_server != NULL)
+    return 1;
   if (init_runtime(&runtime, &client, &server, &request_scratch,
                    &response_scratch, canonical, sizeof(canonical)) != 0)
-    return 1;
+    return 2;
   result = check_client(&ctx, &runtime, &client);
   if (result != 0) return 10 + result;
   result = check_server(&ctx, &runtime);

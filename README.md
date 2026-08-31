@@ -234,6 +234,42 @@ releases each valid RX event exactly once. The same wire schema can therefore
 use different host and device profiles without changing message IDs or
 payload bytes.
 
+The generated header also provides a no-heap static assembly path:
+
+```c
+control_runtime_config_t config = {0};
+control_runtime_requirements_t requirements;
+control_runtime_storage_t storage;
+control_runtime_instance_t instance;
+
+config.alarm_event_fifo_capacity = 8U;
+config.rpc_client_enabled = 1U;
+config.rpc_client_slot_count = 4U;
+config.rpc_client_response_capacity = 128U;
+
+control_runtime_requirements(&config, &requirements);
+storage = (control_runtime_storage_t){arena, requirements.storage_size};
+control_runtime_init(&instance, &config, &storage);
+```
+
+`<module>_runtime_requirements()` validates all enabled component sizes and
+reports the exact byte count and base alignment for caller-owned storage.
+`<module>_runtime_init()` partitions that storage and wires every declared
+LATEST/FIFO route, enabled RPC client/server, RPC slot/cache array, typed
+request/response scratch object, canonical-request buffer, handler and user
+pointer into `instance.runtime`. It validates the complete layout, including
+overflow, size, alignment and overlap with the instance, before modifying the
+instance or storage. The configuration and storage descriptors are copied and
+may be temporary; the instance and backing bytes must remain at stable
+addresses for their full runtime lifetime and must not be copied after init.
+
+RPC client and server roles can be enabled independently. Sizing fields for a
+disabled role are ignored and its runtime pointer remains null. FIFO capacity,
+RPC slot counts, response capacities, expiry policy, and canonical-request
+capacity are deployment configuration and deliberately do not participate in
+the schema or binding-profile identity. Applications may still construct the
+lower-level `<module>_runtime_t` manually when they need a custom layout.
+
 `<module>_runtime_dispatch_event()` is the terminal owner of every RX event
 passed with non-null `ctx` and `event`. Every RX outcome—including an unknown
 ID, null runtime, missing route or scratch, delivery mismatch, decode/storage/
@@ -268,16 +304,21 @@ release. Response dispatch validates the mapped ID and status, copies the raw
 payload into `wl_rpc_client_t` before releasing the RX event, and leaves typed
 response scratch under caller ownership.
 
-The caller provides request, response, and canonical-encode scratch. Borrowed
-`bytes` and `string` fields in request/response scratch remain valid only until
-the callback or dispatcher returns. Canonical scratch must be writable and
-large enough for the complete decoded request; re-encoding drops unknown
-fields and makes field order irrelevant to duplicate classification. Scratch
-client sends may reuse their encode buffer after return. Direct client start
-encodes into a core claim and is therefore available only when the selected
-Wirelink envelope supports direct TX. Both start forms mutate the request's
-operation ID. If encoding or sending then fails, the allocated client slot is
-terminal but still must be inspected/released with `wl_rpc_client_release()`.
+The static instance owns the top-level request/response scratch objects and
+the storage arena owns canonical-encode scratch. With manual runtime assembly,
+the caller supplies those objects directly. Borrowed `bytes` and `string`
+fields in request/response scratch remain valid only until the callback or
+dispatcher returns. If an RPC message contains a `repeated` field, its element
+pointer and capacity are still application policy and must be set on the
+instance scratch object after init and before dispatch. Canonical scratch must
+be writable and large enough for the complete decoded request; re-encoding
+drops unknown fields and makes field order irrelevant to duplicate
+classification. Scratch client sends may reuse their encode buffer after
+return. Direct client start encodes into a core claim and is therefore
+available only when the selected Wirelink envelope supports direct TX. Both
+start forms mutate the request's operation ID. If encoding or sending then
+fails, the allocated client slot is terminal but still must be
+inspected/released with `wl_rpc_client_release()`.
 
 Response dispatch copies the original encoded bytes into the client's fixed
 response storage before releasing RX. That copy remains valid until client

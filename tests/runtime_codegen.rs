@@ -22,6 +22,15 @@ fn runtime_namespace_rejects_schema_macro_type_and_service_collisions() {
     let error = generate_runtime_c(&type_collision, &retained, "control").unwrap_err();
     assert!(error.0.contains("control_runtime_t"), "{error}");
 
+    let assembly_type_collision =
+        schema("version 1; message ControlRuntimeConfig = 1 { optional uint32 value = 1; }");
+    let retained = profile(
+        "profile version 1; latest ControlRuntimeConfig { delivery = unreliable; }",
+        &assembly_type_collision,
+    );
+    let error = generate_runtime_c(&assembly_type_collision, &retained, "control").unwrap_err();
+    assert!(error.0.contains("control_runtime_config_t"), "{error}");
+
     let macro_collision = schema(
         r#"version 1;
 enum RuntimeNames = 1 { CONTROL_RUNTIME_OK = 0; }
