@@ -13,12 +13,16 @@ declaration    = message | enum
 reservation    = "reserved" positive-integer ";"
 message        = "message" identifier "=" positive-integer
                  "{" (field | reservation)* "}"
-field          = optional-field | repeated-field | packed-field
+field          = optional-field | required-field | repeated-field
+                 | packed-field | required-packed-field
 optional-field = "optional" type identifier "=" positive-integer
                  ("[" "default" "=" literal "]")? ";"
+required-field = "required" type identifier "=" positive-integer ";"
 repeated-field = "repeated" type identifier "=" positive-integer ";"
 packed-field   = "packed" packed-type identifier "[" positive-integer "]"
                  "=" positive-integer ";"
+required-packed-field = "required" "packed" packed-type identifier
+                        "[" positive-integer "]" "=" positive-integer ";"
 packed-type    = "float32" | "float64" | "fixed32" | "fixed64"
 enum           = "enum" identifier "=" positive-integer
                  "{" enum-value (enum-value | enum-reservation)* "}"
@@ -49,7 +53,10 @@ move floating-point bits through `memcpy`; they never use aliasing casts or
 numeric conversions, so signed zero, infinities, and NaN payload bits round
 trip exactly.
 
-Optional scalar defaults must match their type. Explicit floating-point
+Optional scalar defaults must match their type. Required fields cannot declare
+defaults and cannot be repeated; fixed-width vectors use `required packed`.
+Generated C retains a `has_*` flag for required scalar, nested, and packed
+fields, and `*_clear()` resets it to false. Explicit floating-point
 defaults are intentionally not accepted until the schema has a canonical,
 locale-independent floating literal syntax; absent floats clear to positive
 zero. `bytes`, repeated fields, and packed fields cannot have defaults.
@@ -63,8 +70,9 @@ four big-endian bytes; `fixed64` and `float64` use wire type 1 and eight
 big-endian bytes. Adding float support does not alter any existing scalar or
 repeated wire bytes.
 
-A packed declaration is one optional field occurrence, represented in C by a
-presence flag and an inline array:
+A packed declaration is one field occurrence, represented in C by a presence
+flag and an inline array. Plain `packed` is optional; `required packed` uses
+the same layout but requires presence:
 
 ```c
 bool has_position;
@@ -81,6 +89,14 @@ bytes.
 
 Ordinary `repeated` fields keep their previous representation: a caller-owned
 pointer/count/capacity in C and one complete tag/value pair per element.
+
+Required and optional fields have the same wire representation. Before encode,
+all required `has_*` flags must be true; otherwise encode returns
+`WL_CODEC_ERR_MISSING_REQUIRED_FIELD` and `*_encoded_size()` returns `SIZE_MAX`.
+Decode accepts unknown fields, but after consuming the complete payload it
+rejects any absent required field with the same status. Nested message decode
+checks the nested message's own required fields. Malformed or truncated wire
+data remains a malformed-input error rather than being mistaken for absence.
 
 Every generated message defines `<MESSAGE>_HAS_MAX_ENCODED_SIZE`. It is `1`
 when the encoder output is provably bounded from the schema, in which case the
@@ -175,9 +191,11 @@ IDs and field numbers, so source reordering does not change generated output.
 
 `reserved N;` permanently reserves a removed declaration ID, field number, or
 enum value at its respective scope. Compatibility checks reject ID, name,
-type, and cardinality changes or removal without a reservation. A packed
-field's element type and fixed count are both part of its wire identity;
-changing either is incompatible. Existing reservations must remain reserved.
+type, and cardinality changes or removal without a reservation. Adding a
+required field to an existing message or removing one is incompatible even if
+the removed number is reserved. A packed field's element type and fixed count
+are both part of its wire identity; changing either is incompatible. Existing
+reservations must remain reserved.
 
 The library API is `parse_schema()`, `analyze_schema()`,
 `check_compatibility()`, and `generate_c()`.
@@ -291,7 +309,7 @@ and `detail_kind`) followed by a tagged union. Inspect
 has no domain payload. A retained-only profile therefore does not carry the
 larger RPC result fields. Generated runtime headers likewise include only the
 LATEST, FIFO, and RPC public headers selected by that profile. The fixed
-`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `4` for this surface; regenerate
+`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `5` for this surface; regenerate
 all runtime sources and update field access together when that value changes.
 
 `tests/runtime_size.rs` keeps deterministic size regression gates. On
@@ -317,8 +335,9 @@ call `wl_tx_take()` when required by the Wirelink transaction lifecycle.
 
 `LATEST` and `FIFO` retain decoded values after the RX callback. WLC rejects a
 retained route whose message contains `bytes`, `string`, or `repeated` storage,
-including through nested messages. RPC operation IDs must map to optional
-`uint32` fields. Its response status must map to an optional `int32` or enum;
+including through nested messages. RPC operation IDs must map to optional or
+required `uint32` fields. Its response status must map to an optional or
+required `int32` or enum;
 an enum status domain must declare numeric value zero for success. Request and
 response delivery are explicit and may be `reliable` or `unreliable`.
 

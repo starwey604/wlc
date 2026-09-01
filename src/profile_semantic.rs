@@ -390,11 +390,15 @@ fn resolve_operation_id(
     errors: &mut Vec<ProfileSemanticError>,
 ) -> Option<RpcFieldMapping> {
     let field = resolve_field(message, mapping, errors)?;
-    if field.cardinality != Cardinality::Optional || field.ty != ResolvedType::Uint32 {
+    if !matches!(
+        field.cardinality,
+        Cardinality::Optional | Cardinality::Required
+    ) || field.ty != ResolvedType::Uint32
+    {
         errors.push(ProfileSemanticError::new(
             mapping.span,
             format!(
-                "RPC property `{property}` must map to an optional uint32 field; `{}.{}` has a different type or cardinality",
+                "RPC property `{property}` must map to an optional or required uint32 field; `{}.{}` has a different type or cardinality",
                 message.name, field.name
             ),
         ));
@@ -410,11 +414,14 @@ fn resolve_status(
     errors: &mut Vec<ProfileSemanticError>,
 ) -> Option<(RpcFieldMapping, RpcStatusDomain)> {
     let field = resolve_field(message, mapping, errors)?;
-    if field.cardinality != Cardinality::Optional {
+    if !matches!(
+        field.cardinality,
+        Cardinality::Optional | Cardinality::Required
+    ) {
         errors.push(ProfileSemanticError::new(
             mapping.span,
             format!(
-                "RPC response status must be optional; `{}.{}` has a different cardinality",
+                "RPC response status must be optional or required; `{}.{}` has a different cardinality",
                 message.name, field.name
             ),
         ));
@@ -444,7 +451,7 @@ fn resolve_status(
             errors.push(ProfileSemanticError::new(
                 mapping.span,
                 format!(
-                    "RPC response status must map to an optional int32 or enum field; `{}.{}` has a different type",
+                    "RPC response status must map to an optional or required int32 or enum field; `{}.{}` has a different type",
                     message.name, field.name
                 ),
             ));

@@ -277,3 +277,38 @@ rpc Local {
             .contains("wl_send_reliable(ctx, RESPONSE_MESSAGE_ID, cached->response_data")
     );
 }
+
+#[test]
+fn runtime_generation_accepts_required_rpc_mappings() {
+    let schema = schema(
+        r#"version 1;
+enum Status = 1 { OK = 0; }
+message Request = 2 { required uint32 operation_id = 1; }
+message Response = 3 {
+  required uint32 operation_id = 1;
+  required Status status = 2;
+}
+"#,
+    );
+    let profile = profile(
+        r#"profile version 1;
+rpc RequiredFields {
+  request = Request;
+  response = Response;
+  request_operation_id = operation_id;
+  response_operation_id = operation_id;
+  response_status = status;
+  request_delivery = reliable;
+  response_delivery = reliable;
+}
+"#,
+        &schema,
+    );
+    let generated = generate_runtime_c(&schema, &profile, "required_rpc").unwrap();
+    assert!(
+        generated
+            .source
+            .contains("request->has_operation_id = true;")
+    );
+    assert!(generated.source.contains("response->has_status = true;"));
+}

@@ -168,12 +168,12 @@ fn static_max_field_size(
         return None;
     }
     let wire = match field.cardinality {
-        crate::ast::Cardinality::Packed(_) => 2,
+        crate::ast::Cardinality::Packed(_) | crate::ast::Cardinality::RequiredPacked(_) => 2,
         _ => wire_type(&field.ty),
     };
     let tag = varint_size((u64::from(field.number) << 3) | wire);
     let body = match field.cardinality {
-        crate::ast::Cardinality::Packed(count) => {
+        crate::ast::Cardinality::Packed(count) | crate::ast::Cardinality::RequiredPacked(count) => {
             let element_size = match field.ty {
                 ResolvedType::Fixed32 | ResolvedType::Float32 => 4_u64,
                 ResolvedType::Fixed64 | ResolvedType::Float64 => 8_u64,
@@ -182,7 +182,7 @@ fn static_max_field_size(
             let payload = u64::from(count).checked_mul(element_size)?;
             varint_size(payload).checked_add(payload)?
         }
-        crate::ast::Cardinality::Optional => match &field.ty {
+        crate::ast::Cardinality::Optional | crate::ast::Cardinality::Required => match &field.ty {
             ResolvedType::Bool => 1,
             ResolvedType::Uint32 | ResolvedType::Int32 | ResolvedType::Enum { .. } => 5,
             ResolvedType::Uint64 | ResolvedType::Int64 => 10,
@@ -228,13 +228,14 @@ fn emit_message_definition(output: &mut String, message: &MessageSymbol) {
         let field_name = c_identifier(&field.name);
         let ty = c_type(&field.ty);
         match field.cardinality {
-            crate::ast::Cardinality::Optional => {
+            crate::ast::Cardinality::Optional | crate::ast::Cardinality::Required => {
                 output.push_str(&format!("  bool has_{field_name};\n  {ty} {field_name};\n"));
             }
             crate::ast::Cardinality::Repeated => {
                 output.push_str(&format!("  {ty} *{field_name};\n  size_t {field_name}_count;\n  size_t {field_name}_capacity;\n"));
             }
-            crate::ast::Cardinality::Packed(count) => {
+            crate::ast::Cardinality::Packed(count)
+            | crate::ast::Cardinality::RequiredPacked(count) => {
                 output.push_str(&format!(
                     "  bool has_{field_name};\n  {ty} {field_name}[{count}];\n"
                 ));
@@ -376,9 +377,18 @@ fn emit_descriptor(output: &mut String, message: &MessageSymbol) {
         let field_name = c_identifier(&field.name);
         let (kind, signed_default, unsigned_default, string_default, nested) =
             field_descriptor_data(field);
-        let (cardinality, has, count, capacity, packed_count) = match field.cardinality {
+        let (cardinality, required, has, count, capacity, packed_count) = match field.cardinality {
             crate::ast::Cardinality::Optional => (
                 "WLC_OPTIONAL",
+                "0",
+                format!("offsetof({name}_t, has_{field_name})"),
+                "0".to_owned(),
+                "0".to_owned(),
+                "0".to_owned(),
+            ),
+            crate::ast::Cardinality::Required => (
+                "WLC_OPTIONAL",
+                "1",
                 format!("offsetof({name}_t, has_{field_name})"),
                 "0".to_owned(),
                 "0".to_owned(),
@@ -386,6 +396,7 @@ fn emit_descriptor(output: &mut String, message: &MessageSymbol) {
             ),
             crate::ast::Cardinality::Repeated => (
                 "WLC_REPEATED",
+                "0",
                 "0".to_owned(),
                 format!("offsetof({name}_t, {field_name}_count)"),
                 format!("offsetof({name}_t, {field_name}_capacity)"),
@@ -393,13 +404,22 @@ fn emit_descriptor(output: &mut String, message: &MessageSymbol) {
             ),
             crate::ast::Cardinality::Packed(element_count) => (
                 "WLC_PACKED",
+                "0",
+                format!("offsetof({name}_t, has_{field_name})"),
+                "0".to_owned(),
+                "0".to_owned(),
+                element_count.to_string(),
+            ),
+            crate::ast::Cardinality::RequiredPacked(element_count) => (
+                "WLC_PACKED",
+                "1",
                 format!("offsetof({name}_t, has_{field_name})"),
                 "0".to_owned(),
                 "0".to_owned(),
                 element_count.to_string(),
             ),
         };
-        output.push_str(&format!("  {{ {}U, {cardinality}, {kind}, offsetof({name}_t, {field_name}), {has}, {count}, {capacity}, sizeof({}), {packed_count}U, {signed_default}, {unsigned_default}ULL, {string_default}, {nested} }},\n", field.number, c_type(&field.ty)));
+        output.push_str(&format!("  {{ {}U, {cardinality}, {kind}, {required}, offsetof({name}_t, {field_name}), {has}, {count}, {capacity}, sizeof({}), {packed_count}U, {signed_default}, {unsigned_default}ULL, {string_default}, {nested} }},\n", field.number, c_type(&field.ty)));
     }
     output.push_str("};\n");
     output.push_str(&format!("static const wlc_desc_t {name}_desc = {{ {name}_fields, sizeof({name}_fields) / sizeof({name}_fields[0]) }};\n\n"));
@@ -486,7 +506,7 @@ enum {
 typedef struct wlc_desc wlc_desc_t;
 typedef struct {
   uint16_t number;
-  uint8_t card, kind;
+  uint8_t card, kind, required;
   size_t value, has, count, capacity, element, packed_count;
   int64_t signed_default;
   uint64_t unsigned_default;
@@ -636,7 +656,10 @@ static wl_codec_status_t wlc_measure(const wlc_desc_t *d, const void *value,
     if (f->card == WLC_PACKED) {
       size_t bytes;
       wl_codec_status_t s;
-      if (!*(const bool *)(base + f->has)) continue;
+      if (!*(const bool *)(base + f->has)) {
+        if (f->required != 0U) return WL_CODEC_ERR_MISSING_REQUIRED_FIELD;
+        continue;
+      }
       if ((s = wlc_packed_bytes(f, &bytes)) != WL_CODEC_OK) return s;
       if ((s = wlc_add(&n, wlc_vsize(((uint64_t)f->number << 3U) | 2U))) != WL_CODEC_OK ||
           (s = wlc_add(&n, wlc_vsize(bytes))) != WL_CODEC_OK ||
@@ -645,7 +668,10 @@ static wl_codec_status_t wlc_measure(const wlc_desc_t *d, const void *value,
     }
     size_t count = 1U;
     if (f->card == WLC_OPTIONAL) {
-      if (!*(const bool *)(base + f->has)) continue;
+      if (!*(const bool *)(base + f->has)) {
+        if (f->required != 0U) return WL_CODEC_ERR_MISSING_REQUIRED_FIELD;
+        continue;
+      }
     } else {
       count = *(const size_t *)(base + f->count);
       if ((count != 0U && *(void *const *)(base + f->value) == NULL) ||
@@ -944,6 +970,11 @@ static wl_codec_status_t wlc_decode(const wlc_desc_t *d, const uint8_t *in,
     if ((s = wlc_read_value(f, in, n, &at, p)) != WL_CODEC_OK) return s;
     if (f->card == WLC_OPTIONAL) *(bool *)(base + f->has) = true;
     else ++*(size_t *)(base + f->count);
+  }
+  for (size_t i = 0U; i < d->count; ++i) {
+    const wlc_field_t *f = &d->fields[i];
+    if (f->required != 0U && !*(const bool *)((uint8_t *)out + f->has))
+      return WL_CODEC_ERR_MISSING_REQUIRED_FIELD;
   }
   return WL_CODEC_OK;
 }

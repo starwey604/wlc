@@ -122,6 +122,11 @@ fn hash_cardinality(hash: &mut StableHash, cardinality: Cardinality) {
             hash.u8(3);
             hash.u16(count);
         }
+        Cardinality::Required => hash.u8(4),
+        Cardinality::RequiredPacked(count) => {
+            hash.u8(5);
+            hash.u16(count);
+        }
     }
 }
 

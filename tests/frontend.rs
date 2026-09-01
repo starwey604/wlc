@@ -57,6 +57,45 @@ fn parses_float_scalars_and_fixed_packed_arrays() {
 }
 
 #[test]
+fn parses_required_scalar_nested_and_packed_fields() {
+    let schema = parse_schema(
+        "version 1; message Child = 1 { required uint32 value = 1; } message Packet = 2 { required Child child = 1; required packed float32 joints[6] = 2; optional uint32 required = 3; }",
+    )
+    .expect("required fields");
+    let Declaration::Message(packet) = &schema.declarations[1] else {
+        panic!("expected packet message");
+    };
+    assert_eq!(packet.fields[0].cardinality, Cardinality::Required);
+    assert_eq!(packet.fields[1].cardinality, Cardinality::RequiredPacked(6));
+    assert_eq!(packet.fields[2].name.value, "required");
+    analyze_schema(&schema).expect("required fields should resolve");
+}
+
+#[test]
+fn rejects_required_repeated_and_required_defaults() {
+    for (source, expected) in [
+        (
+            "version 1; message Bad = 1 { required repeated uint32 values = 1; }",
+            "required fields cannot be repeated",
+        ),
+        (
+            "version 1; message Bad = 1 { required uint32 value = 1 [default = 0]; }",
+            "required fields cannot declare a default value",
+        ),
+        (
+            "version 1; message Bad = 1 { required packed fixed32 values[2] = 1 [default = 0]; }",
+            "required fields cannot declare a default value",
+        ),
+    ] {
+        let error = parse_schema(source).unwrap_err();
+        assert!(
+            error.message.contains(expected),
+            "unexpected diagnostic: {error}"
+        );
+    }
+}
+
+#[test]
 fn packed_arrays_require_a_valid_count_and_fixed_width_numeric_type() {
     for source in [
         "version 1; message Bad = 1 { packed float32 values[0] = 1; }",
@@ -67,11 +106,11 @@ fn packed_arrays_require_a_valid_count_and_fixed_width_numeric_type() {
     }
 
     let schema = parse_schema(
-        "version 1; message Bad = 1 { packed uint32 values[6] = 1; packed string names[2] = 2; }",
+        "version 1; message Bad = 1 { packed uint32 values[6] = 1; packed string names[2] = 2; required packed uint64 required_values[2] = 3; }",
     )
     .unwrap();
     let errors = analyze_schema(&schema).unwrap_err();
-    assert_eq!(errors.errors().len(), 2);
+    assert_eq!(errors.errors().len(), 3);
     assert!(errors.errors().iter().all(|error| {
         error
             .message
@@ -362,6 +401,68 @@ fn compatibility_treats_packed_kind_and_count_as_wire_identity() {
                 .errors()
                 .iter()
                 .any(|error| error.message.contains("changed wire identity"))
+        );
+    }
+}
+
+#[test]
+fn compatibility_rejects_required_field_addition_removal_and_cardinality_changes() {
+    let previous = analyze_schema(
+        &parse_schema(
+            "version 1; message Control = 1 { required uint32 sequence = 1; required packed float32 joints[6] = 2; optional bool enabled = 3; }",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let compatible = analyze_schema(
+        &parse_schema(
+            "version 2; message Control = 1 { required uint32 sequence = 1; required packed float32 joints[6] = 2; optional bool enabled = 3; optional uint32 timestamp = 4; }",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    check_compatibility(&previous, &compatible).expect("adding optional remains compatible");
+
+    for source in [
+        "version 2; message Control = 1 { optional uint32 sequence = 1; required packed float32 joints[6] = 2; optional bool enabled = 3; }",
+        "version 2; message Control = 1 { required uint32 sequence = 1; packed float32 joints[6] = 2; optional bool enabled = 3; }",
+        "version 2; message Control = 1 { required uint32 sequence = 1; required packed float32 joints[6] = 2; required bool enabled = 3; }",
+    ] {
+        let current = analyze_schema(&parse_schema(source).unwrap()).unwrap();
+        let errors = check_compatibility(&previous, &current).unwrap_err();
+        assert!(
+            errors
+                .errors()
+                .iter()
+                .any(|error| error.message.contains("changed wire identity"))
+        );
+    }
+
+    let removed = analyze_schema(
+        &parse_schema(
+            "version 2; message Control = 1 { reserved 1; required packed float32 joints[6] = 2; optional bool enabled = 3; }",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let errors = check_compatibility(&previous, &removed).unwrap_err();
+    assert!(errors.errors().iter().any(|error| {
+        error
+            .message
+            .contains("cannot be removed, even if reserved")
+    }));
+
+    for source in [
+        "version 2; message Control = 1 { required uint32 sequence = 1; required packed float32 joints[6] = 2; optional bool enabled = 3; required uint64 timestamp = 4; }",
+        "version 2; message Control = 1 { required uint32 sequence = 1; required packed float32 joints[6] = 2; optional bool enabled = 3; required packed fixed32 flags[2] = 4; }",
+    ] {
+        let current = analyze_schema(&parse_schema(source).unwrap()).unwrap();
+        let errors = check_compatibility(&previous, &current).unwrap_err();
+        assert!(
+            errors
+                .errors()
+                .iter()
+                .any(|error| { error.message.contains("new required field") })
         );
     }
 }

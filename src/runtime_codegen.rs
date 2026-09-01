@@ -331,9 +331,13 @@ fn validate_operation_field(
             message.name
         )));
     };
-    if field.cardinality != Cardinality::Optional || field.ty != ResolvedType::Uint32 {
+    if !matches!(
+        field.cardinality,
+        Cardinality::Optional | Cardinality::Required
+    ) || field.ty != ResolvedType::Uint32
+    {
         return Err(RuntimeCodegenError(format!(
-            "RPC operation field `{}.{name}` must remain optional uint32",
+            "RPC operation field `{}.{name}` must remain optional or required uint32",
             message.name
         )));
     }
@@ -356,9 +360,12 @@ fn validate_status_field(
             response.name, mapping.name, mapping.number
         )));
     };
-    if field.cardinality != Cardinality::Optional {
+    if !matches!(
+        field.cardinality,
+        Cardinality::Optional | Cardinality::Required
+    ) {
         return Err(RuntimeCodegenError(format!(
-            "RPC status field `{}.{}` must remain optional",
+            "RPC status field `{}.{}` must remain optional or required",
             response.name, mapping.name
         )));
     }

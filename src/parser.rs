@@ -208,6 +208,18 @@ impl Parser {
                 self.advance();
                 Cardinality::Optional
             }
+            TokenKind::Required => {
+                self.advance();
+                if matches!(self.current().kind, TokenKind::Repeated) {
+                    return Err(self.error_current("required fields cannot be repeated"));
+                }
+                if matches!(self.current().kind, TokenKind::Packed) {
+                    self.advance();
+                    Cardinality::RequiredPacked(0)
+                } else {
+                    Cardinality::Required
+                }
+            }
             TokenKind::Repeated => {
                 self.advance();
                 Cardinality::Repeated
@@ -218,18 +230,25 @@ impl Parser {
                 Cardinality::Packed(0)
             }
             _ => {
-                return Err(
-                    self.error_current("field must start with `optional`, `repeated`, or `packed`")
-                );
+                return Err(self.error_current(
+                    "field must start with `optional`, `required`, `repeated`, or `packed`",
+                ));
             }
         };
         let ty = self.identifier("field type")?;
         let name = self.identifier("field name")?;
-        let cardinality = if matches!(cardinality, Cardinality::Packed(_)) {
+        let cardinality = if matches!(
+            cardinality,
+            Cardinality::Packed(_) | Cardinality::RequiredPacked(_)
+        ) {
             self.expect_symbol(TokenKind::LeftBracket, "`[` before packed element count")?;
             let count = self.positive_u16("packed element count")?;
             self.expect_symbol(TokenKind::RightBracket, "`]` after packed element count")?;
-            Cardinality::Packed(count.value)
+            if matches!(cardinality, Cardinality::RequiredPacked(_)) {
+                Cardinality::RequiredPacked(count.value)
+            } else {
+                Cardinality::Packed(count.value)
+            }
         } else {
             cardinality
         };
@@ -238,10 +257,11 @@ impl Parser {
         let default = if matches!(self.current().kind, TokenKind::LeftBracket) {
             self.advance();
             if cardinality != Cardinality::Optional {
-                let kind = if cardinality == Cardinality::Repeated {
-                    "repeated"
-                } else {
-                    "packed"
+                let kind = match cardinality {
+                    Cardinality::Required | Cardinality::RequiredPacked(_) => "required",
+                    Cardinality::Repeated => "repeated",
+                    Cardinality::Packed(_) => "packed",
+                    Cardinality::Optional => unreachable!(),
                 };
                 return Err(
                     self.error_current(format!("{kind} fields cannot declare a default value"))
@@ -353,15 +373,18 @@ impl Parser {
 
     fn identifier(&mut self, expected: &str) -> Result<Spanned<String>, ParseError> {
         let token = self.current().clone();
-        if let TokenKind::Identifier(value) = token.kind {
-            self.advance();
-            Ok(Spanned {
-                value,
-                span: token.span,
-            })
-        } else {
-            Err(self.error(token.span, format!("expected {expected}")))
-        }
+        let value = match token.kind {
+            TokenKind::Identifier(value) => value,
+            // Keep the newly introduced keyword contextual so an existing
+            // declaration or field named `required` still parses.
+            TokenKind::Required => "required".to_owned(),
+            _ => return Err(self.error(token.span, format!("expected {expected}"))),
+        };
+        self.advance();
+        Ok(Spanned {
+            value,
+            span: token.span,
+        })
     }
 
     fn literal(&mut self) -> Result<Spanned<Literal>, ParseError> {

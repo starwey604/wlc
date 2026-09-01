@@ -267,19 +267,19 @@ rpc Other {
 }
 
 #[test]
-fn rpc_requires_optional_uint32_ids_and_an_int32_status_domain_with_zero_success() {
+fn rpc_requires_singular_uint32_ids_and_an_int32_status_domain_with_zero_success() {
     let cases = [
         (
             "WrongRequest",
             "StartResponse",
             "operation_id",
-            "must map to an optional uint32 field",
+            "must map to an optional or required uint32 field",
         ),
         (
             "StartRequest",
             "WrongResponse",
             "operation_id",
-            "status must map to an optional int32 or enum field",
+            "status must map to an optional or required int32 or enum field",
         ),
         (
             "StartRequest",
@@ -313,6 +313,39 @@ rpc Test {{
             errors.errors()
         );
     }
+}
+
+#[test]
+fn rpc_accepts_required_operation_and_status_fields() {
+    let schema = analyze_schema(
+        &parse_schema(
+            r#"version 1;
+enum Status = 1 { OK = 0; FAILED = 1; }
+message Request = 2 { required uint32 operation_id = 1; }
+message Response = 3 {
+  required uint32 operation_id = 1;
+  required Status status = 2;
+}
+"#,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let profile = parse_binding_profile(
+        r#"profile version 1;
+rpc RequiredFields {
+  request = Request;
+  response = Response;
+  request_operation_id = operation_id;
+  response_operation_id = operation_id;
+  response_status = status;
+  request_delivery = reliable;
+  response_delivery = reliable;
+}
+"#,
+    )
+    .unwrap();
+    analyze_binding_profile(&profile, &schema).expect("required RPC fields are singular");
 }
 
 #[test]
@@ -461,4 +494,17 @@ rpc Read {
         binding_profile_identity(&profile_a),
         binding_profile_identity(&changed_policy)
     );
+}
+
+#[test]
+fn schema_identity_distinguishes_required_cardinality() {
+    let optional = analyze_schema(
+        &parse_schema("version 1; message Value = 1 { optional uint32 field = 1; }").unwrap(),
+    )
+    .unwrap();
+    let required = analyze_schema(
+        &parse_schema("version 1; message Value = 1 { required uint32 field = 1; }").unwrap(),
+    )
+    .unwrap();
+    assert_ne!(schema_identity(&optional), schema_identity(&required));
 }

@@ -175,15 +175,16 @@ pub fn analyze_schema(schema: &Schema) -> Result<SemanticModel, SemanticErrors> 
                         ));
                         continue;
                     };
-                    if matches!(field.cardinality, Cardinality::Packed(_))
-                        && !matches!(
-                            &ty,
-                            ResolvedType::Float32
-                                | ResolvedType::Float64
-                                | ResolvedType::Fixed32
-                                | ResolvedType::Fixed64
-                        )
-                    {
+                    if matches!(
+                        field.cardinality,
+                        Cardinality::Packed(_) | Cardinality::RequiredPacked(_)
+                    ) && !matches!(
+                        &ty,
+                        ResolvedType::Float32
+                            | ResolvedType::Float64
+                            | ResolvedType::Fixed32
+                            | ResolvedType::Fixed64
+                    ) {
                         errors.push(SemanticError::new(
                             field.ty.span,
                             format!(
@@ -192,12 +193,21 @@ pub fn analyze_schema(schema: &Schema) -> Result<SemanticModel, SemanticErrors> 
                             ),
                         ));
                     }
-                    let default = lower_default(
-                        field.default.as_ref(),
-                        &ty,
-                        &declarations_by_name,
-                        &mut errors,
-                    );
+                    let default = match field.default.as_ref() {
+                        Some(default) if cardinality_is_required(field.cardinality) => {
+                            errors.push(SemanticError::new(
+                                default.span,
+                                "required fields cannot declare a default value",
+                            ));
+                            None
+                        }
+                        _ => lower_default(
+                            field.default.as_ref(),
+                            &ty,
+                            &declarations_by_name,
+                            &mut errors,
+                        ),
+                    };
                     fields.push(FieldSymbol {
                         name: field.name.value.clone(),
                         number: field.number.value,
@@ -555,6 +565,15 @@ fn check_message_compatibility(
     }
     for previous_field in &previous.fields {
         match current.fields.iter().find(|field| field.number == previous_field.number) {
+            None if cardinality_is_required(previous_field.cardinality) => errors.push(
+                SemanticError::new(
+                    current.span,
+                    format!(
+                        "required field `{}` (number {}) in message `{}` cannot be removed, even if reserved",
+                        previous_field.name, previous_field.number, current.name
+                    ),
+                ),
+            ),
             None if !current.reserved_numbers.contains(&previous_field.number) => errors.push(SemanticError::new(
                 current.span,
                 format!("removed field `{}` (number {}) in message `{}` must be retained as `reserved {};`", previous_field.name, previous_field.number, current.name, previous_field.number),
@@ -581,6 +600,29 @@ fn check_message_compatibility(
             ));
         }
     }
+    for current_field in &current.fields {
+        if cardinality_is_required(current_field.cardinality)
+            && !previous
+                .fields
+                .iter()
+                .any(|field| field.number == current_field.number)
+        {
+            errors.push(SemanticError::new(
+                current_field.span,
+                format!(
+                    "new required field `{}` (number {}) in message `{}` is incompatible",
+                    current_field.name, current_field.number, current.name
+                ),
+            ));
+        }
+    }
+}
+
+fn cardinality_is_required(cardinality: Cardinality) -> bool {
+    matches!(
+        cardinality,
+        Cardinality::Required | Cardinality::RequiredPacked(_)
+    )
 }
 
 fn check_enum_compatibility(

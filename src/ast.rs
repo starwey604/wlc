@@ -73,10 +73,14 @@ pub struct Field {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Cardinality {
     Optional,
+    Required,
     Repeated,
     /// One optional, length-delimited occurrence containing exactly `count`
     /// fixed-width numeric elements.
     Packed(u16),
+    /// One required, length-delimited occurrence containing exactly `count`
+    /// fixed-width numeric elements.
+    RequiredPacked(u16),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
