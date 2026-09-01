@@ -65,6 +65,8 @@ pub struct Enum {
 pub struct Field {
     pub cardinality: Cardinality,
     pub ty: Spanned<String>,
+    /// Maximum encoded byte length for a bounded `string` or `bytes` field.
+    pub max_length: Option<Spanned<u16>>,
     pub name: Spanned<String>,
     pub number: Spanned<u16>,
     pub default: Option<Spanned<Literal>>,

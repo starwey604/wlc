@@ -195,7 +195,10 @@ fn static_max_field_size(
                 let child_maximum = static_max_encoded_size(child, messages, memo, visiting)?;
                 varint_size(child_maximum).checked_add(child_maximum)?
             }
-            ResolvedType::Bytes | ResolvedType::String => return None,
+            ResolvedType::Bytes | ResolvedType::String => {
+                let maximum = u64::from(field.max_length?);
+                varint_size(maximum).checked_add(maximum)?
+            }
         },
         crate::ast::Cardinality::Repeated => return None,
     };
@@ -421,7 +424,8 @@ fn emit_descriptor(output: &mut String, message: &MessageSymbol) {
                 element_count.to_string(),
             ),
         };
-        output.push_str(&format!("  {{ {}U, {cardinality}, {kind}, {required}, offsetof({name}_t, {field_name}), {has}, {count}, {capacity}, sizeof({}), {packed_count}U, {signed_default}, {unsigned_default}ULL, {string_default}, {nested} }},\n", field.number, c_type(&field.ty)));
+        let max_length = field.max_length.unwrap_or(0);
+        output.push_str(&format!("  {{ {}U, {cardinality}, {kind}, {required}, offsetof({name}_t, {field_name}), {has}, {count}, {capacity}, sizeof({}), {packed_count}U, {max_length}U, {signed_default}, {unsigned_default}ULL, {string_default}, {nested} }},\n", field.number, c_type(&field.ty)));
     }
     output.push_str("};\n");
     output.push_str(&format!("static const wlc_desc_t {name}_desc = {{ {name}_fields, sizeof({name}_fields) / sizeof({name}_fields[0]) }};\n\n"));
@@ -522,6 +526,7 @@ typedef struct {
   uint16_t number;
   uint8_t card, kind, required;
   size_t value, has, count, capacity, element, packed_count;
+  uint16_t max_length;
   int64_t signed_default;
   uint64_t unsigned_default;
   const char *string_default;
@@ -641,6 +646,8 @@ static wl_codec_status_t wlc_body(const wlc_field_t *f, const void *p,
     case WLC_FLOAT64: *n = 8U; return WL_CODEC_OK;
     case WLC_BYTES: {
       const wl_codec_bytes_t *v = p;
+      if (f->max_length != 0U && v->length > (size_t)f->max_length)
+        return WL_CODEC_ERR_INVALID_VALUE;
       if (v->length != 0U && v->data == NULL) return WL_CODEC_ERR_INVALID_VALUE;
       if (wlc_add(n, wlc_vsize(v->length)) != WL_CODEC_OK)
         return WL_CODEC_ERR_OVERFLOW;
@@ -648,6 +655,8 @@ static wl_codec_status_t wlc_body(const wlc_field_t *f, const void *p,
     }
     case WLC_STRING: {
       const wl_codec_string_t *v = p;
+      if (f->max_length != 0U && v->length > (size_t)f->max_length)
+        return WL_CODEC_ERR_INVALID_VALUE;
       if (v->length != 0U && v->data == NULL) return WL_CODEC_ERR_INVALID_VALUE;
       if (!wlc_utf8((const uint8_t *)v->data, v->length)) return WL_CODEC_ERR_UTF8;
       if (wlc_add(n, wlc_vsize(v->length)) != WL_CODEC_OK)
@@ -904,6 +913,9 @@ static wl_codec_status_t wlc_read_value(const wlc_field_t *f, const uint8_t *in,
     return wlc_read_fixed(f->kind, in, n, at, out);
   if (f->kind == WLC_BYTES || f->kind == WLC_STRING || f->kind == WLC_MESSAGE) {
     if ((s = wlc_getv(in, n, at, &v)) != WL_CODEC_OK) return s;
+    if ((f->kind == WLC_BYTES || f->kind == WLC_STRING) &&
+        f->max_length != 0U && v > (uint64_t)f->max_length)
+      return WL_CODEC_ERR_INVALID_VALUE;
     if (v > n - *at) return WL_CODEC_ERR_MALFORMED;
     size_t bytes = (size_t)v;
     if (f->kind == WLC_BYTES)

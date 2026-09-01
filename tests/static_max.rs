@@ -63,6 +63,11 @@ message Text = 5 { optional string value = 1; }
 message Blob = 6 { optional bytes value = 1; }
 message Series = 7 { repeated fixed32 values = 1; }
 message TextEnvelope = 8 { optional Text child = 1; }
+message BoundedText = 9 { optional string<31> value = 1; }
+message BoundedBlob = 10 { required bytes<128> value = 16; }
+message BoundedEnvelope = 11 { optional BoundedText child = 1; }
+message BoundedSeries = 12 { repeated bytes<4> values = 1; }
+message MaximumBound = 13 { required bytes<65535> value = 1; }
 "#,
         )
         .unwrap(),
@@ -82,7 +87,23 @@ message TextEnvelope = 8 { optional Text child = 1; }
         macro_value(&generated.header, "EMPTY_MAX_ENCODED_SIZE"),
         Some(0)
     );
-    for name in ["TEXT", "BLOB", "SERIES", "TEXT_ENVELOPE"] {
+    assert_eq!(
+        macro_value(&generated.header, "BOUNDED_TEXT_MAX_ENCODED_SIZE"),
+        Some(33)
+    );
+    assert_eq!(
+        macro_value(&generated.header, "BOUNDED_BLOB_MAX_ENCODED_SIZE"),
+        Some(132)
+    );
+    assert_eq!(
+        macro_value(&generated.header, "BOUNDED_ENVELOPE_MAX_ENCODED_SIZE"),
+        Some(35)
+    );
+    assert_eq!(
+        macro_value(&generated.header, "MAXIMUM_BOUND_MAX_ENCODED_SIZE"),
+        Some(65539)
+    );
+    for name in ["TEXT", "BLOB", "SERIES", "TEXT_ENVELOPE", "BOUNDED_SERIES"] {
         assert!(
             generated
                 .header
@@ -105,21 +126,35 @@ message TextEnvelope = 8 { optional Text child = 1; }
 #include <stdint.h>
 
 #if !LEAF_HAS_MAX_ENCODED_SIZE || !OUTER_HAS_MAX_ENCODED_SIZE || \
-    !EMPTY_HAS_MAX_ENCODED_SIZE
+    !EMPTY_HAS_MAX_ENCODED_SIZE || !BOUNDED_TEXT_HAS_MAX_ENCODED_SIZE || \
+    !BOUNDED_BLOB_HAS_MAX_ENCODED_SIZE || \
+    !BOUNDED_ENVELOPE_HAS_MAX_ENCODED_SIZE || \
+    !MAXIMUM_BOUND_HAS_MAX_ENCODED_SIZE
 #error "bounded messages must advertise a static maximum"
 #endif
 #if TEXT_HAS_MAX_ENCODED_SIZE || BLOB_HAS_MAX_ENCODED_SIZE || \
-    SERIES_HAS_MAX_ENCODED_SIZE || TEXT_ENVELOPE_HAS_MAX_ENCODED_SIZE
+    SERIES_HAS_MAX_ENCODED_SIZE || TEXT_ENVELOPE_HAS_MAX_ENCODED_SIZE || \
+    BOUNDED_SERIES_HAS_MAX_ENCODED_SIZE
 #error "dynamic storage must not advertise a static maximum"
 #endif
 #if defined(TEXT_MAX_ENCODED_SIZE) || defined(BLOB_MAX_ENCODED_SIZE) || \
-    defined(SERIES_MAX_ENCODED_SIZE) || defined(TEXT_ENVELOPE_MAX_ENCODED_SIZE)
+    defined(SERIES_MAX_ENCODED_SIZE) || \
+    defined(TEXT_ENVELOPE_MAX_ENCODED_SIZE) || \
+    defined(BOUNDED_SERIES_MAX_ENCODED_SIZE)
 #error "an unavailable maximum must not be emitted"
 #endif
 
 _Static_assert(LEAF_MAX_ENCODED_SIZE == UINT64_C(218), "leaf golden maximum");
 _Static_assert(OUTER_MAX_ENCODED_SIZE == UINT64_C(352), "outer golden maximum");
 _Static_assert(EMPTY_MAX_ENCODED_SIZE == UINT64_C(0), "empty golden maximum");
+_Static_assert(BOUNDED_TEXT_MAX_ENCODED_SIZE == UINT64_C(33),
+               "bounded string maximum");
+_Static_assert(BOUNDED_BLOB_MAX_ENCODED_SIZE == UINT64_C(132),
+               "bounded bytes maximum");
+_Static_assert(BOUNDED_ENVELOPE_MAX_ENCODED_SIZE == UINT64_C(35),
+               "nested bounded maximum");
+_Static_assert(MAXIMUM_BOUND_MAX_ENCODED_SIZE == UINT64_C(65539),
+               "maximum accepted field bound");
 _Static_assert(OUTER_MAX_ENCODED_SIZE <= SIZE_MAX,
                "scratch bound must fit this target's size_t");
 
@@ -197,6 +232,7 @@ int main(void) {
 
 static_assert(OUTER_HAS_MAX_ENCODED_SIZE == 1);
 static_assert(OUTER_MAX_ENCODED_SIZE == UINT64_C(352));
+static_assert(BOUNDED_ENVELOPE_MAX_ENCODED_SIZE == UINT64_C(35));
 static_assert(OUTER_MAX_ENCODED_SIZE <= SIZE_MAX);
 
 int main() {

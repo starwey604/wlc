@@ -72,6 +72,81 @@ fn parses_required_scalar_nested_and_packed_fields() {
 }
 
 #[test]
+fn parses_bounded_borrowed_fields_for_every_cardinality() {
+    let schema = parse_schema(
+        r#"version 1;
+message Metadata = 1 {
+  optional string<31> name = 1 [default = "ready"];
+  required bytes<65535> payload = 2;
+  repeated string<1> labels = 3;
+}
+"#,
+    )
+    .unwrap();
+    let Declaration::Message(parsed) = &schema.declarations[0] else {
+        panic!("expected message");
+    };
+    assert_eq!(parsed.fields[0].max_length.as_ref().unwrap().value, 31);
+    assert_eq!(parsed.fields[1].max_length.as_ref().unwrap().value, 65535);
+    assert_eq!(parsed.fields[2].max_length.as_ref().unwrap().value, 1);
+
+    let model = analyze_schema(&schema).unwrap();
+    let Symbol::Message(message) = &model.declarations[0] else {
+        panic!("expected message");
+    };
+    assert_eq!(message.fields[0].ty, ResolvedType::String);
+    assert_eq!(message.fields[0].max_length, Some(31));
+    assert_eq!(message.fields[1].ty, ResolvedType::Bytes);
+    assert_eq!(message.fields[1].max_length, Some(65535));
+    assert_eq!(message.fields[2].max_length, Some(1));
+}
+
+#[test]
+fn bounded_field_diagnostics_reject_invalid_ranges_types_and_defaults() {
+    for source in [
+        "version 1; message Bad = 1 { optional string<0> value = 1; }",
+        "version 1; message Bad = 1 { optional bytes<65536> value = 1; }",
+    ] {
+        let error = parse_schema(source).unwrap_err();
+        assert!(
+            error
+                .message
+                .contains("string/bytes bound must be in 1..=65535")
+        );
+    }
+
+    let wrong_type = analyze_schema(
+        &parse_schema("version 1; message Bad = 1 { optional uint32<8> value = 1; }").unwrap(),
+    )
+    .unwrap_err();
+    assert!(wrong_type.errors().iter().any(|error| {
+        error
+            .message
+            .contains("may only declare a length bound on string or bytes")
+    }));
+
+    analyze_schema(
+        &parse_schema(
+            "version 1; message Good = 1 { optional string<3> value = 1 [default = \"电\"]; }",
+        )
+        .unwrap(),
+    )
+    .expect("the bound counts encoded UTF-8 bytes");
+    let too_long = analyze_schema(
+        &parse_schema(
+            "version 1; message Bad = 1 { optional string<2> value = 1 [default = \"电\"]; }",
+        )
+        .unwrap(),
+    )
+    .unwrap_err();
+    assert!(too_long.errors().iter().any(|error| {
+        error
+            .message
+            .contains("default string length 3 exceeds declared bound 2 bytes")
+    }));
+}
+
+#[test]
 fn resolves_narrow_integer_types_and_range_checked_defaults() {
     let schema = parse_schema(
         r#"version 1;
@@ -501,6 +576,48 @@ fn compatibility_treats_narrow_integer_width_and_signedness_as_identity() {
                 .any(|error| error.message.contains("changed wire identity"))
         );
     }
+}
+
+#[test]
+fn compatibility_treats_every_length_bound_change_as_incompatible() {
+    let previous = analyze_schema(
+        &parse_schema(
+            "version 1; message Metadata = 1 { optional string<31> name = 1; repeated bytes<64> chunks = 2; }",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    for source in [
+        "version 2; message Metadata = 1 { optional string<32> name = 1; repeated bytes<64> chunks = 2; }",
+        "version 2; message Metadata = 1 { optional string name = 1; repeated bytes<64> chunks = 2; }",
+        "version 2; message Metadata = 1 { optional string<31> name = 1; repeated bytes chunks = 2; }",
+    ] {
+        let current = analyze_schema(&parse_schema(source).unwrap()).unwrap();
+        let errors = check_compatibility(&previous, &current).unwrap_err();
+        assert!(
+            errors
+                .errors()
+                .iter()
+                .any(|error| error.message.contains("changed wire identity"))
+        );
+    }
+
+    let unbounded = analyze_schema(
+        &parse_schema(
+            "version 1; message Metadata = 1 { optional string name = 1; repeated bytes chunks = 2; }",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let newly_bounded = analyze_schema(
+        &parse_schema(
+            "version 2; message Metadata = 1 { optional string<31> name = 1; repeated bytes chunks = 2; }",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(check_compatibility(&unbounded, &newly_bounded).is_err());
 }
 
 #[test]

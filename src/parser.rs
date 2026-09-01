@@ -236,6 +236,14 @@ impl Parser {
             }
         };
         let ty = self.identifier("field type")?;
+        let max_length = if matches!(self.current().kind, TokenKind::Less) {
+            self.advance();
+            let bound = self.positive_u16("string/bytes bound")?;
+            self.expect_symbol(TokenKind::Greater, "`>` after string/bytes bound")?;
+            Some(bound)
+        } else {
+            None
+        };
         let name = self.identifier("field name")?;
         let cardinality = if matches!(
             cardinality,
@@ -279,6 +287,7 @@ impl Parser {
         Ok(Field {
             cardinality,
             ty,
+            max_length,
             name,
             number,
             default,

@@ -22,6 +22,8 @@ pub(crate) enum TokenKind {
     RightBrace,
     LeftBracket,
     RightBracket,
+    Less,
+    Greater,
     End,
 }
 
@@ -106,6 +108,14 @@ impl Lexer<'_> {
             ']' => {
                 self.advance();
                 TokenKind::RightBracket
+            }
+            '<' => {
+                self.advance();
+                TokenKind::Less
+            }
+            '>' => {
+                self.advance();
+                TokenKind::Greater
             }
             '"' => TokenKind::String(self.read_string(span)?),
             '-' | '0'..='9' => TokenKind::Number(self.read_number(span)?),

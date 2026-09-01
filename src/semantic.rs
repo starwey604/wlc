@@ -57,6 +57,8 @@ pub struct FieldSymbol {
     pub number: u16,
     pub cardinality: Cardinality,
     pub ty: ResolvedType,
+    /// Maximum encoded byte length for bounded string/bytes values.
+    pub max_length: Option<u16>,
     pub default: Option<FieldDefault>,
     span: Span,
 }
@@ -201,6 +203,18 @@ pub fn analyze_schema(schema: &Schema) -> Result<SemanticModel, SemanticErrors> 
                             ),
                         ));
                     }
+                    let max_length = field.max_length.as_ref().map(|bound| bound.value);
+                    if max_length.is_some()
+                        && !matches!(&ty, ResolvedType::Bytes | ResolvedType::String)
+                    {
+                        errors.push(SemanticError::new(
+                            field.max_length.as_ref().unwrap().span,
+                            format!(
+                                "field `{}` may only declare a length bound on string or bytes",
+                                field.name.value
+                            ),
+                        ));
+                    }
                     let default = match field.default.as_ref() {
                         Some(default) if cardinality_is_required(field.cardinality) => {
                             errors.push(SemanticError::new(
@@ -212,6 +226,7 @@ pub fn analyze_schema(schema: &Schema) -> Result<SemanticModel, SemanticErrors> 
                         _ => lower_default(
                             field.default.as_ref(),
                             &ty,
+                            max_length,
                             &declarations_by_name,
                             &mut errors,
                         ),
@@ -221,6 +236,7 @@ pub fn analyze_schema(schema: &Schema) -> Result<SemanticModel, SemanticErrors> 
                         number: field.number.value,
                         cardinality: field.cardinality,
                         ty,
+                        max_length,
                         default,
                         span: field.number.span,
                     });
@@ -412,6 +428,7 @@ fn resolve_type(name: &str, declarations: &HashMap<&str, &Declaration>) -> Optio
 fn lower_default(
     default: Option<&Spanned<Literal>>,
     ty: &ResolvedType,
+    max_length: Option<u16>,
     declarations: &HashMap<&str, &Declaration>,
     errors: &mut Vec<SemanticError>,
 ) -> Option<FieldDefault> {
@@ -422,7 +439,21 @@ fn lower_default(
     };
     match (ty, &default.value) {
         (ResolvedType::Bool, Literal::Boolean(value)) => Some(FieldDefault::Bool(*value)),
-        (ResolvedType::String, Literal::String(value)) => Some(FieldDefault::String(value.clone())),
+        (ResolvedType::String, Literal::String(value)) => {
+            if let Some(max_length) = max_length
+                && value.len() > usize::from(max_length)
+            {
+                invalid(
+                    errors,
+                    format!(
+                        "default string length {} exceeds declared bound {max_length} bytes",
+                        value.len()
+                    ),
+                )
+            } else {
+                Some(FieldDefault::String(value.clone()))
+            }
+        }
         (ResolvedType::Bytes, _) => {
             invalid(errors, "bytes fields cannot declare defaults".to_owned())
         }
@@ -611,7 +642,7 @@ fn check_message_compatibility(
                 format!("removed field `{}` (number {}) in message `{}` must be retained as `reserved {};`", previous_field.name, previous_field.number, current.name, previous_field.number),
             )),
             None => {}
-            Some(current_field) if current_field.name != previous_field.name || current_field.ty != previous_field.ty || current_field.cardinality != previous_field.cardinality => errors.push(SemanticError::new(
+            Some(current_field) if current_field.name != previous_field.name || current_field.ty != previous_field.ty || current_field.max_length != previous_field.max_length || current_field.cardinality != previous_field.cardinality => errors.push(SemanticError::new(
                 current_field.span,
                 format!("field number {} in message `{}` changed wire identity", previous_field.number, current.name),
             )),

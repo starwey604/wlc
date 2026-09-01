@@ -155,7 +155,7 @@ fn main() -> Result<()> {
                 .collect::<Vec<_>>();
             let manifest = wlc::generate_codegen_manifest(
                 stem,
-                wlc::schema_identity(&model),
+                &model,
                 profile_model.as_ref().map(wlc::binding_profile_identity),
                 &manifest_artifacts,
             );

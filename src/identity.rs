@@ -45,7 +45,7 @@ pub fn schema_identity(model: &SemanticModel) -> u64 {
                     hash.string(&field.name);
                     hash.u16(field.number);
                     hash_cardinality(&mut hash, field.cardinality);
-                    hash_type(&mut hash, &field.ty);
+                    hash_type(&mut hash, &field.ty, field.max_length);
                     hash_default(&mut hash, field.default.as_ref());
                 }
             }
@@ -130,7 +130,21 @@ fn hash_cardinality(hash: &mut StableHash, cardinality: Cardinality) {
     }
 }
 
-fn hash_type(hash: &mut StableHash, ty: &ResolvedType) {
+fn hash_type(hash: &mut StableHash, ty: &ResolvedType, max_length: Option<u16>) {
+    match (ty, max_length) {
+        (ResolvedType::Bytes, Some(max_length)) => {
+            hash.u8(18);
+            hash.u16(max_length);
+            return;
+        }
+        (ResolvedType::String, Some(max_length)) => {
+            hash.u8(19);
+            hash.u16(max_length);
+            return;
+        }
+        (_, Some(_)) => unreachable!("only string and bytes fields may carry a length bound"),
+        (_, None) => {}
+    }
     match ty {
         ResolvedType::Bool => hash.u8(1),
         ResolvedType::Bytes => hash.u8(2),

@@ -24,6 +24,8 @@ packed-field   = "packed" packed-type identifier "[" positive-integer "]"
 required-packed-field = "required" "packed" packed-type identifier
                         "[" positive-integer "]" "=" positive-integer ";"
 packed-type    = "float32" | "float64" | "fixed32" | "fixed64"
+type           = identifier | bounded-borrowed-type
+bounded-borrowed-type = ("string" | "bytes") "<" positive-integer ">"
 enum           = "enum" identifier "=" positive-integer
                  "{" enum-value (enum-value | enum-reservation)* "}"
 enum-value     = identifier "=" integer ";"
@@ -43,7 +45,7 @@ message JointControl = 16 {
 Line comments start with `//`. `version` must be first and positive. Message
 and enum identifiers share one global namespace and one nonzero 16-bit ID
 namespace. Field IDs are nonzero 16-bit numbers and unique within a message.
-Packed element counts are in `1..=65535`.
+Packed element counts and borrowed-field length bounds are in `1..=65535`.
 
 The built-in types are `bool`, `bytes`, `string`, `int8`, `uint8`, `int16`,
 `uint16`, `int32`, `uint32`, `int64`, `uint64`, `fixed32`, `fixed64`, `float32`,
@@ -53,6 +55,10 @@ and `double`. Generated headers enforce 4/8-byte IEEE-754 binary32/binary64
 value formats with compile-time assertions. Codecs move floating-point bits
 through `memcpy`; they never use aliasing casts or numeric conversions, so
 signed zero, infinities, and NaN payload bits round trip exactly.
+`string<MAX>` and `bytes<MAX>` retain the same `wl_codec_string_t` and
+`wl_codec_bytes_t` borrowed-view representation as their unbounded forms; MAX
+is the encoded byte length, not a Unicode scalar count, and adds no copy, heap,
+lock, or hidden ownership.
 
 Optional scalar defaults must match and fit their declared type, including the
 exact range of narrow integers. Required fields cannot declare defaults and
@@ -61,7 +67,9 @@ Generated C retains a `has_*` flag for required scalar, nested, and packed
 fields, and `*_clear()` resets it to false. Explicit floating-point
 defaults are intentionally not accepted until the schema has a canonical,
 locale-independent floating literal syntax; absent floats clear to positive
-zero. `bytes`, repeated fields, and packed fields cannot have defaults.
+zero. `bytes`, repeated fields, and packed fields cannot have defaults. A
+bounded string default is checked against MAX at schema-analysis time using its
+UTF-8 byte length.
 
 ## Wire rules
 
@@ -73,6 +81,14 @@ range with `WL_CODEC_ERR_OVERFLOW`; it never truncates into the C storage.
 `fixed32` and `float32` use wire type 5 and four big-endian bytes; `fixed64`
 and `float64` use wire type 1 and eight big-endian bytes. Adding a narrower
 integer type does not alter the bytes of existing integer fields.
+
+Encode and decode enforce every bounded string/bytes length for optional,
+required, and repeated fields. A value longer than MAX returns the stable
+`WL_CODEC_ERR_INVALID_VALUE` status; generated `*_encoded_size()` consequently
+returns `SIZE_MAX`. Strings retain their independent UTF-8 validation and
+return `WL_CODEC_ERR_UTF8` for an in-bound invalid sequence. Decode checks the
+declared bound immediately after the length prefix, before borrowing the input
+view, and never truncates or copies the payload.
 
 A packed declaration is one field occurrence, represented in C by a presence
 flag and an inline array. Plain `packed` is optional; `required packed` uses
@@ -106,13 +122,15 @@ Every generated message defines `<MESSAGE>_HAS_MAX_ENCODED_SIZE`. It is `1`
 when the encoder output is provably bounded from the schema, in which case the
 header also defines `<MESSAGE>_MAX_ENCODED_SIZE` as an exact conservative
 `UINT64_C(...)` upper bound suitable for compile-time scratch sizing. The bound
-includes worst-case tags, integer varints, packed payload lengths, and nested
-message length prefixes. A message containing `string`, `bytes`, or `repeated`
-storage—directly or through a nested message—defines the `HAS` macro as `0` and
-does not define a maximum. Analysis overflow is handled the same way rather
-than emitting a truncated bound. The bound covers the encoded WLC payload, not
-the Wirelink frame envelope; consumers targeting a narrower `size_t` should
-also assert that the generated `UINT64_C` value fits `SIZE_MAX`.
+includes worst-case tags, integer varints, packed payload lengths, bounded
+string/bytes length prefixes, and nested message length prefixes. Bounded
+optional or required string/bytes fields therefore participate in the static
+maximum, including through nested messages. An unbounded `string`/`bytes` field
+or any ordinary `repeated` field—bounded element or not—defines the `HAS` macro
+as `0` and does not define a maximum. Analysis overflow is handled the same way
+rather than emitting a truncated bound. The bound covers the encoded WLC
+payload, not the Wirelink frame envelope; consumers targeting a narrower
+`size_t` should also assert that the generated `UINT64_C` value fits `SIZE_MAX`.
 
 ## Generated typed bindings
 
@@ -201,7 +219,8 @@ the removed number is reserved. Integer width and signedness are part of field
 identity even when two types share wire type 0, so changing between narrow or
 wide integer types is incompatible. A packed field's element type and fixed
 count are both part of its wire identity; changing either is incompatible.
-Existing reservations must remain reserved.
+Adding, removing, increasing, or decreasing a string/bytes length bound is also
+incompatible. Existing reservations must remain reserved.
 
 The library API is `parse_schema()`, `analyze_schema()`,
 `check_compatibility()`, and `generate_c()`.
@@ -272,6 +291,10 @@ releases each valid RX event exactly once. The same wire schema can therefore
 use different host and device profiles without changing message IDs or
 payload bytes.
 
+The manifest's `bounded_fields` array records each bounded field's message and
+field names/IDs, kind, and exact maximum byte length. Bounds also contribute to
+the schema identity; unbounded legacy types retain their existing identity tags.
+
 The generated header also provides a no-heap static assembly path:
 
 ```c
@@ -315,7 +338,7 @@ and `detail_kind`) followed by a tagged union. Inspect
 has no domain payload. A retained-only profile therefore does not carry the
 larger RPC result fields. Generated runtime headers likewise include only the
 LATEST, FIFO, and RPC public headers selected by that profile. The fixed
-`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `6` for this surface; regenerate
+`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `7` for this surface; regenerate
 all runtime sources and update field access together when that value changes.
 
 `tests/runtime_size.rs` keeps deterministic size regression gates. On

@@ -76,6 +76,63 @@ fn compile_writes_named_c_artifacts() {
 }
 
 #[test]
+fn compile_records_bounds_and_validate_rejects_bound_changes() {
+    let directory = tempdir().unwrap();
+    let previous = directory.path().join("previous.wl");
+    let current = directory.path().join("metadata.wl");
+    let incompatible = directory.path().join("incompatible.wl");
+    let output = directory.path().join("generated");
+    fs::write(
+        &previous,
+        "version 1; message Metadata = 7 { optional string<31> name = 1; optional bytes<8> tag = 2; }",
+    )
+    .unwrap();
+    fs::write(
+        &current,
+        "version 2; message Metadata = 7 { optional string<31> name = 1; optional bytes<8> tag = 2; optional uint32 revision = 3; }",
+    )
+    .unwrap();
+    fs::write(
+        &incompatible,
+        "version 2; message Metadata = 7 { optional string<32> name = 1; optional bytes<8> tag = 2; }",
+    )
+    .unwrap();
+
+    Command::cargo_bin("wlc")
+        .unwrap()
+        .args([
+            "compile",
+            current.to_str().unwrap(),
+            "--previous",
+            previous.to_str().unwrap(),
+            "--out-dir",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let manifest = fs::read_to_string(output.join("metadata_manifest.json")).unwrap();
+    let header = fs::read_to_string(output.join("metadata.h")).unwrap();
+    assert!(manifest.contains("\"field\": \"name\""));
+    assert!(manifest.contains("\"kind\": \"string\", \"max_length\": 31"));
+    assert!(manifest.contains("\"kind\": \"bytes\", \"max_length\": 8"));
+    assert!(header.contains("METADATA_HAS_MAX_ENCODED_SIZE 1"));
+
+    let assertion = Command::cargo_bin("wlc")
+        .unwrap()
+        .args([
+            "validate",
+            incompatible.to_str().unwrap(),
+            "--previous",
+            previous.to_str().unwrap(),
+        ])
+        .assert()
+        .failure();
+    assert!(
+        String::from_utf8_lossy(&assertion.get_output().stderr).contains("changed wire identity")
+    );
+}
+
+#[test]
 fn validate_accepts_a_compatible_predecessor() {
     let directory = tempdir().expect("temporary directory");
     let previous = directory.path().join("previous.wl");

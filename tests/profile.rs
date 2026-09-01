@@ -521,3 +521,16 @@ fn schema_identity_distinguishes_narrow_integer_types() {
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(identities.len(), 4);
 }
+
+#[test]
+fn schema_identity_distinguishes_bounded_lengths_without_renumbering_unbounded_types() {
+    let identities = ["string", "string<31>", "string<32>", "bytes<31>"]
+        .into_iter()
+        .map(|ty| {
+            let source = format!("version 1; message Value = 1 {{ optional {ty} field = 1; }}");
+            let model = analyze_schema(&parse_schema(&source).unwrap()).unwrap();
+            schema_identity(&model)
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(identities.len(), 4);
+}
