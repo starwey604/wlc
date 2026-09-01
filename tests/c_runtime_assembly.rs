@@ -126,8 +126,10 @@ int wl_tx_payload_abort(wl_ctx_t *ctx, const wl_tx_payload_claim_t *claim) {
 }
 
 static int32_t execute(void *user_data, const request_t *request,
+                       const wl_rpc_request_identity_t *completion_identity,
                        wl_delivery_t delivery) {
   (void)request;
+  (void)completion_identity;
   (void)delivery;
   return user_data == (void *)(uintptr_t)0x1234U ? 0 : -1;
 }

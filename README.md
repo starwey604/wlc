@@ -338,15 +338,20 @@ and `detail_kind`) followed by a tagged union. Inspect
 has no domain payload. A retained-only profile therefore does not carry the
 larger RPC result fields. Generated runtime headers likewise include only the
 LATEST, FIFO, and RPC public headers selected by that profile. The fixed
-`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `7` for this surface; regenerate
+`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `8` for this surface; regenerate
 all runtime sources and update field access together when that value changes.
+ABI 8 changes RPC server completion from a bare operation ID to a copied
+`wl_rpc_request_identity_t`: generated callback types are named
+`<module>_<service>_rpc_request_handler_fn`, receive `completion_identity`
+before `delivery`, and generated `server_complete`/`server_reject` take that
+identity pointer in place of `operation_id`.
 
 `tests/runtime_size.rs` keeps deterministic size regression gates. On
 `arm-none-eabi-gcc 16.2.0` with Cortex-M4, Thumb, and `-Os`, its representative
 LATEST + FIFO + RPC runtime measures 2847 bytes for dispatch/RPC/consumer code,
 1100 bytes for static assembly helpers, and 3947 bytes combined. The gates are
 2944, 1200, and 4096 bytes respectively. Host layout gates cap a retained-only
-result at 24 bytes and an RPC/combined result at 96 bytes. These are generator
+result at 24 bytes and an RPC/combined result at 104 bytes. These are generator
 regression fixtures, not whole-firmware estimates: generated functions use
 individual sections, so a normal `--gc-sections` link omits APIs that the
 application never references.
@@ -432,6 +437,13 @@ callback/dispatcher returns. Reliable delivery confirms the Wirelink transfer,
 not application acceptance; application rejection is represented by the
 schema status and replay cache.
 
+The callback's completion identity includes the reliable RX event's peer
+session. Copy it before returning when completion is asynchronous, then pass
+the copy to `server_complete` or `server_reject`. This makes equal operation
+IDs from different peer sessions independent while retaining conflict
+detection within one session. `server_response` remains populated only for a
+cached replay or an explicit completion/rejection result.
+
 All generated `now_ms` arguments, `wl_poll()`, RPC poll functions, and deadline
 hints must use one monotonic millisecond clock and epoch. Generated dispatch
 passes time into server duplicate tracking but does not advance client/server
@@ -448,7 +460,7 @@ mechanisms.
 while nonzero abandons it without manufacturing a response.
 `PENDING_DUPLICATE` suppresses another execution. `REPLAY` sends the exact
 cached response bytes, and `CONFLICT` reports reuse of an operation ID for a
-different canonical request. Complete/reject cache before sending, so a core
+different canonical request in the same peer session. Complete/reject cache before sending, so a core
 send failure leaves a replayable response; call the generated cached-retry
 helper with the returned `server_response`. Its `response_data` is borrowed
 only until the next server mutation, poll, or expiry, so copy it before a
