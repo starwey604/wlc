@@ -66,6 +66,7 @@ pub fn generate_c(model: &SemanticModel, module_name: &str) -> Result<GeneratedC
     if !messages.is_empty() {
         header.push('\n');
     }
+    let static_max_encoded_sizes = static_max_encoded_sizes(&messages);
     for symbol in &model.declarations {
         if let Symbol::Enum(enumeration) = symbol {
             let name = type_name(&enumeration.name);
@@ -86,11 +87,19 @@ pub fn generate_c(model: &SemanticModel, module_name: &str) -> Result<GeneratedC
     }
     for message in &messages {
         let name = type_name(&message.name);
+        let macro_name = upper_snake(&message.name);
         header.push_str(&format!(
-            "#define {}_MESSAGE_ID {}U\n",
-            upper_snake(&message.name),
-            message.id
+            "#define {macro_name}_MESSAGE_ID {}U\n",
+            message.id,
         ));
+        match static_max_encoded_sizes.get(&message.id).copied().flatten() {
+            Some(maximum) => header.push_str(&format!(
+                "#define {macro_name}_HAS_MAX_ENCODED_SIZE 1\n#define {macro_name}_MAX_ENCODED_SIZE UINT64_C({maximum})\n"
+            )),
+            None => header.push_str(&format!(
+                "#define {macro_name}_HAS_MAX_ENCODED_SIZE 0\n"
+            )),
+        }
         header.push_str(&format!("void {name}_clear({name}_t *value);\n"));
         header.push_str(&format!(
             "size_t {name}_encoded_size(const {name}_t *value);\n"
@@ -108,6 +117,105 @@ pub fn generate_c(model: &SemanticModel, module_name: &str) -> Result<GeneratedC
         bindings_header,
         bindings_source,
     })
+}
+
+fn static_max_encoded_sizes(messages: &[&MessageSymbol]) -> HashMap<u16, Option<u64>> {
+    let messages_by_id = messages
+        .iter()
+        .map(|message| (message.id, *message))
+        .collect::<HashMap<_, _>>();
+    let mut memo = HashMap::new();
+    let mut visiting = BTreeSet::new();
+    for message in messages {
+        static_max_encoded_size(message, &messages_by_id, &mut memo, &mut visiting);
+    }
+    memo
+}
+
+fn static_max_encoded_size(
+    message: &MessageSymbol,
+    messages: &HashMap<u16, &MessageSymbol>,
+    memo: &mut HashMap<u16, Option<u64>>,
+    visiting: &mut BTreeSet<u16>,
+) -> Option<u64> {
+    if let Some(maximum) = memo.get(&message.id) {
+        return *maximum;
+    }
+    if !visiting.insert(message.id) {
+        memo.insert(message.id, None);
+        return None;
+    }
+    let maximum = (|| {
+        let mut total = 0_u64;
+        for field in &message.fields {
+            let field_maximum = static_max_field_size(field, messages, memo, visiting)?;
+            total = total.checked_add(field_maximum)?;
+        }
+        Some(total)
+    })();
+    visiting.remove(&message.id);
+    memo.insert(message.id, maximum);
+    maximum
+}
+
+fn static_max_field_size(
+    field: &FieldSymbol,
+    messages: &HashMap<u16, &MessageSymbol>,
+    memo: &mut HashMap<u16, Option<u64>>,
+    visiting: &mut BTreeSet<u16>,
+) -> Option<u64> {
+    if matches!(field.cardinality, crate::ast::Cardinality::Repeated) {
+        return None;
+    }
+    let wire = match field.cardinality {
+        crate::ast::Cardinality::Packed(_) => 2,
+        _ => wire_type(&field.ty),
+    };
+    let tag = varint_size((u64::from(field.number) << 3) | wire);
+    let body = match field.cardinality {
+        crate::ast::Cardinality::Packed(count) => {
+            let element_size = match field.ty {
+                ResolvedType::Fixed32 | ResolvedType::Float32 => 4_u64,
+                ResolvedType::Fixed64 | ResolvedType::Float64 => 8_u64,
+                _ => return None,
+            };
+            let payload = u64::from(count).checked_mul(element_size)?;
+            varint_size(payload).checked_add(payload)?
+        }
+        crate::ast::Cardinality::Optional => match &field.ty {
+            ResolvedType::Bool => 1,
+            ResolvedType::Uint32 | ResolvedType::Int32 | ResolvedType::Enum { .. } => 5,
+            ResolvedType::Uint64 | ResolvedType::Int64 => 10,
+            ResolvedType::Fixed32 | ResolvedType::Float32 => 4,
+            ResolvedType::Fixed64 | ResolvedType::Float64 => 8,
+            ResolvedType::Message { id, .. } => {
+                let child = messages.get(id)?;
+                let child_maximum = static_max_encoded_size(child, messages, memo, visiting)?;
+                varint_size(child_maximum).checked_add(child_maximum)?
+            }
+            ResolvedType::Bytes | ResolvedType::String => return None,
+        },
+        crate::ast::Cardinality::Repeated => return None,
+    };
+    tag.checked_add(body)
+}
+
+fn wire_type(ty: &ResolvedType) -> u64 {
+    match ty {
+        ResolvedType::Fixed64 | ResolvedType::Float64 => 1,
+        ResolvedType::Bytes | ResolvedType::String | ResolvedType::Message { .. } => 2,
+        ResolvedType::Fixed32 | ResolvedType::Float32 => 5,
+        _ => 0,
+    }
+}
+
+fn varint_size(mut value: u64) -> u64 {
+    let mut size = 1;
+    while value >= 128 {
+        value >>= 7;
+        size += 1;
+    }
+    size
 }
 
 fn emit_message_definition(output: &mut String, message: &MessageSymbol) {
@@ -932,6 +1040,47 @@ fn validate_names(model: &SemanticModel) -> Result<(), CodegenError> {
             return Err(CodegenError(format!(
                 "declarations collide as C identifier `{name}`"
             )));
+        }
+    }
+    let messages = model
+        .declarations
+        .iter()
+        .filter_map(|symbol| match symbol {
+            Symbol::Message(message) => Some(message),
+            Symbol::Enum(_) => None,
+        })
+        .collect::<Vec<_>>();
+    let maxima = static_max_encoded_sizes(&messages);
+    let mut macros = BTreeSet::new();
+    for symbol in &model.declarations {
+        match symbol {
+            Symbol::Message(message) => {
+                let prefix = upper_snake(&message.name);
+                let mut generated = vec![
+                    format!("{prefix}_MESSAGE_ID"),
+                    format!("{prefix}_HAS_MAX_ENCODED_SIZE"),
+                ];
+                if maxima.get(&message.id).copied().flatten().is_some() {
+                    generated.push(format!("{prefix}_MAX_ENCODED_SIZE"));
+                }
+                for name in generated {
+                    if !macros.insert(name.clone()) {
+                        return Err(CodegenError(format!(
+                            "generated macros collide as C identifier `{name}`"
+                        )));
+                    }
+                }
+            }
+            Symbol::Enum(enumeration) => {
+                for value in &enumeration.values {
+                    let name = upper_snake(&value.name);
+                    if !macros.insert(name.clone()) {
+                        return Err(CodegenError(format!(
+                            "generated macros collide as C identifier `{name}`"
+                        )));
+                    }
+                }
+            }
         }
     }
     Ok(())

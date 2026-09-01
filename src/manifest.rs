@@ -3,7 +3,7 @@
 use std::fmt::Write;
 
 /// Semantic revision of generated C APIs and layouts.
-pub const CODEGEN_ABI_VERSION: u32 = 3;
+pub const CODEGEN_ABI_VERSION: u32 = 4;
 /// Stable JSON manifest format identifier.
 pub const CODEGEN_MANIFEST_FORMAT: &str = "wirelink-codegen-manifest-v1";
 /// Diagnostic, non-cryptographic artifact digest algorithm.

@@ -82,6 +82,18 @@ bytes.
 Ordinary `repeated` fields keep their previous representation: a caller-owned
 pointer/count/capacity in C and one complete tag/value pair per element.
 
+Every generated message defines `<MESSAGE>_HAS_MAX_ENCODED_SIZE`. It is `1`
+when the encoder output is provably bounded from the schema, in which case the
+header also defines `<MESSAGE>_MAX_ENCODED_SIZE` as an exact conservative
+`UINT64_C(...)` upper bound suitable for compile-time scratch sizing. The bound
+includes worst-case tags, integer varints, packed payload lengths, and nested
+message length prefixes. A message containing `string`, `bytes`, or `repeated`
+storage—directly or through a nested message—defines the `HAS` macro as `0` and
+does not define a maximum. Analysis overflow is handled the same way rather
+than emitting a truncated bound. The bound covers the encoded WLC payload, not
+the Wirelink frame envelope; consumers targeting a narrower `size_t` should
+also assert that the generated `UINT64_C` value fits `SIZE_MAX`.
+
 ## Generated typed bindings
 
 Compilation produces deterministic `<module>.h/.c`,
@@ -279,7 +291,7 @@ and `detail_kind`) followed by a tagged union. Inspect
 has no domain payload. A retained-only profile therefore does not carry the
 larger RPC result fields. Generated runtime headers likewise include only the
 LATEST, FIFO, and RPC public headers selected by that profile. The fixed
-`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `3` for this surface; regenerate
+`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `4` for this surface; regenerate
 all runtime sources and update field access together when that value changes.
 
 `tests/runtime_size.rs` keeps deterministic size regression gates. On
