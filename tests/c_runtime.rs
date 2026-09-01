@@ -155,8 +155,8 @@ int main(void) {
   };
   const wl_fifo_storage_t fifo_storage = { fifo_slots, sizeof(fifo_slots) };
   typed_runtime_runtime_t runtime = {0};
-  wl_latest_view_t latest_view = {0};
-  wl_fifo_view_t fifo_view = {0};
+  typed_runtime_latest_value_latest_view_t latest_view = {0};
+  typed_runtime_alarm_fifo_view_t fifo_view = {0};
   wl_event_t event = {0};
   typed_runtime_runtime_result_t result;
   const uint8_t malformed[] = {0x80U};
@@ -167,9 +167,14 @@ int main(void) {
   runtime.alarm_fifo = &fifo;
 
   if (dispatch_latest(&ctx, &runtime, 7U) != 0 || releases != 1U) return 2;
-  if (wl_latest_read_acquire(&latest, &latest_view) != WL_OK) return 3;
-  if (((const latest_value_t *)latest_view.value)->sequence != 7U) return 4;
-  if (wl_latest_read_release(&latest, &latest_view) != WL_OK) return 5;
+  if (typed_runtime_latest_value_latest_acquire(&runtime, &latest_view) != WL_OK ||
+      latest_view.value == NULL || latest_view.value->sequence != 7U ||
+      latest_view.generation != 1U) return 3;
+  if (typed_runtime_latest_value_latest_release(&runtime, &latest_view) != WL_OK ||
+      latest_view.value != NULL || latest_view.generation != 0U ||
+      typed_runtime_latest_value_latest_release(&runtime, &latest_view) !=
+          WL_ERR_INVALID_STATE)
+    return 4;
 
   event.type = WL_EVT_UNRELIABLE_RX;
   event.message_id = LATEST_VALUE_MESSAGE_ID;
@@ -190,12 +195,15 @@ int main(void) {
       dispatch_alarm(&ctx, &runtime, 11U) != 0 || releases != 6U) return 9;
   if (dispatch_alarm(&ctx, &runtime, 12U) != WL_ERR_QUEUE_FULL ||
       releases != 7U) return 10;
-  if (wl_fifo_read_acquire(&fifo, &fifo_view) != WL_OK ||
-      ((const alarm_t *)fifo_view.value)->code != 10U ||
-      wl_fifo_read_release(&fifo, &fifo_view) != WL_OK) return 11;
-  if (wl_fifo_read_acquire(&fifo, &fifo_view) != WL_OK ||
-      ((const alarm_t *)fifo_view.value)->code != 11U ||
-      wl_fifo_read_release(&fifo, &fifo_view) != WL_OK) return 12;
+  if (typed_runtime_alarm_fifo_acquire(&runtime, &fifo_view) != WL_OK ||
+      fifo_view.value == NULL || fifo_view.value->code != 10U ||
+      typed_runtime_alarm_fifo_release(&runtime, &fifo_view) != WL_OK ||
+      fifo_view.value != NULL) return 11;
+  if (typed_runtime_alarm_fifo_acquire(&runtime, &fifo_view) != WL_OK ||
+      fifo_view.value == NULL || fifo_view.value->code != 11U ||
+      typed_runtime_alarm_fifo_release(&runtime, &fifo_view) != WL_OK ||
+      typed_runtime_alarm_fifo_acquire(&runtime, &fifo_view) != WL_ERR_NO_DATA)
+    return 12;
 
   event.type = WL_EVT_UNRELIABLE_RX;
   event.message_id = 999U;

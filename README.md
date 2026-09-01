@@ -279,14 +279,14 @@ and `detail_kind`) followed by a tagged union. Inspect
 has no domain payload. A retained-only profile therefore does not carry the
 larger RPC result fields. Generated runtime headers likewise include only the
 LATEST, FIFO, and RPC public headers selected by that profile. The fixed
-`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `2` for this layout; regenerate
+`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `3` for this surface; regenerate
 all runtime sources and update field access together when that value changes.
 
 `tests/runtime_size.rs` keeps deterministic size regression gates. On
 `arm-none-eabi-gcc 16.2.0` with Cortex-M4, Thumb, and `-Os`, its representative
-LATEST + FIFO + RPC runtime measures 1905 bytes for dispatch/RPC hot-path code,
-1100 bytes for static assembly helpers, and 3005 bytes combined. The gates are
-2048, 1200, and 3200 bytes respectively. Host layout gates cap a retained-only
+LATEST + FIFO + RPC runtime measures 2847 bytes for dispatch/RPC/consumer code,
+1100 bytes for static assembly helpers, and 3947 bytes combined. The gates are
+2944, 1200, and 4096 bytes respectively. Host layout gates cap a retained-only
 result at 24 bytes and an RPC/combined result at 96 bytes. These are generator
 regression fixtures, not whole-firmware estimates: generated functions use
 individual sections, so a normal `--gc-sections` link omits APIs that the
@@ -310,6 +310,13 @@ including through nested messages. RPC operation IDs must map to optional
 an enum status domain must declare numeric value zero for success. Request and
 response delivery are explicit and may be `reliable` or `unreliable`.
 
+Each retained route emits a typed acquire/release pair. The acquired view owns
+an explicit core lease and exposes `const <message>_t *value`; LATEST views also
+expose the observed generation. The value remains borrowed until the matching
+generated release succeeds. A successful release clears the view so accidental
+reuse fails locally; callers must still serialize access according to the
+underlying LATEST/FIFO contract.
+
 `delivery = reliable` selects and validates Wirelink reliable DATA only. The
 peer ACK is scheduled after admission to RX event storage and before typed
 decode or application retention. FIFO full, LATEST coalescing or claim failure,
@@ -322,9 +329,13 @@ functions, a request callback route, and typed server complete/reject/retry
 functions. Client start allocates an operation ID and writes it into the mutable
 request before encoding. The returned result always retains that ID; a failed
 send leaves a terminal client slot that the application can inspect and
-release. Response dispatch validates the mapped ID and status, copies the raw
-payload into `wl_rpc_client_t` before releasing the RX event, and leaves typed
-response scratch under caller ownership.
+release. Each service emits a nonblocking client-inspect helper that returns
+generic operation metadata, a typed response decoder, and a service-checked
+release helper. Borrowed `bytes`/`string` response fields point into client
+response storage and remain valid only until that release. Response dispatch
+validates the mapped ID and status, copies the raw payload into
+`wl_rpc_client_t` before releasing the RX event, and leaves typed response
+scratch under caller ownership.
 
 The static instance owns the top-level request/response scratch objects and
 the storage arena owns canonical-encode scratch. With manual runtime assembly,
@@ -339,8 +350,8 @@ classification. Scratch client sends may reuse their encode buffer after
 return. Direct client start encodes into a core claim and is therefore
 available only when the selected Wirelink envelope supports direct TX. Both
 start forms mutate the request's operation ID. If encoding or sending then
-fails, the allocated client slot is terminal but still must be
-inspected/released with `wl_rpc_client_release()`.
+fails, the allocated client slot is terminal but still must be inspected and
+released.
 
 Response dispatch copies the original encoded bytes into the client's fixed
 response storage before releasing RX. That copy remains valid until client
@@ -364,10 +375,14 @@ schema status and replay cache.
 All generated `now_ms` arguments, `wl_poll()`, RPC poll functions, and deadline
 hints must use one monotonic millisecond clock and epoch. Generated dispatch
 passes time into server duplicate tracking but does not advance client/server
-expiry; the application must call `wl_rpc_client_poll()` and
-`wl_rpc_server_poll()` explicitly. Generated clients do not automatically
-repeat an end-to-end RPC after timeout: link ARQ, the client deadline, and the
-server replay cache are separate mechanisms.
+expiry. RPC profiles emit a runtime poll wrapper that advances each enabled
+role and reports per-call client timeout, server pending-expiry, and cache-expiry
+counts. A side-effect-free deadline-hint wrapper returns the nearest enabled
+role deadline (`0` means due and `WL_RPC_NO_DEADLINE_MS` means none), allowing a
+host executor or event loop to choose its next wakeup without a generated
+thread. Generated clients do not automatically repeat an end-to-end RPC after
+timeout: link ARQ, the client deadline, and the server replay cache are separate
+mechanisms.
 
 `NEW` calls the request handler; zero accepts and leaves the operation pending,
 while nonzero abandons it without manufacturing a response.

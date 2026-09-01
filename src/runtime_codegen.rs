@@ -15,7 +15,8 @@ use crate::{
     manifest::CODEGEN_ABI_VERSION,
     profile::BINDING_PROFILE_VERSION,
     profile_semantic::{
-        BindingProfileModel, DeliveryPolicy, RetainedRouteKind, RpcService, RpcStatusDomain,
+        BindingProfileModel, DeliveryPolicy, RetainedRoute, RetainedRouteKind, RpcService,
+        RpcStatusDomain,
     },
     semantic::{MessageSymbol, ResolvedType, SemanticModel, Symbol},
 };
@@ -108,9 +109,34 @@ fn validate_runtime_names(
         runtime_names.insert(format!("{module}_runtime_retained_detail_t"));
     }
     if !profile.rpc_services.is_empty() {
-        runtime_names.insert(format!("{module}_runtime_rpc_detail_t"));
-        runtime_names.insert(format!("{module}_rpc_request_fingerprint"));
-        runtime_names.insert(format!("{prefix}_RPC_REQUEST_FINGERPRINT_ALGORITHM"));
+        for symbol in [
+            format!("{module}_runtime_rpc_detail_t"),
+            format!("{module}_runtime_poll_result_t"),
+            format!("{module}_runtime_poll"),
+            format!("{module}_runtime_get_deadline_hint"),
+            format!("{module}_rpc_request_fingerprint"),
+            format!("{prefix}_RPC_REQUEST_FINGERPRINT_ALGORITHM"),
+        ] {
+            runtime_names.insert(symbol);
+        }
+    }
+    for route in &profile.retained_routes {
+        let message = type_name(&route.message_name);
+        let kind = match route.kind {
+            RetainedRouteKind::Latest => "latest",
+            RetainedRouteKind::Fifo => "fifo",
+        };
+        for symbol in [
+            format!("{module}_{message}_{kind}_view_t"),
+            format!("{module}_{message}_{kind}_acquire"),
+            format!("{module}_{message}_{kind}_release"),
+        ] {
+            if !runtime_names.insert(symbol.clone()) {
+                return Err(RuntimeCodegenError(format!(
+                    "generated runtime symbols collide as C identifier `{symbol}`"
+                )));
+            }
+        }
     }
     for suffix in [
         "OK",
@@ -147,6 +173,9 @@ fn validate_runtime_names(
             format!("{module}_{name}_client_start_scratch"),
             format!("{module}_{name}_client_start_direct"),
             format!("{module}_{name}_client_finish_start"),
+            format!("{module}_{name}_client_inspect"),
+            format!("{module}_{name}_client_decode"),
+            format!("{module}_{name}_client_release"),
             format!("{module}_{name}_server_complete"),
             format!("{module}_{name}_server_reject"),
             format!("{module}_{name}_server_retry_cached"),
@@ -484,8 +513,18 @@ fn emit_header(schema: &SemanticModel, profile: &BindingProfileModel, module: &s
         "}} {module}_runtime_detail_t;\n\n/* Inspect detail only through the member selected by detail_kind. domain\n * classifies the outcome; zero-initialized unused detail fields retain their\n * corresponding success values. */\ntypedef struct {{\n  {module}_runtime_domain_t domain;\n  wl_event_type_t event_type;\n  uint16_t message_id;\n  {module}_runtime_detail_kind_t detail_kind;\n  uint8_t _reserved;\n  {module}_runtime_detail_t detail;\n}} {module}_runtime_result_t;\n\n"
     )
     .unwrap();
+    for route in &profile.retained_routes {
+        emit_retained_header_type(&mut output, module, route);
+    }
     for service in &profile.rpc_services {
         emit_rpc_header_types(&mut output, module, service);
+    }
+    if !profile.rpc_services.is_empty() {
+        write!(
+            output,
+            "typedef struct {{\n  uint16_t client_timed_out;\n  uint16_t server_pending_expired;\n  uint16_t server_cache_expired;\n}} {module}_runtime_poll_result_t;\n\n"
+        )
+        .unwrap();
     }
     output.push_str("typedef struct {\n  uint8_t _reserved;\n");
     for route in &profile.retained_routes {
@@ -520,11 +559,54 @@ fn emit_header(schema: &SemanticModel, profile: &BindingProfileModel, module: &s
         "{module}_runtime_result_t {module}_runtime_dispatch_event(wl_ctx_t *ctx, const wl_event_t *event, {module}_runtime_t *runtime, wl_time_ms_t now_ms);\n"
     )
     .unwrap();
+    for route in &profile.retained_routes {
+        emit_retained_header_functions(&mut output, module, route);
+    }
+    if !profile.rpc_services.is_empty() {
+        write!(
+            output,
+            "/* Advance configured RPC deadlines without performing I/O. Disabled client\n * or server roles are skipped. */\nwl_rpc_err_t {module}_runtime_poll({module}_runtime_t *runtime, wl_time_ms_t now_ms, {module}_runtime_poll_result_t *out_result);\n/* Side-effect free. Zero is due; WL_RPC_NO_DEADLINE_MS means no deadline. */\nwl_rpc_err_t {module}_runtime_get_deadline_hint(const {module}_runtime_t *runtime, wl_time_ms_t now_ms, wl_rpc_deadline_hint_t *out_hint);\n\n"
+        )
+        .unwrap();
+    }
     for service in &profile.rpc_services {
         emit_rpc_header_functions(&mut output, module, service);
     }
     output.push_str("#ifdef __cplusplus\n}\n#endif\n\n#endif\n");
     output
+}
+
+fn emit_retained_header_type(output: &mut String, module: &str, route: &RetainedRoute) {
+    let message = type_name(&route.message_name);
+    match route.kind {
+        RetainedRouteKind::Latest => {
+            write!(
+                output,
+                "/* The typed value remains borrowed until the matching release. */\ntypedef struct {{\n  const {message}_t *value;\n  uint32_t generation;\n  wl_latest_view_t lease;\n}} {module}_{message}_latest_view_t;\n\n"
+            )
+            .unwrap();
+        }
+        RetainedRouteKind::Fifo => {
+            write!(
+                output,
+                "/* The typed value remains borrowed until the matching release. */\ntypedef struct {{\n  const {message}_t *value;\n  wl_fifo_view_t lease;\n}} {module}_{message}_fifo_view_t;\n\n"
+            )
+            .unwrap();
+        }
+    }
+}
+
+fn emit_retained_header_functions(output: &mut String, module: &str, route: &RetainedRoute) {
+    let message = type_name(&route.message_name);
+    let kind = match route.kind {
+        RetainedRouteKind::Latest => "latest",
+        RetainedRouteKind::Fifo => "fifo",
+    };
+    write!(
+        output,
+        "int {module}_{message}_{kind}_acquire({module}_runtime_t *runtime, {module}_{message}_{kind}_view_t *out_view);\nint {module}_{message}_{kind}_release({module}_runtime_t *runtime, {module}_{message}_{kind}_view_t *view);\n\n"
+    )
+    .unwrap();
 }
 
 fn emit_assembly_header(output: &mut String, profile: &BindingProfileModel, module: &str) {
@@ -624,7 +706,7 @@ fn emit_rpc_header_functions(output: &mut String, module: &str, service: &RpcSer
     let response = type_name(&service.response_name);
     write!(
         output,
-        "/* Client start writes the allocated operation ID into request in place. */\n{module}_runtime_result_t {module}_{service_name}_client_start_scratch(wl_ctx_t *ctx, {module}_runtime_t *runtime, {request}_t *request, uint32_t timeout_ms, wl_time_ms_t now_ms, {module}_encode_scratch_t scratch);\n{module}_runtime_result_t {module}_{service_name}_client_start_direct(wl_ctx_t *ctx, {module}_runtime_t *runtime, {request}_t *request, uint32_t timeout_ms, wl_time_ms_t now_ms);\n\n/* Completion writes operation ID and status into response in place, encodes\n * once, caches those bytes, and sends the exact cached byte sequence. */\n{module}_runtime_result_t {module}_{service_name}_server_complete(wl_ctx_t *ctx, {module}_runtime_t *runtime, uint32_t operation_id, {response}_t *response, {module}_encode_scratch_t scratch, wl_time_ms_t now_ms);\n{module}_runtime_result_t {module}_{service_name}_server_reject(wl_ctx_t *ctx, {module}_runtime_t *runtime, uint32_t operation_id, int32_t application_status, {response}_t *response, {module}_encode_scratch_t scratch, wl_time_ms_t now_ms);\n/* cached.response_data remains owned by wl_rpc_server_t; send or copy it before\n * the next server mutation, poll, or expiry. */\n{module}_runtime_result_t {module}_{service_name}_server_retry_cached(wl_ctx_t *ctx, const wl_rpc_server_response_t *cached);\n\n"
+        "/* Client start writes the allocated operation ID into request in place. */\n{module}_runtime_result_t {module}_{service_name}_client_start_scratch(wl_ctx_t *ctx, {module}_runtime_t *runtime, {request}_t *request, uint32_t timeout_ms, wl_time_ms_t now_ms, {module}_encode_scratch_t scratch);\n{module}_runtime_result_t {module}_{service_name}_client_start_direct(wl_ctx_t *ctx, {module}_runtime_t *runtime, {request}_t *request, uint32_t timeout_ms, wl_time_ms_t now_ms);\n/* Nonblocking inspection returns generic metadata for this service. */\nwl_rpc_err_t {module}_{service_name}_client_inspect(const {module}_runtime_t *runtime, uint32_t operation_id, wl_rpc_client_result_t *out_client);\n/* Decode a retained response previously returned by client_inspect(). Borrowed\n * response fields remain valid only until client_release(). */\n{module}_runtime_result_t {module}_{service_name}_client_decode(const wl_rpc_client_result_t *client, {response}_t *response);\nwl_rpc_err_t {module}_{service_name}_client_release({module}_runtime_t *runtime, uint32_t operation_id);\n\n/* Completion writes operation ID and status into response in place, encodes\n * once, caches those bytes, and sends the exact cached byte sequence. */\n{module}_runtime_result_t {module}_{service_name}_server_complete(wl_ctx_t *ctx, {module}_runtime_t *runtime, uint32_t operation_id, {response}_t *response, {module}_encode_scratch_t scratch, wl_time_ms_t now_ms);\n{module}_runtime_result_t {module}_{service_name}_server_reject(wl_ctx_t *ctx, {module}_runtime_t *runtime, uint32_t operation_id, int32_t application_status, {response}_t *response, {module}_encode_scratch_t scratch, wl_time_ms_t now_ms);\n/* cached.response_data remains owned by wl_rpc_server_t; send or copy it before\n * the next server mutation, poll, or expiry. */\n{module}_runtime_result_t {module}_{service_name}_server_retry_cached(wl_ctx_t *ctx, const wl_rpc_server_response_t *cached);\n\n"
     )
     .unwrap();
 }
@@ -764,6 +846,9 @@ fn emit_source(profile: &BindingProfileModel, module: &str) -> String {
         .unwrap();
     }
     emit_assembly_source(&mut output, profile, module);
+    if !profile.rpc_services.is_empty() {
+        emit_rpc_runtime_progress_implementation(&mut output, module);
+    }
     write!(
         output,
         "{module}_runtime_result_t {module}_runtime_dispatch_event(wl_ctx_t *ctx, const wl_event_t *event, {module}_runtime_t *runtime, wl_time_ms_t now_ms) {{\n  {module}_runtime_result_t result = {module}_runtime_result(event);\n  if (event == NULL) return result;\n"
@@ -796,11 +881,43 @@ fn emit_source(profile: &BindingProfileModel, module: &str) -> String {
         "    default:\n      result.domain = {prefix}_RUNTIME_UNKNOWN_MESSAGE;\n      break;\n  }}\n\nrelease_event:\n  wl_event_release(ctx, event);\n  return result;\n}}\n"
     )
     .unwrap();
+    for route in &profile.retained_routes {
+        output.push('\n');
+        emit_retained_implementation(&mut output, module, route);
+    }
     for service in &profile.rpc_services {
         output.push('\n');
         emit_rpc_implementation(&mut output, module, &prefix, service);
     }
     output
+}
+
+fn emit_rpc_runtime_progress_implementation(output: &mut String, module: &str) {
+    write!(
+        output,
+        "wl_rpc_err_t {module}_runtime_poll({module}_runtime_t *runtime, wl_time_ms_t now_ms, {module}_runtime_poll_result_t *out_result) {{\n  wl_rpc_err_t result;\n  wl_rpc_server_expiry_t server_expiry = {{0}};\n  if (out_result != NULL) memset(out_result, 0, sizeof(*out_result));\n  if (runtime == NULL || out_result == NULL) return WL_RPC_ERR_INVALID_ARG;\n  if (runtime->rpc_client != NULL) {{\n    result = wl_rpc_client_poll(runtime->rpc_client, now_ms, &out_result->client_timed_out);\n    if (result != WL_RPC_OK) return result;\n  }}\n  if (runtime->rpc_server != NULL) {{\n    result = wl_rpc_server_poll(runtime->rpc_server, now_ms, &server_expiry);\n    if (result != WL_RPC_OK) return result;\n    out_result->server_pending_expired = server_expiry.pending_expired;\n    out_result->server_cache_expired = server_expiry.cache_expired;\n  }}\n  return WL_RPC_OK;\n}}\n\nwl_rpc_err_t {module}_runtime_get_deadline_hint(const {module}_runtime_t *runtime, wl_time_ms_t now_ms, wl_rpc_deadline_hint_t *out_hint) {{\n  wl_rpc_deadline_hint_t component = {{WL_RPC_NO_DEADLINE_MS}};\n  wl_rpc_err_t result;\n  uint32_t nearest = WL_RPC_NO_DEADLINE_MS;\n  if (out_hint != NULL) out_hint->next_deadline_ms = WL_RPC_NO_DEADLINE_MS;\n  if (runtime == NULL || out_hint == NULL) return WL_RPC_ERR_INVALID_ARG;\n  if (runtime->rpc_client != NULL) {{\n    result = wl_rpc_client_get_deadline_hint(runtime->rpc_client, now_ms, &component);\n    if (result != WL_RPC_OK) return result;\n    if (component.next_deadline_ms < nearest) nearest = component.next_deadline_ms;\n  }}\n  if (runtime->rpc_server != NULL) {{\n    result = wl_rpc_server_get_deadline_hint(runtime->rpc_server, now_ms, &component);\n    if (result != WL_RPC_OK) return result;\n    if (component.next_deadline_ms < nearest) nearest = component.next_deadline_ms;\n  }}\n  out_hint->next_deadline_ms = nearest;\n  return WL_RPC_OK;\n}}\n\n"
+    )
+    .unwrap();
+}
+
+fn emit_retained_implementation(output: &mut String, module: &str, route: &RetainedRoute) {
+    let message = type_name(&route.message_name);
+    match route.kind {
+        RetainedRouteKind::Latest => {
+            write!(
+                output,
+                "int {module}_{message}_latest_acquire({module}_runtime_t *runtime, {module}_{message}_latest_view_t *out_view) {{\n  wl_latest_view_t lease = {{0}};\n  int result;\n  if (out_view != NULL) memset(out_view, 0, sizeof(*out_view));\n  if (runtime == NULL || out_view == NULL) return WL_ERR_INVALID_ARG;\n  if (runtime->{message}_latest == NULL) return WL_ERR_NOT_INITIALIZED;\n  result = wl_latest_read_acquire(runtime->{message}_latest, &lease);\n  if (result != WL_OK) return result;\n  if (lease.value == NULL || lease.value_size < sizeof({message}_t) || ((uintptr_t)lease.value % _Alignof({message}_t)) != 0U) {{\n    int failure = lease.value_size < sizeof({message}_t) ? WL_ERR_BUF_TOO_SMALL : WL_ERR_INVALID_STATE;\n    int release_result = wl_latest_read_release(runtime->{message}_latest, &lease);\n    if (release_result != WL_OK) return release_result;\n    return failure;\n  }}\n  out_view->value = (const {message}_t *)lease.value;\n  out_view->generation = lease.generation;\n  out_view->lease = lease;\n  return WL_OK;\n}}\n\nint {module}_{message}_latest_release({module}_runtime_t *runtime, {module}_{message}_latest_view_t *view) {{\n  int result;\n  if (runtime == NULL || view == NULL) return WL_ERR_INVALID_ARG;\n  if (runtime->{message}_latest == NULL) return WL_ERR_NOT_INITIALIZED;\n  if ((const void *)view->value != view->lease.value || view->generation != view->lease.generation) return WL_ERR_INVALID_STATE;\n  result = wl_latest_read_release(runtime->{message}_latest, &view->lease);\n  if (result == WL_OK) memset(view, 0, sizeof(*view));\n  return result;\n}}\n"
+            )
+            .unwrap();
+        }
+        RetainedRouteKind::Fifo => {
+            write!(
+                output,
+                "int {module}_{message}_fifo_acquire({module}_runtime_t *runtime, {module}_{message}_fifo_view_t *out_view) {{\n  wl_fifo_view_t lease = {{0}};\n  int result;\n  if (out_view != NULL) memset(out_view, 0, sizeof(*out_view));\n  if (runtime == NULL || out_view == NULL) return WL_ERR_INVALID_ARG;\n  if (runtime->{message}_fifo == NULL) return WL_ERR_NOT_INITIALIZED;\n  result = wl_fifo_read_acquire(runtime->{message}_fifo, &lease);\n  if (result != WL_OK) return result;\n  if (lease.value == NULL || lease.value_size < sizeof({message}_t) || ((uintptr_t)lease.value % _Alignof({message}_t)) != 0U) {{\n    int failure = lease.value_size < sizeof({message}_t) ? WL_ERR_BUF_TOO_SMALL : WL_ERR_INVALID_STATE;\n    int release_result = wl_fifo_read_release(runtime->{message}_fifo, &lease);\n    if (release_result != WL_OK) return release_result;\n    return failure;\n  }}\n  out_view->value = (const {message}_t *)lease.value;\n  out_view->lease = lease;\n  return WL_OK;\n}}\n\nint {module}_{message}_fifo_release({module}_runtime_t *runtime, {module}_{message}_fifo_view_t *view) {{\n  int result;\n  if (runtime == NULL || view == NULL) return WL_ERR_INVALID_ARG;\n  if (runtime->{message}_fifo == NULL) return WL_ERR_NOT_INITIALIZED;\n  if ((const void *)view->value != view->lease.value) return WL_ERR_INVALID_STATE;\n  result = wl_fifo_read_release(runtime->{message}_fifo, &view->lease);\n  if (result == WL_OK) memset(view, 0, sizeof(*view));\n  return result;\n}}\n"
+            )
+            .unwrap();
+        }
+    }
 }
 
 fn delivery_event(delivery: DeliveryPolicy) -> &'static str {
@@ -869,8 +986,11 @@ fn emit_rpc_client_implementation(
     let service_name = c_identifier(&service.name);
     let request = type_name(&service.request_name);
     let request_macro = upper_snake(&service.request_name);
+    let response = type_name(&service.response_name);
     let response_macro = upper_snake(&service.response_name);
     let operation_field = c_identifier(&service.request_operation_id.name);
+    let response_operation_field = c_identifier(&service.response_operation_id.name);
+    let status_field = c_identifier(&service.response_status.name);
     let delivery = delivery_value(service.request_delivery);
     let send_suffix = delivery_suffix(service.request_delivery);
     let transition = match service.request_delivery {
@@ -884,6 +1004,11 @@ fn emit_rpc_client_implementation(
     write!(
         output,
         "static {module}_runtime_result_t {module}_{service_name}_client_finish_start({module}_runtime_t *runtime, uint32_t operation_id, {module}_send_result_t sent) {{\n  {module}_runtime_result_t result = {module}_runtime_result(NULL);\n  result.message_id = {request_macro}_MESSAGE_ID;\n  result.detail_kind = {prefix}_RUNTIME_DETAIL_RPC;\n  result.detail.rpc.operation_id = operation_id;\n  result.detail.rpc.codec_status = sent.codec_status;\n  result.detail.rpc.core_result = sent.core_result;\n  result.detail.rpc.abort_result = sent.abort_result;\n  result.detail.rpc.handle = sent.handle;\n  result.detail.rpc.payload_length = sent.payload_length;\n  if (sent.domain == {prefix}_SEND_CODEC_ERROR) {{\n    result.detail.rpc.rpc_result = wl_rpc_client_link_failed(runtime->rpc_client, operation_id, WL_ERR_CORRUPT_PAYLOAD);\n    result.domain = {prefix}_RUNTIME_CODEC_ERROR;\n    return result;\n  }}\n  if (sent.domain == {prefix}_SEND_CORE_ERROR) {{\n    result.detail.rpc.rpc_result = wl_rpc_client_link_failed(runtime->rpc_client, operation_id, sent.core_result);\n    result.domain = {prefix}_RUNTIME_CORE_ERROR;\n    return result;\n  }}\n  result.detail.rpc.rpc_result = {transition};\n  result.domain = result.detail.rpc.rpc_result == WL_RPC_OK ? {prefix}_RUNTIME_OK : {prefix}_RUNTIME_RPC_ERROR;\n  return result;\n}}\n\n{module}_runtime_result_t {module}_{service_name}_client_start_scratch(wl_ctx_t *ctx, {module}_runtime_t *runtime, {request}_t *request, uint32_t timeout_ms, wl_time_ms_t now_ms, {module}_encode_scratch_t scratch) {{\n  {module}_runtime_result_t result = {module}_runtime_result(NULL);\n  {module}_send_result_t sent;\n  uint32_t operation_id = 0U;\n  result.message_id = {request_macro}_MESSAGE_ID;\n  result.detail_kind = {prefix}_RUNTIME_DETAIL_RPC;\n  if (ctx == NULL || runtime == NULL || runtime->rpc_client == NULL || request == NULL) return result;\n  result.detail.rpc.rpc_result = wl_rpc_client_begin(runtime->rpc_client, {request_macro}_MESSAGE_ID, {response_macro}_MESSAGE_ID, timeout_ms, now_ms, &operation_id);\n  result.detail.rpc.operation_id = operation_id;\n  if (result.detail.rpc.rpc_result != WL_RPC_OK) {{\n    result.domain = {prefix}_RUNTIME_RPC_ERROR;\n    return result;\n  }}\n  request->has_{operation_field} = true;\n  request->{operation_field} = operation_id;\n  sent = {module}_{request}_send_{send_suffix}(ctx, request, scratch);\n  return {module}_{service_name}_client_finish_start(runtime, operation_id, sent);\n}}\n\n{module}_runtime_result_t {module}_{service_name}_client_start_direct(wl_ctx_t *ctx, {module}_runtime_t *runtime, {request}_t *request, uint32_t timeout_ms, wl_time_ms_t now_ms) {{\n  {module}_runtime_result_t result = {module}_runtime_result(NULL);\n  {module}_send_result_t sent;\n  uint32_t operation_id = 0U;\n  result.message_id = {request_macro}_MESSAGE_ID;\n  result.detail_kind = {prefix}_RUNTIME_DETAIL_RPC;\n  if (ctx == NULL || runtime == NULL || runtime->rpc_client == NULL || request == NULL) return result;\n  result.detail.rpc.rpc_result = wl_rpc_client_begin(runtime->rpc_client, {request_macro}_MESSAGE_ID, {response_macro}_MESSAGE_ID, timeout_ms, now_ms, &operation_id);\n  result.detail.rpc.operation_id = operation_id;\n  if (result.detail.rpc.rpc_result != WL_RPC_OK) {{\n    result.domain = {prefix}_RUNTIME_RPC_ERROR;\n    return result;\n  }}\n  request->has_{operation_field} = true;\n  request->{operation_field} = operation_id;\n  sent = {module}_{request}_send_direct(ctx, request, {delivery});\n  return {module}_{service_name}_client_finish_start(runtime, operation_id, sent);\n}}\n\n"
+    )
+    .unwrap();
+    write!(
+        output,
+        "wl_rpc_err_t {module}_{service_name}_client_inspect(const {module}_runtime_t *runtime, uint32_t operation_id, wl_rpc_client_result_t *out_client) {{\n  wl_rpc_err_t result;\n  if (out_client != NULL) memset(out_client, 0, sizeof(*out_client));\n  if (runtime == NULL || runtime->rpc_client == NULL || operation_id == 0U || out_client == NULL) return WL_RPC_ERR_INVALID_ARG;\n  result = wl_rpc_client_get(runtime->rpc_client, operation_id, out_client);\n  if (result != WL_RPC_OK) return result;\n  if (out_client->request_message_id != {request_macro}_MESSAGE_ID || out_client->response_message_id != {response_macro}_MESSAGE_ID) return WL_RPC_ERR_RESPONSE_MISMATCH;\n  return WL_RPC_OK;\n}}\n\n{module}_runtime_result_t {module}_{service_name}_client_decode(const wl_rpc_client_result_t *client, {response}_t *response) {{\n  {module}_runtime_result_t result = {module}_runtime_result(NULL);\n  result.message_id = {response_macro}_MESSAGE_ID;\n  result.detail_kind = {prefix}_RUNTIME_DETAIL_RPC;\n  if (client != NULL) {{\n    result.detail.rpc.operation_id = client->operation_id;\n    result.detail.rpc.handle = client->tx_handle;\n    result.detail.rpc.core_result = client->link_result;\n    result.detail.rpc.application_result = client->application_status;\n    result.detail.rpc.payload_length = client->response_length;\n  }}\n  if (client == NULL || response == NULL || client->operation_id == 0U) return result;\n  {response}_clear(response);\n  if (client->request_message_id != {request_macro}_MESSAGE_ID || client->response_message_id != {response_macro}_MESSAGE_ID) {{\n    result.detail.rpc.rpc_result = WL_RPC_ERR_RESPONSE_MISMATCH;\n    result.domain = {prefix}_RUNTIME_RPC_ERROR;\n    return result;\n  }}\n  if ((client->state != WL_RPC_CLIENT_COMPLETED && client->state != WL_RPC_CLIENT_APPLICATION_ERROR) || client->response_data == NULL || client->response_length == 0U) {{\n    result.detail.rpc.rpc_result = WL_RPC_ERR_INVALID_STATE;\n    result.domain = {prefix}_RUNTIME_RPC_ERROR;\n    return result;\n  }}\n  result.detail.rpc.codec_status = {response}_decode(client->response_data, client->response_length, response);\n  if (result.detail.rpc.codec_status != WL_CODEC_OK) {{\n    result.domain = {prefix}_RUNTIME_CODEC_ERROR;\n    return result;\n  }}\n  if (!response->has_{response_operation_field} || response->{response_operation_field} != client->operation_id || !response->has_{status_field} || (int32_t)response->{status_field} != client->application_status) {{\n    result.detail.rpc.rpc_result = WL_RPC_ERR_RESPONSE_MISMATCH;\n    result.domain = {prefix}_RUNTIME_RPC_ERROR;\n    return result;\n  }}\n  result.domain = {prefix}_RUNTIME_OK;\n  return result;\n}}\n\nwl_rpc_err_t {module}_{service_name}_client_release({module}_runtime_t *runtime, uint32_t operation_id) {{\n  wl_rpc_client_result_t client = {{0}};\n  wl_rpc_err_t result;\n  if (runtime == NULL || runtime->rpc_client == NULL || operation_id == 0U) return WL_RPC_ERR_INVALID_ARG;\n  result = wl_rpc_client_get(runtime->rpc_client, operation_id, &client);\n  if (result != WL_RPC_OK) return result;\n  if (client.request_message_id != {request_macro}_MESSAGE_ID || client.response_message_id != {response_macro}_MESSAGE_ID) return WL_RPC_ERR_RESPONSE_MISMATCH;\n  return wl_rpc_client_release(runtime->rpc_client, operation_id);\n}}\n\n"
     )
     .unwrap();
 }

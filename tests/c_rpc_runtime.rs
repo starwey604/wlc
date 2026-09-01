@@ -18,6 +18,7 @@ message ComputeResponse = 3 {
   optional uint32 operation_id = 1;
   optional RpcStatus status = 2;
   optional uint32 output = 3;
+  optional bytes proof = 4;
 }
 "#;
 
@@ -256,6 +257,7 @@ static int init_runtime(rpc_fixture_runtime_t *runtime,
 static int check_client(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime,
                         wl_rpc_client_t *client) {
   uint8_t tag = 0x5AU;
+  uint8_t proof = 0xC3U;
   uint8_t scratch[64];
   uint8_t response_bytes[64];
   uint8_t saved_response[64];
@@ -263,8 +265,11 @@ static int check_client(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime,
   compute_request_t request = {0};
   compute_request_t decoded_request = {0};
   compute_response_t response = {0};
+  compute_response_t inspected_response = {0};
   wl_event_t event = {0};
   wl_rpc_client_result_t client_result = {0};
+  wl_rpc_deadline_hint_t deadline = {0};
+  rpc_fixture_runtime_poll_result_t progress = {0};
   rpc_fixture_runtime_result_t result;
 
   request.has_value = true;
@@ -285,11 +290,21 @@ static int check_client(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime,
                              &decoded_request) != WL_CODEC_OK ||
       decoded_request.operation_id != 1U || decoded_request.value != 9U)
     return 2;
+  inspected_response.has_output = true;
+  inspected_response.output = 999U;
+  if (rpc_fixture_compute_client_inspect(runtime, 1U, &client_result) != WL_RPC_OK ||
+      client_result.state != WL_RPC_CLIENT_LINK_PENDING)
+    return 3;
+  result = rpc_fixture_compute_client_decode(&client_result, &inspected_response);
+  if (result.domain != RPC_FIXTURE_RUNTIME_RPC_ERROR ||
+      result.detail.rpc.rpc_result != WL_RPC_ERR_INVALID_STATE ||
+      inspected_response.has_output)
+    return 4;
 
   event.type = WL_EVT_TX_SUCCESS;
   event.handle = result.detail.rpc.handle;
   result = rpc_fixture_runtime_dispatch_event(ctx, &event, runtime, 11U);
-  if (result.domain != RPC_FIXTURE_RUNTIME_OK || release_calls != 0U) return 3;
+  if (result.domain != RPC_FIXTURE_RUNTIME_OK || release_calls != 0U) return 5;
 
   response.has_operation_id = true;
   response.operation_id = 1U;
@@ -297,9 +312,12 @@ static int check_client(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime,
   response.status = SUCCESS;
   response.has_output = true;
   response.output = 18U;
+  response.has_proof = true;
+  response.proof.data = &proof;
+  response.proof.length = 1U;
   if (compute_response_encode(&response, response_bytes, sizeof(response_bytes),
                               &response_length) != WL_CODEC_OK)
-    return 4;
+    return 6;
   memcpy(saved_response, response_bytes, response_length);
   event.type = WL_EVT_UNRELIABLE_RX;
   event.message_id = COMPUTE_RESPONSE_MESSAGE_ID;
@@ -309,13 +327,24 @@ static int check_client(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime,
   result = rpc_fixture_runtime_dispatch_event(ctx, &event, runtime, 12U);
   zero_payload_on_release = 0U;
   if (result.domain != RPC_FIXTURE_RUNTIME_OK || release_calls != 1U ||
-      result.detail.rpc.application_result != 0) return 5;
-  if (wl_rpc_client_get(client, 1U, &client_result) != WL_RPC_OK ||
+      result.detail.rpc.application_result != 0) return 7;
+  memset(&inspected_response, 0, sizeof(inspected_response));
+  if (rpc_fixture_compute_client_inspect(runtime, 1U, &client_result) != WL_RPC_OK ||
       client_result.state != WL_RPC_CLIENT_COMPLETED ||
       client_result.response_length != response_length ||
       memcmp(client_result.response_data, saved_response, response_length) != 0)
-    return 6;
-  if (wl_rpc_client_release(client, 1U) != WL_RPC_OK) return 7;
+    return 8;
+  result = rpc_fixture_compute_client_decode(&client_result, &inspected_response);
+  if (result.domain != RPC_FIXTURE_RUNTIME_OK ||
+      !inspected_response.has_operation_id || inspected_response.operation_id != 1U ||
+      !inspected_response.has_status || inspected_response.status != SUCCESS ||
+      !inspected_response.has_output || inspected_response.output != 18U ||
+      !inspected_response.has_proof || inspected_response.proof.length != 1U ||
+      inspected_response.proof.data == NULL || inspected_response.proof.data[0] != 0xC3U)
+    return 9;
+  if (rpc_fixture_compute_client_release(runtime, 1U) != WL_RPC_OK ||
+      rpc_fixture_compute_client_release(runtime, 1U) != WL_RPC_ERR_NOT_FOUND)
+    return 10;
 
   memset(&request, 0, sizeof(request));
   request.has_value = true;
@@ -323,9 +352,9 @@ static int check_client(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime,
   result = rpc_fixture_compute_client_start_direct(
       ctx, runtime, &request, 100U, 20U);
   if (result.domain != RPC_FIXTURE_RUNTIME_OK || result.detail.rpc.operation_id != 2U ||
-      request.operation_id != 2U || direct_active != 0U) return 8;
+      request.operation_id != 2U || direct_active != 0U) return 11;
   if (wl_rpc_client_cancel(client, 2U) != WL_RPC_OK ||
-      wl_rpc_client_release(client, 2U) != WL_RPC_OK) return 9;
+      rpc_fixture_compute_client_release(runtime, 2U) != WL_RPC_OK) return 12;
 
   memset(&request, 0, sizeof(request));
   request.has_value = true;
@@ -335,12 +364,12 @@ static int check_client(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime,
       (rpc_fixture_encode_scratch_t){scratch, 1U});
   if (result.domain != RPC_FIXTURE_RUNTIME_CODEC_ERROR ||
       result.detail.rpc.operation_id != 3U || result.detail.rpc.codec_status != WL_CODEC_ERR_CAPACITY)
-    return 10;
-  if (wl_rpc_client_get(client, 3U, &client_result) != WL_RPC_OK ||
+    return 13;
+  if (rpc_fixture_compute_client_inspect(runtime, 3U, &client_result) != WL_RPC_OK ||
       client_result.state != WL_RPC_CLIENT_LINK_FAILED ||
       client_result.link_result != WL_ERR_CORRUPT_PAYLOAD ||
-      wl_rpc_client_release(client, 3U) != WL_RPC_OK)
-    return 11;
+      rpc_fixture_compute_client_release(runtime, 3U) != WL_RPC_OK)
+    return 14;
 
   memset(&request, 0, sizeof(request));
   request.has_value = true;
@@ -349,13 +378,13 @@ static int check_client(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime,
       ctx, runtime, &request, 100U, 40U,
       (rpc_fixture_encode_scratch_t){scratch, sizeof(scratch)});
   if (result.domain != RPC_FIXTURE_RUNTIME_OK || result.detail.rpc.operation_id != 4U)
-    return 12;
+    return 15;
   memset(&response, 0, sizeof(response));
   response.has_operation_id = true;
   response.operation_id = 4U;
   if (compute_response_encode(&response, response_bytes, sizeof(response_bytes),
                               &response_length) != WL_CODEC_OK)
-    return 13;
+    return 16;
   event.type = WL_EVT_UNRELIABLE_RX;
   event.message_id = COMPUTE_RESPONSE_MESSAGE_ID;
   event.payload = response_bytes;
@@ -363,16 +392,23 @@ static int check_client(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime,
   result = rpc_fixture_runtime_dispatch_event(ctx, &event, runtime, 41U);
   if (result.domain != RPC_FIXTURE_RUNTIME_RPC_ERROR ||
       result.detail.rpc.rpc_result != WL_RPC_ERR_RESPONSE_MISMATCH || release_calls != 2U)
-    return 14;
-  if (wl_rpc_client_cancel(client, 4U) != WL_RPC_OK ||
-      wl_rpc_client_release(client, 4U) != WL_RPC_OK)
-    return 15;
+    return 17;
+  if (rpc_fixture_runtime_get_deadline_hint(runtime, 41U, &deadline) != WL_RPC_OK ||
+      deadline.next_deadline_ms != 99U ||
+      rpc_fixture_runtime_poll(runtime, 140U, &progress) != WL_RPC_OK ||
+      progress.client_timed_out != 1U || progress.server_pending_expired != 0U ||
+      progress.server_cache_expired != 0U)
+    return 18;
+  if (rpc_fixture_compute_client_inspect(runtime, 4U, &client_result) != WL_RPC_OK ||
+      client_result.state != WL_RPC_CLIENT_TIMED_OUT ||
+      rpc_fixture_compute_client_release(runtime, 4U) != WL_RPC_OK)
+    return 19;
 
   event.type = WL_EVT_TX_FAILED;
   event.handle = UINT32_C(0xDEADBEEF);
   result = rpc_fixture_runtime_dispatch_event(ctx, &event, runtime, 31U);
   if (result.domain != RPC_FIXTURE_RUNTIME_NON_RX || release_calls != 2U)
-    return 16;
+    return 20;
   return 0;
 }
 
@@ -411,7 +447,8 @@ static int check_server(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime) {
   compute_response_t response = {0};
   compute_response_t decoded = {0};
   wl_rpc_server_response_t cached;
-  wl_rpc_server_expiry_t expiry = {0};
+  wl_rpc_deadline_hint_t deadline = {0};
+  rpc_fixture_runtime_poll_result_t progress = {0};
   rpc_fixture_runtime_result_t result;
 
   result = dispatch_request(ctx, runtime, request_a, sizeof(request_a), 100U);
@@ -419,16 +456,19 @@ static int check_server(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime) {
       result.detail_kind != RPC_FIXTURE_RUNTIME_DETAIL_RPC ||
       result.detail.rpc.rpc_disposition != WL_RPC_SERVER_NEW || handler_calls != 1U ||
       result.detail.rpc.operation_id != 77U) return 1;
+  if (rpc_fixture_runtime_get_deadline_hint(runtime, 101U, &deadline) != WL_RPC_OK ||
+      deadline.next_deadline_ms != 4U)
+    return 2;
   result = dispatch_request(ctx, runtime, request_same, sizeof(request_same), 101U);
   if (result.domain != RPC_FIXTURE_RUNTIME_OK ||
       result.detail.rpc.rpc_disposition != WL_RPC_SERVER_PENDING_DUPLICATE ||
-      handler_calls != 1U) return 2;
+      handler_calls != 1U) return 3;
   result = dispatch_request(ctx, runtime, request_conflict,
                             sizeof(request_conflict), 102U);
   if (result.domain != RPC_FIXTURE_RUNTIME_RPC_ERROR ||
       result.detail.rpc.rpc_disposition != WL_RPC_SERVER_CONFLICT ||
       result.detail.rpc.rpc_result != WL_RPC_ERR_OPERATION_CONFLICT || handler_calls != 1U)
-    return 3;
+    return 4;
 
   response.has_output = true;
   response.output = 84U;
@@ -442,7 +482,7 @@ static int check_server(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime) {
       result.detail.rpc.payload_length != sent_payload_length ||
       memcmp(result.detail.rpc.server_response.response_data, sent_payload,
              sent_payload_length) != 0)
-    return 4;
+    return 5;
   first_cached_length = sent_payload_length;
   memcpy(first_cached, sent_payload, first_cached_length);
   cached = result.detail.rpc.server_response;
@@ -450,24 +490,24 @@ static int check_server(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime) {
   if (result.domain != RPC_FIXTURE_RUNTIME_OK ||
       sent_payload_length != first_cached_length ||
       memcmp(sent_payload, first_cached, first_cached_length) != 0)
-    return 5;
+    return 6;
 
   result = dispatch_request(ctx, runtime, request_same, sizeof(request_same), 104U);
   if (result.domain != RPC_FIXTURE_RUNTIME_OK ||
       result.detail.rpc.rpc_disposition != WL_RPC_SERVER_REPLAY || handler_calls != 1U ||
       sent_payload_length != first_cached_length ||
       memcmp(sent_payload, first_cached, first_cached_length) != 0)
-    return 6;
+    return 7;
 
   handler_result = -7;
   result = dispatch_request(ctx, runtime, request_two, sizeof(request_two), 105U);
   if (result.domain != RPC_FIXTURE_RUNTIME_APPLICATION_ERROR ||
-      result.detail.rpc.application_result != -7 || handler_calls != 2U) return 7;
+      result.detail.rpc.application_result != -7 || handler_calls != 2U) return 8;
   handler_result = 0;
   result = dispatch_request(ctx, runtime, request_two, sizeof(request_two), 106U);
   if (result.domain != RPC_FIXTURE_RUNTIME_OK ||
       result.detail.rpc.rpc_disposition != WL_RPC_SERVER_NEW || handler_calls != 3U)
-    return 8;
+    return 9;
   memset(&response, 0, sizeof(response));
   response.has_output = true;
   response.output = 10U;
@@ -480,17 +520,17 @@ static int check_server(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime) {
       result.detail.rpc.application_result != REJECTED || response.status != REJECTED ||
       compute_response_decode(sent_payload, sent_payload_length, &decoded) != WL_CODEC_OK ||
       decoded.operation_id != 78U || decoded.status != REJECTED)
-    return 9;
+    return 10;
   next_core_result = WL_OK;
   result = dispatch_request(ctx, runtime, request_two, sizeof(request_two), 108U);
   if (result.domain != RPC_FIXTURE_RUNTIME_OK ||
       result.detail.rpc.rpc_disposition != WL_RPC_SERVER_REPLAY || handler_calls != 3U)
-    return 10;
+    return 11;
 
   result = dispatch_request(ctx, runtime, request_three, sizeof(request_three), 109U);
   if (result.domain != RPC_FIXTURE_RUNTIME_OK ||
       result.detail.rpc.rpc_disposition != WL_RPC_SERVER_NEW || handler_calls != 4U)
-    return 11;
+    return 12;
   sends_before = send_calls;
   memset(&response, 0, sizeof(response));
   result = rpc_fixture_compute_server_reject(
@@ -498,20 +538,22 @@ static int check_server(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime) {
       (rpc_fixture_encode_scratch_t){encoded, sizeof(encoded)}, 110U);
   if (result.domain != RPC_FIXTURE_RUNTIME_RPC_ERROR ||
       result.detail.rpc.rpc_result != WL_RPC_ERR_INVALID_ARG || send_calls != sends_before)
-    return 12;
+    return 13;
   result = rpc_fixture_compute_server_complete(
       ctx, runtime, 79U, &response,
       (rpc_fixture_encode_scratch_t){encoded, sizeof(encoded)}, 111U);
   if (result.domain != RPC_FIXTURE_RUNTIME_RPC_ERROR ||
       result.detail.rpc.rpc_result != WL_RPC_ERR_CACHE_FULL || send_calls != sends_before)
-    return 13;
-  if (wl_rpc_server_poll(runtime->rpc_server, 115U, &expiry) != WL_RPC_OK ||
-      expiry.pending_expired != 1U)
     return 14;
+  if (rpc_fixture_runtime_poll(runtime, 115U, &progress) != WL_RPC_OK ||
+      progress.client_timed_out != 0U ||
+      progress.server_pending_expired != 1U ||
+      progress.server_cache_expired != 0U)
+    return 15;
   result = dispatch_request(ctx, runtime, request_three, sizeof(request_three), 116U);
   if (result.domain != RPC_FIXTURE_RUNTIME_OK ||
       result.detail.rpc.rpc_disposition != WL_RPC_SERVER_NEW || handler_calls != 5U)
-    return 15;
+    return 16;
   return 0;
 }
 

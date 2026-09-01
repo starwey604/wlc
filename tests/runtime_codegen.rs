@@ -180,6 +180,24 @@ message State = 1 { optional uint32 sequence = 1; }
     assert!(
         first
             .header
+            .contains("stable_api_state_fifo_view_t *out_view")
+    );
+    assert!(
+        first
+            .header
+            .contains("stable_api_state_fifo_release(stable_api_runtime_t *runtime")
+    );
+    assert!(
+        first
+            .source
+            .contains("stable_api_state_fifo_acquire(stable_api_runtime_t *runtime")
+    );
+    assert!(first.source.contains(
+        "int failure = lease.value_size < sizeof(state_t) ? WL_ERR_BUF_TOO_SMALL : WL_ERR_INVALID_STATE;\n    int release_result = wl_fifo_read_release"
+    ));
+    assert!(
+        first
+            .header
             .contains("stable_api_runtime_retained_detail_t retained;")
     );
     assert!(
@@ -240,6 +258,19 @@ rpc Local {
             .source
             .contains("wl_rpc_client_tx_completed(runtime->rpc_client, operation_id)")
     );
+    assert!(
+        generated
+            .header
+            .contains("local_rpc_runtime_poll_result_t *out_result")
+    );
+    assert!(
+        generated
+            .header
+            .contains("local_rpc_runtime_get_deadline_hint")
+    );
+    assert!(generated.header.contains("local_rpc_local_client_inspect"));
+    assert!(generated.header.contains("local_rpc_local_client_decode"));
+    assert!(generated.source.contains("local_rpc_local_client_release"));
     assert!(
         generated
             .source

@@ -409,6 +409,20 @@ int wl_latest_write_abort(wl_latest_t *mailbox,
   return WL_ERR_NOT_INITIALIZED;
 }
 
+int wl_latest_read_acquire(wl_latest_t *mailbox,
+                           wl_latest_view_t *out_view) {
+  (void)mailbox;
+  (void)out_view;
+  return WL_ERR_NOT_INITIALIZED;
+}
+
+int wl_latest_read_release(wl_latest_t *mailbox,
+                           const wl_latest_view_t *view) {
+  (void)mailbox;
+  (void)view;
+  return WL_ERR_NOT_INITIALIZED;
+}
+
 int main(void) {
   union {
     max_align_t align;
