@@ -153,6 +153,10 @@ fn hash_type(hash: &mut StableHash, ty: &ResolvedType) {
             hash.u16(*id);
             hash.string(name);
         }
+        ResolvedType::Int8 => hash.u8(14),
+        ResolvedType::Uint8 => hash.u8(15),
+        ResolvedType::Int16 => hash.u8(16),
+        ResolvedType::Uint16 => hash.u8(17),
     }
 }
 
@@ -197,6 +201,22 @@ fn hash_default(hash: &mut StableHash, default: Option<&FieldDefault>) {
         FieldDefault::Enum(value) => {
             hash.u8(9);
             hash.i32(*value);
+        }
+        FieldDefault::Int8(value) => {
+            hash.u8(10);
+            hash.i32(i32::from(*value));
+        }
+        FieldDefault::Uint8(value) => {
+            hash.u8(11);
+            hash.u32(u32::from(*value));
+        }
+        FieldDefault::Int16(value) => {
+            hash.u8(12);
+            hash.i32(i32::from(*value));
+        }
+        FieldDefault::Uint16(value) => {
+            hash.u8(13);
+            hash.u32(u32::from(*value));
         }
     }
 }

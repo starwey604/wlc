@@ -82,6 +82,10 @@ pub enum ResolvedType {
     Bool,
     Bytes,
     String,
+    Int8,
+    Uint8,
+    Int16,
+    Uint16,
     Int32,
     Uint32,
     Int64,
@@ -99,6 +103,10 @@ pub enum ResolvedType {
 pub enum FieldDefault {
     Bool(bool),
     String(String),
+    Int8(i8),
+    Uint8(u8),
+    Int16(i16),
+    Uint16(u16),
     Int32(i32),
     Uint32(u32),
     Int64(i64),
@@ -374,6 +382,10 @@ fn resolve_type(name: &str, declarations: &HashMap<&str, &Declaration>) -> Optio
         "bool" => Some(ResolvedType::Bool),
         "bytes" => Some(ResolvedType::Bytes),
         "string" => Some(ResolvedType::String),
+        "int8" => Some(ResolvedType::Int8),
+        "uint8" => Some(ResolvedType::Uint8),
+        "int16" => Some(ResolvedType::Int16),
+        "uint16" => Some(ResolvedType::Uint16),
         "int32" => Some(ResolvedType::Int32),
         "uint32" => Some(ResolvedType::Uint32),
         "int64" => Some(ResolvedType::Int64),
@@ -414,6 +426,22 @@ fn lower_default(
         (ResolvedType::Bytes, _) => {
             invalid(errors, "bytes fields cannot declare defaults".to_owned())
         }
+        (ResolvedType::Int8, Literal::Integer(value)) => value
+            .as_i8()
+            .map(FieldDefault::Int8)
+            .or_else(|| invalid(errors, format!("default value {value} does not fit int8"))),
+        (ResolvedType::Uint8, Literal::Integer(value)) => value
+            .as_u8()
+            .map(FieldDefault::Uint8)
+            .or_else(|| invalid(errors, format!("default value {value} does not fit uint8"))),
+        (ResolvedType::Int16, Literal::Integer(value)) => value
+            .as_i16()
+            .map(FieldDefault::Int16)
+            .or_else(|| invalid(errors, format!("default value {value} does not fit int16"))),
+        (ResolvedType::Uint16, Literal::Integer(value)) => value
+            .as_u16()
+            .map(FieldDefault::Uint16)
+            .or_else(|| invalid(errors, format!("default value {value} does not fit uint16"))),
         (ResolvedType::Int32, Literal::Integer(value)) => value
             .as_i32()
             .map(FieldDefault::Int32)
@@ -489,6 +517,10 @@ fn is_builtin(name: &str) -> bool {
         "bool"
             | "bytes"
             | "string"
+            | "int8"
+            | "uint8"
+            | "int16"
+            | "uint16"
             | "int32"
             | "uint32"
             | "int64"

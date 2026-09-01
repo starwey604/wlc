@@ -104,6 +104,14 @@ pub struct IntegerLiteral {
 }
 
 impl IntegerLiteral {
+    pub fn as_i8(self) -> Option<i8> {
+        self.as_i32().and_then(|value| i8::try_from(value).ok())
+    }
+
+    pub fn as_i16(self) -> Option<i16> {
+        self.as_i32().and_then(|value| i16::try_from(value).ok())
+    }
+
     pub fn as_i32(self) -> Option<i32> {
         if self.negative {
             let limit = i32::MAX as u64 + 1;
@@ -138,6 +146,14 @@ impl IntegerLiteral {
         (!self.negative)
             .then(|| u32::try_from(self.magnitude).ok())
             .flatten()
+    }
+
+    pub fn as_u8(self) -> Option<u8> {
+        self.as_u32().and_then(|value| u8::try_from(value).ok())
+    }
+
+    pub fn as_u16(self) -> Option<u16> {
+        self.as_u32().and_then(|value| u16::try_from(value).ok())
     }
 
     pub fn as_u64(self) -> Option<u64> {

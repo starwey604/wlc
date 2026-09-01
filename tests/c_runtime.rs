@@ -9,11 +9,11 @@ use wlc::{
 const SCHEMA: &str = r#"
 version 1;
 message LatestValue = 1 {
-  optional uint32 sequence = 1;
+  optional uint16 sequence = 1;
   packed float32 axes[2] = 2;
 }
 message Alarm = 2 {
-  optional uint32 code = 1;
+  optional int8 code = 1;
 }
 "#;
 
@@ -89,7 +89,7 @@ void wl_event_release(wl_ctx_t *ctx, const wl_event_t *event) {
 }
 
 static int dispatch_latest(wl_ctx_t *ctx, typed_runtime_runtime_t *runtime,
-                           uint32_t sequence) {
+                           uint16_t sequence) {
   latest_value_t value = {0};
   uint8_t payload[32];
   size_t length = 0U;
@@ -116,7 +116,7 @@ static int dispatch_latest(wl_ctx_t *ctx, typed_runtime_runtime_t *runtime,
 }
 
 static int dispatch_alarm(wl_ctx_t *ctx, typed_runtime_runtime_t *runtime,
-                          uint32_t code) {
+                          int8_t code) {
   alarm_t value = {0};
   uint8_t payload[16];
   size_t length = 0U;

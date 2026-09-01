@@ -116,7 +116,7 @@ fn compile_and_validate_support_dense_numeric_fields() {
     .expect("write predecessor");
     fs::write(
         &current,
-        "version 2; message Control = 1 { optional float32 timestamp = 1; packed float32 joints[30] = 2; optional float64 clock = 3; }",
+        "version 2; message Control = 1 { optional float32 timestamp = 1; packed float32 joints[30] = 2; optional float64 clock = 3; optional uint16 channel = 4; }",
     )
     .expect("write current schema");
 
@@ -136,6 +136,7 @@ fn compile_and_validate_support_dense_numeric_fields() {
     let header = fs::read_to_string(output.join("control.h")).expect("generated header");
     assert!(header.contains("float joints[30];"));
     assert!(header.contains("double clock;"));
+    assert!(header.contains("uint16_t channel;"));
     assert!(output.join("control_bindings.h").is_file());
     assert!(output.join("control_bindings.c").is_file());
 }

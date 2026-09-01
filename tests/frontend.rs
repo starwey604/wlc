@@ -2,7 +2,7 @@ use wlc::{
     analyze_schema,
     ast::{Cardinality, Declaration, Literal},
     check_compatibility, generate_c, parse_schema,
-    semantic::Symbol,
+    semantic::{FieldDefault, ResolvedType, Symbol},
 };
 
 use proptest::prelude::*;
@@ -72,6 +72,68 @@ fn parses_required_scalar_nested_and_packed_fields() {
 }
 
 #[test]
+fn resolves_narrow_integer_types_and_range_checked_defaults() {
+    let schema = parse_schema(
+        r#"version 1;
+message Narrow = 1 {
+  optional uint8 unsigned_8 = 1 [default = 255];
+  optional uint16 unsigned_16 = 2 [default = 65535];
+  optional int8 signed_8 = 3 [default = -128];
+  optional int16 signed_16 = 4 [default = -32768];
+}
+"#,
+    )
+    .unwrap();
+    let Declaration::Message(parsed) = &schema.declarations[0] else {
+        panic!("expected message");
+    };
+    assert_eq!(
+        parsed
+            .fields
+            .iter()
+            .map(|field| field.ty.value.as_str())
+            .collect::<Vec<_>>(),
+        ["uint8", "uint16", "int8", "int16"]
+    );
+
+    let model = analyze_schema(&schema).unwrap();
+    let Symbol::Message(message) = &model.declarations[0] else {
+        panic!("expected message");
+    };
+    assert_eq!(message.fields[0].ty, ResolvedType::Uint8);
+    assert_eq!(message.fields[0].default, Some(FieldDefault::Uint8(255)));
+    assert_eq!(message.fields[1].ty, ResolvedType::Uint16);
+    assert_eq!(message.fields[1].default, Some(FieldDefault::Uint16(65535)));
+    assert_eq!(message.fields[2].ty, ResolvedType::Int8);
+    assert_eq!(message.fields[2].default, Some(FieldDefault::Int8(-128)));
+    assert_eq!(message.fields[3].ty, ResolvedType::Int16);
+    assert_eq!(message.fields[3].default, Some(FieldDefault::Int16(-32768)));
+
+    for (ty, value) in [
+        ("uint8", "-1"),
+        ("uint8", "256"),
+        ("uint16", "65536"),
+        ("int8", "-129"),
+        ("int8", "128"),
+        ("int16", "-32769"),
+        ("int16", "32768"),
+    ] {
+        let source = format!(
+            "version 1; message Bad = 1 {{ optional {ty} value = 1 [default = {value}]; }}"
+        );
+        let errors = analyze_schema(&parse_schema(&source).unwrap()).unwrap_err();
+        assert!(
+            errors
+                .errors()
+                .iter()
+                .any(|error| error.message.contains(&format!("does not fit {ty}"))),
+            "unexpected errors for {ty} default {value}: {:?}",
+            errors.errors()
+        );
+    }
+}
+
+#[test]
 fn rejects_required_repeated_and_required_defaults() {
     for (source, expected) in [
         (
@@ -106,11 +168,11 @@ fn packed_arrays_require_a_valid_count_and_fixed_width_numeric_type() {
     }
 
     let schema = parse_schema(
-        "version 1; message Bad = 1 { packed uint32 values[6] = 1; packed string names[2] = 2; required packed uint64 required_values[2] = 3; }",
+        "version 1; message Bad = 1 { packed uint32 values[6] = 1; packed string names[2] = 2; required packed uint64 required_values[2] = 3; packed uint8 narrow[4] = 4; }",
     )
     .unwrap();
     let errors = analyze_schema(&schema).unwrap_err();
-    assert_eq!(errors.errors().len(), 3);
+    assert_eq!(errors.errors().len(), 4);
     assert!(errors.errors().iter().all(|error| {
         error
             .message
@@ -393,6 +455,42 @@ fn compatibility_treats_packed_kind_and_count_as_wire_identity() {
         "version 2; message Control = 1 { packed float32 joints[7] = 1; }",
         "version 2; message Control = 1 { packed fixed32 joints[6] = 1; }",
         "version 2; message Control = 1 { repeated float32 joints = 1; }",
+    ] {
+        let current = analyze_schema(&parse_schema(source).unwrap()).unwrap();
+        let errors = check_compatibility(&previous, &current).unwrap_err();
+        assert!(
+            errors
+                .errors()
+                .iter()
+                .any(|error| error.message.contains("changed wire identity"))
+        );
+    }
+}
+
+#[test]
+fn compatibility_treats_narrow_integer_width_and_signedness_as_identity() {
+    let previous = analyze_schema(
+        &parse_schema(
+            "version 1; message Value = 1 { optional uint8 unsigned_value = 1; optional int16 signed_value = 2; }",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let compatible = analyze_schema(
+        &parse_schema(
+            "version 2; message Value = 1 { optional uint8 unsigned_value = 1; optional int16 signed_value = 2; optional uint16 added = 3; }",
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    check_compatibility(&previous, &compatible).expect("adding an optional narrow field is safe");
+
+    for source in [
+        "version 2; message Value = 1 { optional uint16 unsigned_value = 1; optional int16 signed_value = 2; }",
+        "version 2; message Value = 1 { optional uint32 unsigned_value = 1; optional int16 signed_value = 2; }",
+        "version 2; message Value = 1 { optional int8 unsigned_value = 1; optional int16 signed_value = 2; }",
+        "version 2; message Value = 1 { optional uint8 unsigned_value = 1; optional int8 signed_value = 2; }",
+        "version 2; message Value = 1 { optional uint8 unsigned_value = 1; optional int32 signed_value = 2; }",
     ] {
         let current = analyze_schema(&parse_schema(source).unwrap()).unwrap();
         let errors = check_compatibility(&previous, &current).unwrap_err();

@@ -45,16 +45,18 @@ and enum identifiers share one global namespace and one nonzero 16-bit ID
 namespace. Field IDs are nonzero 16-bit numbers and unique within a message.
 Packed element counts are in `1..=65535`.
 
-The built-in types are `bool`, `bytes`, `string`, `int32`, `uint32`, `int64`,
-`uint64`, `fixed32`, `fixed64`, `float32`, and `float64`. `float32` and
-`float64` generate C `float` and `double`. Generated headers enforce 4/8-byte
-IEEE-754 binary32/binary64 value formats with compile-time assertions. Codecs
-move floating-point bits through `memcpy`; they never use aliasing casts or
-numeric conversions, so signed zero, infinities, and NaN payload bits round
-trip exactly.
+The built-in types are `bool`, `bytes`, `string`, `int8`, `uint8`, `int16`,
+`uint16`, `int32`, `uint32`, `int64`, `uint64`, `fixed32`, `fixed64`, `float32`,
+and `float64`. Narrow integers generate exact-width C `int8_t`, `uint8_t`,
+`int16_t`, and `uint16_t` storage. `float32` and `float64` generate C `float`
+and `double`. Generated headers enforce 4/8-byte IEEE-754 binary32/binary64
+value formats with compile-time assertions. Codecs move floating-point bits
+through `memcpy`; they never use aliasing casts or numeric conversions, so
+signed zero, infinities, and NaN payload bits round trip exactly.
 
-Optional scalar defaults must match their type. Required fields cannot declare
-defaults and cannot be repeated; fixed-width vectors use `required packed`.
+Optional scalar defaults must match and fit their declared type, including the
+exact range of narrow integers. Required fields cannot declare defaults and
+cannot be repeated; fixed-width vectors use `required packed`.
 Generated C retains a `has_*` flag for required scalar, nested, and packed
 fields, and `*_clear()` resets it to false. Explicit floating-point
 defaults are intentionally not accepted until the schema has a canonical,
@@ -64,11 +66,13 @@ zero. `bytes`, repeated fields, and packed fields cannot have defaults.
 ## Wire rules
 
 The encoder emits fields in field-number order. Each field starts with an
-unsigned LEB128 key `(field_number << 3) | wire_type`. Integers retain their
-existing varint representation. `fixed32` and `float32` use wire type 5 and
-four big-endian bytes; `fixed64` and `float64` use wire type 1 and eight
-big-endian bytes. Adding float support does not alter any existing scalar or
-repeated wire bytes.
+unsigned LEB128 key `(field_number << 3) | wire_type`. Unsigned integers use
+unsigned LEB128 values and signed integers use zigzag values, including the
+8- and 16-bit types. A narrow decoder rejects a varint outside its declared
+range with `WL_CODEC_ERR_OVERFLOW`; it never truncates into the C storage.
+`fixed32` and `float32` use wire type 5 and four big-endian bytes; `fixed64`
+and `float64` use wire type 1 and eight big-endian bytes. Adding a narrower
+integer type does not alter the bytes of existing integer fields.
 
 A packed declaration is one field occurrence, represented in C by a presence
 flag and an inline array. Plain `packed` is optional; `required packed` uses
@@ -193,9 +197,11 @@ IDs and field numbers, so source reordering does not change generated output.
 enum value at its respective scope. Compatibility checks reject ID, name,
 type, and cardinality changes or removal without a reservation. Adding a
 required field to an existing message or removing one is incompatible even if
-the removed number is reserved. A packed field's element type and fixed count
-are both part of its wire identity; changing either is incompatible. Existing
-reservations must remain reserved.
+the removed number is reserved. Integer width and signedness are part of field
+identity even when two types share wire type 0, so changing between narrow or
+wide integer types is incompatible. A packed field's element type and fixed
+count are both part of its wire identity; changing either is incompatible.
+Existing reservations must remain reserved.
 
 The library API is `parse_schema()`, `analyze_schema()`,
 `check_compatibility()`, and `generate_c()`.
@@ -309,7 +315,7 @@ and `detail_kind`) followed by a tagged union. Inspect
 has no domain payload. A retained-only profile therefore does not carry the
 larger RPC result fields. Generated runtime headers likewise include only the
 LATEST, FIFO, and RPC public headers selected by that profile. The fixed
-`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `5` for this surface; regenerate
+`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `6` for this surface; regenerate
 all runtime sources and update field access together when that value changes.
 
 `tests/runtime_size.rs` keeps deterministic size regression gates. On
