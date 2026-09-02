@@ -1,7 +1,14 @@
-use std::{fs, process::Command};
+use std::{fs, path::Path, process::Command};
 
 use tempfile::tempdir;
 use wlc::{analyze_schema, generate_c, parse_schema};
+
+fn wirelink_include() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("include")
+}
 
 #[test]
 fn generated_c_compiles_and_round_trips_scalars_repeated_and_nested_messages() {
@@ -83,7 +90,7 @@ int main(void) {
 "#,
     )
     .unwrap();
-    let include = env!("CARGO_MANIFEST_DIR").replace("/wlc", "/include");
+    let include = wirelink_include();
     let executable = directory.path().join("codec-test");
     let status = Command::new("cc")
         .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-I"])
@@ -270,7 +277,7 @@ int main(void) {
 "#,
     )
     .unwrap();
-    let include = env!("CARGO_MANIFEST_DIR").replace("/wlc", "/include");
+    let include = wirelink_include();
     let executable = directory.path().join("dense-codec-test");
     let status = Command::new("cc")
         .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-I"])
@@ -294,7 +301,7 @@ fn generated_c_compiles_an_empty_message() {
     let directory = tempdir().unwrap();
     fs::write(directory.path().join("empty.h"), generated.header).unwrap();
     fs::write(directory.path().join("empty.c"), generated.source).unwrap();
-    let include = env!("CARGO_MANIFEST_DIR").replace("/wlc", "/include");
+    let include = wirelink_include();
     let status = Command::new("cc")
         .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-I"])
         .arg(include)
