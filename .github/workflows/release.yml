@@ -14,14 +14,14 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Check out Wirelink test dependency
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: starwey604/wirelink
           ref: 63716a06a85467762583fec3fca0425b46c4050c
           path: wirelink
 
       - name: Check out wlc
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: wirelink/wlc
 
@@ -74,7 +74,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out wlc
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust target
         uses: dtolnay/rust-toolchain@stable
@@ -134,7 +134,7 @@ jobs:
             -DestinationPath "dist/${{ matrix.asset }}.zip"
 
       - name: Upload package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.asset }}
           path: dist/${{ matrix.asset }}.${{ matrix.archive }}
@@ -146,10 +146,10 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Check out wlc
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
