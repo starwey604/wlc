@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Rust quality and generated C
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out Wirelink test dependency
+        uses: actions/checkout@v4
+        with:
+          repository: starwey604/wirelink
+          ref: 63716a06a85467762583fec3fca0425b46c4050c
+          path: wirelink
+
+      - name: Check out wlc
+        uses: actions/checkout@v4
+        with:
+          path: wirelink/wlc
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+
+      - name: Check formatting
+        working-directory: wirelink/wlc
+        run: cargo fmt --all --check
+
+      - name: Run Clippy
+        working-directory: wirelink/wlc
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Run tests
+        working-directory: wirelink/wlc
+        run: cargo test --locked
+
+  host-smoke:
+    name: Host smoke (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-2025
+          - macos-15-intel
+          - macos-15
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out wlc
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build host compiler
+        run: cargo build --locked
+
+      - name: Run portable CLI tests
+        run: cargo test --locked --test cli

@@ -4,6 +4,18 @@
 checks a revision against its predecessor, and generates allocation-free C11
 payload codecs plus optional typed Wirelink bindings.
 
+## Prebuilt compiler
+
+Tagged releases publish host tools for Windows x86-64, Linux x86-64/aarch64
+(static musl executables), and macOS x86-64/Apple Silicon. Each archive
+contains the `wlc` executable and this README. Verify an archive against the
+release's `SHA256SUMS` before using it in a build or CMake download cache.
+
+The compiler version and generated-code ABI are separate compatibility axes.
+`wlc --version` reports the release version, while every generated manifest
+records `compiler.codegen_abi`. Build integrations should pin both rather than
+following a branch or the newest release.
+
 ## Schema grammar
 
 ```text

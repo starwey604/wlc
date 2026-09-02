@@ -1,0 +1,169 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    name: Verify release source
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out Wirelink test dependency
+        uses: actions/checkout@v4
+        with:
+          repository: starwey604/wirelink
+          ref: 63716a06a85467762583fec3fca0425b46c4050c
+          path: wirelink
+
+      - name: Check out wlc
+        uses: actions/checkout@v4
+        with:
+          path: wirelink/wlc
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+
+      - name: Match Cargo version to tag
+        working-directory: wirelink/wlc
+        shell: bash
+        run: |
+          crate_version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[0].version')"
+          test "v${crate_version}" = "${GITHUB_REF_NAME}"
+
+      - name: Check source and tests
+        working-directory: wirelink/wlc
+        run: |
+          cargo fmt --all --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked
+
+  package:
+    name: Package ${{ matrix.asset }}
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            target: x86_64-pc-windows-msvc
+            asset: wlc-windows-x86_64
+            archive: zip
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            asset: wlc-linux-x86_64-musl
+            archive: tar.gz
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            asset: wlc-linux-aarch64-musl
+            archive: tar.gz
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            asset: wlc-macos-x86_64
+            archive: tar.gz
+          - os: macos-15
+            target: aarch64-apple-darwin
+            asset: wlc-macos-aarch64
+            archive: tar.gz
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out wlc
+        uses: actions/checkout@v4
+
+      - name: Install Rust target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes musl-tools
+
+      - name: Build release binary
+        run: cargo build --locked --release --target ${{ matrix.target }}
+
+      - name: Smoke-test release binary
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          binary="target/${{ matrix.target }}/release/wlc"
+          test "$(${binary} --version)" = "wlc ${GITHUB_REF_NAME#v}"
+          "${binary}" compile tests/fixtures/release_smoke.wl \
+            --profile tests/fixtures/release_smoke.bind.wl \
+            --out-dir target/release-smoke
+          test "$(jq -r '.compiler.codegen_abi' target/release-smoke/release_smoke_manifest.json)" = "8"
+
+      - name: Smoke-test release binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $binary = "target/${{ matrix.target }}/release/wlc.exe"
+          if ((& $binary --version) -ne "wlc $($env:GITHUB_REF_NAME.TrimStart('v'))") {
+            throw "release binary version does not match tag"
+          }
+          & $binary compile tests/fixtures/release_smoke.wl `
+            --profile tests/fixtures/release_smoke.bind.wl `
+            --out-dir target/release-smoke
+          if ($LASTEXITCODE -ne 0) { throw "release compiler smoke test failed" }
+          $manifest = Get-Content target/release-smoke/release_smoke_manifest.json | ConvertFrom-Json
+          if ($manifest.compiler.codegen_abi -ne 8) { throw "unexpected codegen ABI" }
+
+      - name: Create tar archive
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          mkdir -p dist/package
+          cp "target/${{ matrix.target }}/release/wlc" dist/package/wlc
+          cp README.md dist/package/README.md
+          tar -C dist/package -czf "dist/${{ matrix.asset }}.tar.gz" wlc README.md
+
+      - name: Create zip archive
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/package | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/wlc.exe" dist/package/wlc.exe
+          Copy-Item README.md dist/package/README.md
+          Compress-Archive -Path dist/package/wlc.exe,dist/package/README.md `
+            -DestinationPath "dist/${{ matrix.asset }}.zip"
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}.${{ matrix.archive }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: package
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out wlc
+        uses: actions/checkout@v4
+
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create checksums
+        working-directory: dist
+        run: sha256sum wlc-* > SHA256SUMS
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "${GITHUB_REF_NAME}"
+          dist/*
+          --verify-tag
+          --generate-notes
+          --title "wlc ${GITHUB_REF_NAME}"
