@@ -342,7 +342,7 @@ and `detail_kind`) followed by a tagged union. Inspect
 has no domain payload. A retained-only profile therefore does not carry the
 larger RPC result fields. Generated runtime headers likewise include only the
 LATEST, FIFO, and RPC public headers selected by that profile. The fixed
-`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `13` for this surface; regenerate
+`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `14` for this surface; regenerate
 all runtime sources and update field access together when that value changes.
 ABI 8 changes RPC server completion from a bare operation ID to a copied
 `wl_rpc_request_identity_t`: generated callback types are named
@@ -394,8 +394,12 @@ capacity policy, and application deadline for peer-visible completion.
 
 For each RPC service the runtime header emits one typed client-start function,
 a request callback route, and typed server complete/reject functions. Client
-start allocates an operation ID, temporarily writes it into the mutable request,
-encodes directly into core storage, then restores the request before returning.
+start uses a present nonzero operation ID exactly, or allocates one when the
+field is absent or zero. It temporarily writes the selected ID into the mutable
+request, encodes directly into core storage, then restores the request before
+returning. Reusing an explicit ID with the same canonical request lets an
+application retry address the server's bounded replay cache without adding a
+second generated start API.
 An encode or local submit failure releases the allocated client slot and returns
 operation ID zero. Each service emits a nonblocking client-inspect helper that returns
 generic operation metadata, a typed response decoder, and a service-checked
@@ -421,9 +425,9 @@ before return.
 Response dispatch copies the original encoded bytes into the client's fixed
 response storage before releasing RX. That copy remains valid until client
 release; decode it again for a durable typed view rather than retaining
-borrowed pointers from response scratch. Server complete/reject mutate the
-response operation ID and status, then cease borrowing the response and encode
-scratch after the call returns.
+borrowed pointers from response scratch. Server complete/reject temporarily set
+the response operation ID and status for encoding, restore the caller-owned
+response before returning, and then cease borrowing response and encode scratch.
 
 Server dispatch decodes and canonically re-encodes the complete request before
 computing a separately domain-tagged payload fingerprint. `NEW` invokes the
@@ -460,11 +464,10 @@ mechanisms.
 while nonzero abandons it without manufacturing a response.
 `PENDING_DUPLICATE` suppresses another execution. `REPLAY` sends the exact
 cached response bytes, and `CONFLICT` reports reuse of an operation ID for a
-different canonical request in the same peer session. Complete/reject cache before sending, so a core
-send failure leaves a replayable response; call the generated cached-retry
-helper with the returned `server_response`. Its `response_data` is borrowed
-only until the next server mutation, poll, or expiry, so copy it before a
-deferred retry. Cache TTL/eviction, process restart, or explicit expiry ends
+different canonical request in the same peer session. Complete/reject cache
+before sending, so a core send failure leaves a replayable response that
+`runtime_service()` retains for a matching duplicate request. Cache
+TTL/eviction, process restart, or explicit expiry ends
 replay protection; this is bounded duplicate suppression, not durable
 exactly-once execution. The domain-tagged FNV request fingerprint is likewise
 a non-security classifier rather than authentication or a collision-resistant
