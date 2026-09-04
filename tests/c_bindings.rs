@@ -287,7 +287,6 @@ static int check_dispatch(wl_ctx_t *ctx) {
 
 static int check_send(wl_ctx_t *ctx) {
   uint32_t samples[] = {3U};
-  uint8_t bytes[8];
   envelope_t envelope = {0};
   empty_t empty = {0};
   typed_api_send_result_t result;
@@ -295,76 +294,50 @@ static int check_send(wl_ctx_t *ctx) {
   envelope.samples_count = 1U;
   envelope.samples_capacity = 1U;
 
-  result = typed_api_envelope_send_unreliable(
-      ctx, &envelope, (typed_api_encode_scratch_t){bytes, sizeof(bytes)});
+  result = typed_api_envelope_send(ctx, &envelope, WL_DELIVERY_UNRELIABLE);
   if (result.domain != TYPED_API_SEND_OK || result.codec_status != WL_CODEC_OK ||
-      result.core_called != 1U || result.core_result != WL_OK ||
-      result.payload_length != 2U || result.handle != 0U || send_calls != 1U ||
-      send_reliable != 0U || sent_message_id != ENVELOPE_MESSAGE_ID ||
+      result.core_result != WL_OK ||
+      result.payload_length != 2U || result.handle != 0U ||
+      direct_message_id != ENVELOPE_MESSAGE_ID ||
+      direct_delivery != WL_DELIVERY_UNRELIABLE ||
       sent_payload_length != 2U || sent_payload[0] != 0x08U || sent_payload[1] != 0x03U)
     return 1;
 
-  result = typed_api_envelope_send_reliable(
-      ctx, &envelope, (typed_api_encode_scratch_t){bytes, sizeof(bytes)});
-  if (result.domain != TYPED_API_SEND_OK || result.core_called != 1U ||
-      result.handle != UINT32_C(0x12345678) || send_calls != 2U || send_reliable != 1U)
+  result = typed_api_envelope_send(ctx, &envelope, WL_DELIVERY_RELIABLE);
+  if (result.domain != TYPED_API_SEND_OK ||
+      result.handle != UINT32_C(0x87654321) ||
+      direct_delivery != WL_DELIVERY_RELIABLE)
     return 2;
 
   next_core_result = WL_ERR_BUSY;
-  result = typed_api_envelope_send_reliable(
-      ctx, &envelope, (typed_api_encode_scratch_t){bytes, sizeof(bytes)});
-  if (result.domain != TYPED_API_SEND_CORE_ERROR || result.core_called != 1U ||
-      result.core_result != WL_ERR_BUSY || send_calls != 3U) return 3;
-
-  result = typed_api_envelope_send_unreliable(
-      ctx, &envelope, (typed_api_encode_scratch_t){bytes, 1U});
-  if (result.domain != TYPED_API_SEND_CODEC_ERROR ||
-      result.codec_status != WL_CODEC_ERR_CAPACITY || result.core_called != 0U ||
-      send_calls != 3U) return 4;
+  result = typed_api_envelope_send(ctx, &envelope, WL_DELIVERY_RELIABLE);
+  if (result.domain != TYPED_API_SEND_CORE_ERROR ||
+      result.core_result != WL_ERR_BUSY || direct_claim_active != 0U ||
+      direct_abort_calls != 0U) return 3;
 
   next_core_result = WL_OK;
-  result = typed_api_empty_send_unreliable(
-      ctx, &empty, (typed_api_encode_scratch_t){NULL, 0U});
-  if (result.domain != TYPED_API_SEND_OK || result.payload_length != 0U ||
-      result.core_called != 1U || sent_message_id != EMPTY_MESSAGE_ID ||
-      sent_payload_length != 0U) return 5;
-
-  result = typed_api_envelope_send_direct(ctx, &envelope,
-                                          WL_DELIVERY_UNRELIABLE);
-  if (result.domain != TYPED_API_SEND_OK || result.core_called != 1U ||
-      result.core_result != WL_OK || result.abort_result != WL_OK ||
-      result.payload_length != 2U || result.handle != 0U ||
-      direct_message_id != ENVELOPE_MESSAGE_ID ||
-      direct_delivery != WL_DELIVERY_UNRELIABLE || sent_payload_length != 2U ||
-      sent_payload[0] != 0x08U || sent_payload[1] != 0x03U) return 6;
-
-  result = typed_api_envelope_send_direct(ctx, &envelope,
-                                          WL_DELIVERY_RELIABLE);
-  if (result.domain != TYPED_API_SEND_OK ||
-      result.handle != UINT32_C(0x87654321) ||
-      direct_delivery != WL_DELIVERY_RELIABLE) return 7;
-
-  direct_supported = 0U;
-  result = typed_api_envelope_send_direct(ctx, &envelope,
-                                          WL_DELIVERY_UNRELIABLE);
-  if (result.domain != TYPED_API_SEND_CORE_ERROR ||
-      result.core_result != WL_ERR_NOT_SUPPORTED || result.core_called != 1U ||
-      direct_claim_active != 0U) return 8;
-
-  direct_supported = 1U;
   direct_capacity = 1U;
-  result = typed_api_envelope_send_direct(ctx, &envelope,
-                                          WL_DELIVERY_UNRELIABLE);
+  result = typed_api_envelope_send(ctx, &envelope, WL_DELIVERY_UNRELIABLE);
   if (result.domain != TYPED_API_SEND_CODEC_ERROR ||
-      result.codec_status != WL_CODEC_ERR_CAPACITY ||
-      result.abort_result != WL_OK || direct_abort_calls != 1U ||
-      direct_claim_active != 0U) return 9;
+      result.codec_status != WL_CODEC_ERR_CAPACITY || direct_abort_calls != 1U ||
+      direct_claim_active != 0U) return 4;
 
   direct_capacity = sizeof(direct_payload);
-  result = typed_api_envelope_send_direct(ctx, &envelope,
-                                          WL_DELIVERY_UNRELIABLE);
+  result = typed_api_empty_send(ctx, &empty, WL_DELIVERY_UNRELIABLE);
+  if (result.domain != TYPED_API_SEND_OK || result.payload_length != 0U ||
+      direct_message_id != EMPTY_MESSAGE_ID ||
+      sent_payload_length != 0U) return 5;
+
+  direct_supported = 0U;
+  result = typed_api_envelope_send(ctx, &envelope, WL_DELIVERY_UNRELIABLE);
+  if (result.domain != TYPED_API_SEND_CORE_ERROR ||
+      result.core_result != WL_ERR_NOT_SUPPORTED ||
+      direct_claim_active != 0U) return 6;
+
+  direct_supported = 1U;
+  result = typed_api_envelope_send(ctx, &envelope, WL_DELIVERY_UNRELIABLE);
   if (result.domain != TYPED_API_SEND_OK || direct_claim_active != 0U ||
-      sent_payload_length != 2U) return 10;
+      sent_payload_length != 2U) return 7;
   return 0;
 }
 
@@ -456,7 +429,7 @@ int main() {
   typed_api_router_t router{};
   router.empty = typed_api_empty_route_t{&scratch, handle, nullptr};
   typed_api_send_result_t result{};
-  return result.core_called == 0U && router.empty.scratch == &scratch ? 0 : 1;
+  return result.domain == 0 && router.empty.scratch == &scratch ? 0 : 1;
 }
 "#,
     )

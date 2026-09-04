@@ -66,7 +66,7 @@ fn compile_writes_named_c_artifacts() {
     assert!(header.contains("STATUS_MESSAGE_ID 1U"));
     assert!(source.contains("#include \"motor_api.h\""));
     assert!(bindings_header.contains("motor_api_dispatch_event"));
-    assert!(bindings_header.contains("motor_api_status_send_reliable"));
+    assert!(bindings_header.contains("motor_api_status_send("));
     assert!(bindings_source.contains("#include \"motor_api_bindings.h\""));
     assert!(!source.contains("wl_send_reliable"));
     assert!(manifest.contains("\"format\": \"wirelink-codegen-manifest-v1\""));

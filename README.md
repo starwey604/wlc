@@ -194,21 +194,13 @@ codec, and handler outcomes in separate domains and preserves the codec or
 handler status. Per-domain router counters saturate at `UINT32_MAX` rather
 than wrapping.
 
-Every message also has module-prefixed `send_unreliable` and `send_reliable`
-wrappers. They encode into a caller-supplied `<module>_encode_scratch_t`, then
-call the matching core API with the permanent message ID. The returned struct
-preserves the codec status, raw core result, encoded length, and reliable
-handle. `core_called` is zero when scratch encoding failed, in which case
-`core_result` must be ignored; it is one once the core was invoked.
-
-`<module>_<message>_send_direct()` is the native-packet fast path. It takes an
-explicit `wl_delivery_t`, claims the final core TX payload span, encodes into
-that span, and commits it without the scratch-to-core copy. COBS stream users
-keep using the scratch wrappers. A claim error such as `WL_ERR_NOT_SUPPORTED`
-is returned unchanged in `core_result`. Codec failure always aborts the claim;
-`abort_result` exposes that cleanup result, and a failed commit also attempts
-an abort in case the core still owns the claim. For ordinary scratch sends,
-`abort_result` remains `WL_OK`.
+Every message has one module-prefixed `<module>_<message>_send()` function. It
+takes an explicit `wl_delivery_t`, claims the final core TX payload span,
+encodes directly into that span, and commits without an intermediate copy.
+The returned struct preserves codec status, raw core result, encoded length,
+and a reliable handle. A claim error such as `WL_ERR_NOT_SUPPORTED` is returned
+unchanged in `core_result`; codec failure aborts the claim. Commit consumes the
+claim on both success and failure.
 
 A reliable wrapper returning `*_SEND_OK` means the send was submitted. Later
 link ACK or `WL_EVT_TX_SUCCESS` still proves link delivery only—not successful
@@ -350,7 +342,7 @@ and `detail_kind`) followed by a tagged union. Inspect
 has no domain payload. A retained-only profile therefore does not carry the
 larger RPC result fields. Generated runtime headers likewise include only the
 LATEST, FIFO, and RPC public headers selected by that profile. The fixed
-`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `12` for this surface; regenerate
+`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `13` for this surface; regenerate
 all runtime sources and update field access together when that value changes.
 ABI 8 changes RPC server completion from a bare operation ID to a copied
 `wl_rpc_request_identity_t`: generated callback types are named
@@ -374,10 +366,9 @@ ID, null runtime, missing route or scratch, delivery mismatch, decode/storage/
 RPC/application error, and replay-send failure—calls `wl_event_release()`
 exactly once. It is not a chainable try-dispatch: do not release the event
 yourself or pass it to the ordinary `<module>_dispatch_event()` afterward.
-Null `ctx` or `event` cannot dispose of an RX lease; non-RX events are never
-released. Feeding TX terminal events to the runtime advances a matching RPC
-client slot, but does not reclaim the core transaction; the caller must still
-call `wl_tx_take()` when required by the Wirelink transaction lifecycle.
+Null `ctx` or `event` cannot dispose of an RX lease. A matching RPC TX terminal
+event advances the runtime and reclaims its core transaction. Unmatched non-RX
+events remain caller-owned.
 
 `LATEST` and `FIFO` retain decoded values after the RX callback. WLC rejects a
 retained route whose message contains `bytes`, `string`, or `repeated` storage,
@@ -401,12 +392,12 @@ missing storage, codec/handler/RPC failure, and replay-send failure therefore
 do not NACK the packet or restart link ARQ. Use an RPC response/status,
 capacity policy, and application deadline for peer-visible completion.
 
-For each RPC service the runtime header emits typed scratch/direct client-start
-functions, a request callback route, and typed server complete/reject/retry
-functions. Client start allocates an operation ID and writes it into the mutable
-request before encoding. The returned result always retains that ID; a failed
-send leaves a terminal client slot that the application can inspect and
-release. Each service emits a nonblocking client-inspect helper that returns
+For each RPC service the runtime header emits one typed client-start function,
+a request callback route, and typed server complete/reject functions. Client
+start allocates an operation ID, temporarily writes it into the mutable request,
+encodes directly into core storage, then restores the request before returning.
+An encode or local submit failure releases the allocated client slot and returns
+operation ID zero. Each service emits a nonblocking client-inspect helper that returns
 generic operation metadata, a typed response decoder, and a service-checked
 release helper. Borrowed `bytes`/`string` response fields point into client
 response storage and remain valid only until that release. Response dispatch
@@ -423,12 +414,9 @@ pointer and capacity are still application policy and must be set on the
 instance scratch object after init and before dispatch. Canonical scratch must
 be writable and large enough for the complete decoded request; re-encoding
 drops unknown fields and makes field order irrelevant to duplicate
-classification. Scratch client sends may reuse their encode buffer after
-return. Direct client start encodes into a core claim and is therefore
-available only when the selected Wirelink envelope supports direct TX. Both
-start forms mutate the request's operation ID. If encoding or sending then
-fails, the allocated client slot is terminal but still must be inspected and
-released.
+classification. Client start requires a Wirelink envelope with direct TX
+support; the request's original operation-ID presence and value are restored
+before return.
 
 Response dispatch copies the original encoded bytes into the client's fixed
 response storage before releasing RX. That copy remains valid until client

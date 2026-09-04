@@ -697,16 +697,9 @@ fn generates_deterministic_c_data_model_and_api() {
             .bindings_header
             .contains("motor_api_status_handler_fn")
     );
-    assert!(
-        generated
-            .bindings_header
-            .contains("motor_api_status_send_unreliable")
-    );
-    assert!(
-        generated
-            .bindings_header
-            .contains("motor_api_status_send_direct")
-    );
+    assert!(generated.bindings_header.contains("motor_api_status_send("));
+    assert!(!generated.bindings_header.contains("send_unreliable"));
+    assert!(!generated.bindings_header.contains("send_direct"));
     assert!(
         generated
             .bindings_source

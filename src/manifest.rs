@@ -8,7 +8,7 @@ use crate::{
 };
 
 /// Semantic revision of generated C APIs and layouts.
-pub const CODEGEN_ABI_VERSION: u32 = 12;
+pub const CODEGEN_ABI_VERSION: u32 = 13;
 /// Stable JSON manifest format identifier.
 pub const CODEGEN_MANIFEST_FORMAT: &str = "wirelink-codegen-manifest-v1";
 /// Diagnostic, non-cryptographic artifact digest algorithm.

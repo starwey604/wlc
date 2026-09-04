@@ -125,6 +125,14 @@ int wl_tx_payload_abort(wl_ctx_t *ctx, const wl_tx_payload_claim_t *claim) {
   return WL_ERR_NOT_SUPPORTED;
 }
 
+int wl_tx_take(wl_ctx_t *ctx, wl_tx_handle_t handle,
+               wl_tx_result_t *out_result) {
+  (void)ctx;
+  (void)handle;
+  if (out_result != NULL) memset(out_result, 0, sizeof(*out_result));
+  return WL_OK;
+}
+
 static int32_t execute(void *user_data, const request_t *request,
                        const wl_rpc_server_request_t *server_request,
                        wl_delivery_t delivery) {

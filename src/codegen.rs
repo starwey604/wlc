@@ -269,7 +269,7 @@ fn emit_bindings_header(module: &str, codec_guard: &str, messages: &[&MessageSym
         "typedef int32_t {module}_send_domain_t;\nenum {{\n  {prefix}_SEND_OK = 0,\n  {prefix}_SEND_CODEC_ERROR,\n  {prefix}_SEND_CORE_ERROR\n}};\n\n"
     ));
     output.push_str(&format!(
-        "typedef struct {{\n  uint8_t *data;\n  size_t capacity;\n}} {module}_encode_scratch_t;\n\ntypedef struct {{\n  {module}_send_domain_t domain;\n  wl_codec_status_t codec_status;\n  int core_result;\n  int abort_result;\n  uint32_t core_called;\n  size_t payload_length;\n  wl_tx_handle_t handle;\n}} {module}_send_result_t;\n\n"
+        "typedef struct {{\n  uint8_t *data;\n  size_t capacity;\n}} {module}_encode_scratch_t;\n\ntypedef struct {{\n  {module}_send_domain_t domain;\n  wl_codec_status_t codec_status;\n  int core_result;\n  size_t payload_length;\n  wl_tx_handle_t handle;\n}} {module}_send_result_t;\n\n"
     ));
     for message in messages {
         let name = type_name(&message.name);
@@ -291,7 +291,7 @@ fn emit_bindings_header(module: &str, codec_guard: &str, messages: &[&MessageSym
     for message in messages {
         let name = type_name(&message.name);
         output.push_str(&format!(
-            "{module}_send_result_t {module}_{name}_send_unreliable(wl_ctx_t *ctx, const {name}_t *message, {module}_encode_scratch_t scratch);\n{module}_send_result_t {module}_{name}_send_reliable(wl_ctx_t *ctx, const {name}_t *message, {module}_encode_scratch_t scratch);\n{module}_send_result_t {module}_{name}_send_direct(wl_ctx_t *ctx, const {name}_t *message, wl_delivery_t delivery);\n\n"
+            "/* Encodes directly into Wirelink-owned TX storage. */\n{module}_send_result_t {module}_{name}_send(wl_ctx_t *ctx, const {name}_t *message, wl_delivery_t delivery);\n\n"
         ));
     }
     output.push_str("#ifdef __cplusplus\n}\n#endif\n\n#endif\n");
@@ -319,26 +319,8 @@ fn emit_bindings_source(module: &str, messages: &[&MessageSymbol]) -> String {
     for message in messages {
         let name = type_name(&message.name);
         let macro_name = upper_snake(&message.name);
-        for (delivery, call) in [
-            (
-                "unreliable",
-                format!(
-                    "wl_send_unreliable(ctx, {macro_name}_MESSAGE_ID, scratch.data, result.payload_length)"
-                ),
-            ),
-            (
-                "reliable",
-                format!(
-                    "wl_send_reliable(ctx, {macro_name}_MESSAGE_ID, scratch.data, result.payload_length, &result.handle)"
-                ),
-            ),
-        ] {
-            output.push_str(&format!(
-                "{module}_send_result_t {module}_{name}_send_{delivery}(wl_ctx_t *ctx, const {name}_t *message, {module}_encode_scratch_t scratch) {{\n  {module}_send_result_t result = {{ {prefix}_SEND_CODEC_ERROR, WL_CODEC_OK, WL_OK, WL_OK, 0U, 0U, 0U }};\n  result.codec_status = {name}_encode(message, scratch.data, scratch.capacity, &result.payload_length);\n  if (result.codec_status != WL_CODEC_OK) return result;\n  result.core_called = 1U;\n  result.core_result = {call};\n  result.domain = result.core_result == WL_OK ? {prefix}_SEND_OK : {prefix}_SEND_CORE_ERROR;\n  return result;\n}}\n\n"
-            ));
-        }
         output.push_str(&format!(
-            "{module}_send_result_t {module}_{name}_send_direct(wl_ctx_t *ctx, const {name}_t *message, wl_delivery_t delivery) {{\n  {module}_send_result_t result = {{ {prefix}_SEND_CORE_ERROR, WL_CODEC_OK, WL_OK, WL_OK, 1U, 0U, 0U }};\n  wl_tx_payload_claim_t claim = {{0}};\n  result.core_result = wl_tx_payload_claim(ctx, {macro_name}_MESSAGE_ID, delivery, &claim);\n  if (result.core_result != WL_OK) return result;\n  result.codec_status = {name}_encode(message, claim.span.data, claim.span.length, &result.payload_length);\n  if (result.codec_status != WL_CODEC_OK) {{\n    result.domain = {prefix}_SEND_CODEC_ERROR;\n    result.abort_result = wl_tx_payload_abort(ctx, &claim);\n    return result;\n  }}\n  result.core_result = wl_tx_payload_commit(ctx, &claim, result.payload_length, delivery == WL_DELIVERY_RELIABLE ? &result.handle : NULL);\n  if (result.core_result != WL_OK) {{\n    result.abort_result = wl_tx_payload_abort(ctx, &claim);\n    return result;\n  }}\n  result.domain = {prefix}_SEND_OK;\n  return result;\n}}\n\n"
+            "{module}_send_result_t {module}_{name}_send(wl_ctx_t *ctx, const {name}_t *message, wl_delivery_t delivery) {{\n  {module}_send_result_t result = {{ {prefix}_SEND_CORE_ERROR, WL_CODEC_OK, WL_OK, 0U, 0U }};\n  wl_tx_payload_claim_t claim = {{0}};\n  result.core_result = wl_tx_payload_claim(ctx, {macro_name}_MESSAGE_ID, delivery, &claim);\n  if (result.core_result != WL_OK) return result;\n  result.codec_status = {name}_encode(message, claim.span.data, claim.span.length, &result.payload_length);\n  if (result.codec_status != WL_CODEC_OK) {{\n    result.domain = {prefix}_SEND_CODEC_ERROR;\n    (void)wl_tx_payload_abort(ctx, &claim);\n    return result;\n  }}\n  result.core_result = wl_tx_payload_commit(ctx, &claim, result.payload_length, delivery == WL_DELIVERY_RELIABLE ? &result.handle : NULL);\n  if (result.core_result != WL_OK) return result;\n  result.domain = {prefix}_SEND_OK;\n  return result;\n}}\n\n"
         ));
     }
     while output.ends_with("\n\n") {
