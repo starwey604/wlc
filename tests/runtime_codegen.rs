@@ -205,7 +205,9 @@ message State = 1 { optional uint32 sequence = 1; }
             .header
             .contains("stable_api_runtime_rpc_detail_t rpc;")
     );
-    assert!(first.header.contains("Terminal consumer for RX events"));
+    assert!(first.header.contains("result.event_consumed"));
+    assert!(first.header.contains("uint8_t event_consumed;"));
+    assert!(first.source.contains("result.event_consumed = 1U;"));
     assert!(first.source.contains("goto init_failed;"));
     assert!(
         first

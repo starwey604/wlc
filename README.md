@@ -336,13 +336,15 @@ the schema or binding-profile identity. Applications may still construct the
 lower-level `<module>_runtime_t` manually when they need a custom layout.
 
 Runtime results have a small common header (`domain`, event/message identity,
-and `detail_kind`) followed by a tagged union. Inspect
+`detail_kind`, and `event_consumed`) followed by a tagged union. Dispatch sets
+`event_consumed` after it releases an RX event or reclaims a matching terminal
+TX handle; owner loops may apply their fallback action only while it is zero. Inspect
 `result.detail.retained` only for `*_RUNTIME_DETAIL_RETAINED`, and
 `result.detail.rpc` only for `*_RUNTIME_DETAIL_RPC`; `*_RUNTIME_DETAIL_NONE`
 has no domain payload. A retained-only profile therefore does not carry the
 larger RPC result fields. Generated runtime headers likewise include only the
 LATEST, FIFO, and RPC public headers selected by that profile. The fixed
-`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `14` for this surface; regenerate
+`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `15` for this surface; regenerate
 all runtime sources and update field access together when that value changes.
 ABI 8 changes RPC server completion from a bare operation ID to a copied
 `wl_rpc_request_identity_t`: generated callback types are named

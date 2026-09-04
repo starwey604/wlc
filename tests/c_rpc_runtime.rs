@@ -320,7 +320,8 @@ static int check_client(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime,
   event.type = WL_EVT_TX_SUCCESS;
   event.handle = result.detail.rpc.handle;
   result = rpc_fixture_runtime_dispatch_event(ctx, &event, runtime, 11U);
-  if (result.domain != RPC_FIXTURE_RUNTIME_OK || release_calls != 0U) return 5;
+  if (result.domain != RPC_FIXTURE_RUNTIME_OK || !result.event_consumed ||
+      release_calls != 0U) return 5;
 
   response.has_operation_id = true;
   response.operation_id = 1U;
@@ -342,7 +343,8 @@ static int check_client(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime,
   zero_payload_on_release = 1U;
   result = rpc_fixture_runtime_dispatch_event(ctx, &event, runtime, 12U);
   zero_payload_on_release = 0U;
-  if (result.domain != RPC_FIXTURE_RUNTIME_OK || release_calls != 1U ||
+  if (result.domain != RPC_FIXTURE_RUNTIME_OK || !result.event_consumed ||
+      release_calls != 1U ||
       result.detail.rpc.application_result != 0) return 7;
   memset(&inspected_response, 0, sizeof(inspected_response));
   if (rpc_fixture_compute_client_inspect(runtime, 1U, &client_result) != WL_RPC_OK ||
@@ -465,7 +467,7 @@ static int check_client(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime,
   event.payload = response_bytes;
   event.payload_len = response_length;
   result = rpc_fixture_runtime_dispatch_event(ctx, &event, runtime, 41U);
-  if (result.domain != RPC_FIXTURE_RUNTIME_RPC_ERROR ||
+  if (result.domain != RPC_FIXTURE_RUNTIME_RPC_ERROR || !result.event_consumed ||
       result.detail.rpc.rpc_result != WL_RPC_ERR_RESPONSE_MISMATCH || release_calls != 2U)
     return 18;
   if (rpc_fixture_runtime_get_deadline_hint(runtime, 41U, &deadline) != WL_RPC_OK ||
@@ -482,7 +484,8 @@ static int check_client(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime,
   event.type = WL_EVT_TX_FAILED;
   event.handle = UINT32_C(0xDEADBEEF);
   result = rpc_fixture_runtime_dispatch_event(ctx, &event, runtime, 31U);
-  if (result.domain != RPC_FIXTURE_RUNTIME_NON_RX || release_calls != 2U)
+  if (result.domain != RPC_FIXTURE_RUNTIME_NON_RX || result.event_consumed ||
+      release_calls != 2U)
     return 21;
   return 0;
 }
@@ -532,7 +535,7 @@ static int check_server(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime) {
 
   result = dispatch_request(ctx, runtime, request_a, sizeof(request_a), peer_a,
                             100U);
-  if (result.domain != RPC_FIXTURE_RUNTIME_OK ||
+  if (result.domain != RPC_FIXTURE_RUNTIME_OK || !result.event_consumed ||
       result.detail_kind != RPC_FIXTURE_RUNTIME_DETAIL_RPC ||
       result.detail.rpc.rpc_disposition != WL_RPC_SERVER_NEW || handler_calls != 1U ||
       result.detail.rpc.operation_id != 77U ||

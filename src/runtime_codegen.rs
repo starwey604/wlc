@@ -519,7 +519,7 @@ fn emit_header(schema: &SemanticModel, profile: &BindingProfileModel, module: &s
     }
     write!(
         output,
-        "}} {module}_runtime_detail_t;\n\n/* Inspect detail only through the member selected by detail_kind. domain\n * classifies the outcome; zero-initialized unused detail fields retain their\n * corresponding success values. */\ntypedef struct {{\n  {module}_runtime_domain_t domain;\n  wl_event_type_t event_type;\n  uint16_t message_id;\n  {module}_runtime_detail_kind_t detail_kind;\n  uint8_t _reserved;\n  {module}_runtime_detail_t detail;\n}} {module}_runtime_result_t;\n\n"
+        "}} {module}_runtime_detail_t;\n\n/* Inspect detail only through the member selected by detail_kind. domain\n * classifies the outcome; zero-initialized unused detail fields retain their\n * corresponding success values. event_consumed is nonzero only when dispatch\n * released an RX event or reclaimed a terminal TX handle. */\ntypedef struct {{\n  {module}_runtime_domain_t domain;\n  wl_event_type_t event_type;\n  uint16_t message_id;\n  {module}_runtime_detail_kind_t detail_kind;\n  uint8_t event_consumed;\n  {module}_runtime_detail_t detail;\n}} {module}_runtime_result_t;\n\n"
     )
     .unwrap();
     for route in &profile.retained_routes {
@@ -558,10 +558,9 @@ fn emit_header(schema: &SemanticModel, profile: &BindingProfileModel, module: &s
     writeln!(output, "}} {module}_runtime_t;\n").unwrap();
     emit_assembly_header(&mut output, profile, module);
     output.push_str(concat!(
-        "/* Terminal consumer for RX events: with non-null ctx/event every RX\n",
-        " * outcome releases the event exactly once. Do not chain another dispatcher\n",
-        " * or release it again. Matching RPC TX terminal events advance the runtime\n",
-        " * and reclaim the handle. Unmatched non-RX events remain caller-owned. */\n",
+        "/* With non-null ctx/event every RX outcome is consumed. Matching RPC TX\n",
+        " * terminal events advance the runtime and reclaim the handle. Inspect\n",
+        " * result.event_consumed before applying a fallback owner action. */\n",
     ));
     writeln!(
         output,
@@ -879,7 +878,7 @@ fn emit_source(profile: &BindingProfileModel, module: &str) -> String {
     } else {
         write!(
             output,
-            "  if (event->type == WL_EVT_TX_SUCCESS || event->type == WL_EVT_TX_TIMEOUT || event->type == WL_EVT_TX_FAILED) {{\n    wl_tx_result_t tx_result = {{0}};\n    if (runtime == NULL || ctx == NULL) {{\n      result.domain = {prefix}_RUNTIME_NON_RX;\n      return result;\n    }}\n    result.detail_kind = {prefix}_RUNTIME_DETAIL_RPC;\n    result.detail.rpc.handle = event->handle;\n    if (runtime->rpc_server != NULL) {{\n      result.detail.rpc.rpc_result = wl_rpc_server_on_tx_event(runtime->rpc_server, event);\n      if (result.detail.rpc.rpc_result == WL_RPC_OK) {{\n        result.detail.rpc.core_result = wl_tx_take(ctx, event->handle, &tx_result);\n        result.domain = result.detail.rpc.core_result == WL_OK ? {prefix}_RUNTIME_OK : {prefix}_RUNTIME_CORE_ERROR;\n        return result;\n      }}\n      if (result.detail.rpc.rpc_result != WL_RPC_ERR_NOT_FOUND) {{\n        result.domain = {prefix}_RUNTIME_RPC_ERROR;\n        return result;\n      }}\n    }}\n    if (runtime->rpc_client != NULL) {{\n      result.detail.rpc.rpc_result = wl_rpc_client_on_tx_event(runtime->rpc_client, event);\n      if (result.detail.rpc.rpc_result == WL_RPC_OK) {{\n        result.detail.rpc.core_result = wl_tx_take(ctx, event->handle, &tx_result);\n        result.domain = result.detail.rpc.core_result == WL_OK ? {prefix}_RUNTIME_OK : {prefix}_RUNTIME_CORE_ERROR;\n      }} else if (result.detail.rpc.rpc_result == WL_RPC_ERR_NOT_FOUND) result.domain = {prefix}_RUNTIME_NON_RX;\n      else result.domain = {prefix}_RUNTIME_RPC_ERROR;\n    }} else {{\n      result.domain = {prefix}_RUNTIME_NON_RX;\n    }}\n    return result;\n  }}\n  if (event->type != WL_EVT_UNRELIABLE_RX && event->type != WL_EVT_RELIABLE_RX) {{\n    result.domain = {prefix}_RUNTIME_NON_RX;\n    return result;\n  }}\n"
+            "  if (event->type == WL_EVT_TX_SUCCESS || event->type == WL_EVT_TX_TIMEOUT || event->type == WL_EVT_TX_FAILED) {{\n    wl_tx_result_t tx_result = {{0}};\n    if (runtime == NULL || ctx == NULL) {{\n      result.domain = {prefix}_RUNTIME_NON_RX;\n      return result;\n    }}\n    result.detail_kind = {prefix}_RUNTIME_DETAIL_RPC;\n    result.detail.rpc.handle = event->handle;\n    if (runtime->rpc_server != NULL) {{\n      result.detail.rpc.rpc_result = wl_rpc_server_on_tx_event(runtime->rpc_server, event);\n      if (result.detail.rpc.rpc_result == WL_RPC_OK) {{\n        result.detail.rpc.core_result = wl_tx_take(ctx, event->handle, &tx_result);\n        result.event_consumed = result.detail.rpc.core_result == WL_OK ? 1U : 0U;\n        result.domain = result.detail.rpc.core_result == WL_OK ? {prefix}_RUNTIME_OK : {prefix}_RUNTIME_CORE_ERROR;\n        return result;\n      }}\n      if (result.detail.rpc.rpc_result != WL_RPC_ERR_NOT_FOUND) {{\n        result.domain = {prefix}_RUNTIME_RPC_ERROR;\n        return result;\n      }}\n    }}\n    if (runtime->rpc_client != NULL) {{\n      result.detail.rpc.rpc_result = wl_rpc_client_on_tx_event(runtime->rpc_client, event);\n      if (result.detail.rpc.rpc_result == WL_RPC_OK) {{\n        result.detail.rpc.core_result = wl_tx_take(ctx, event->handle, &tx_result);\n        result.event_consumed = result.detail.rpc.core_result == WL_OK ? 1U : 0U;\n        result.domain = result.detail.rpc.core_result == WL_OK ? {prefix}_RUNTIME_OK : {prefix}_RUNTIME_CORE_ERROR;\n      }} else if (result.detail.rpc.rpc_result == WL_RPC_ERR_NOT_FOUND) result.domain = {prefix}_RUNTIME_NON_RX;\n      else result.domain = {prefix}_RUNTIME_RPC_ERROR;\n    }} else {{\n      result.domain = {prefix}_RUNTIME_NON_RX;\n    }}\n    return result;\n  }}\n  if (event->type != WL_EVT_UNRELIABLE_RX && event->type != WL_EVT_RELIABLE_RX) {{\n    result.domain = {prefix}_RUNTIME_NON_RX;\n    return result;\n  }}\n"
         )
         .unwrap();
     }
@@ -893,7 +892,7 @@ fn emit_source(profile: &BindingProfileModel, module: &str) -> String {
     }
     write!(
         output,
-        "    default:\n      result.domain = {prefix}_RUNTIME_UNKNOWN_MESSAGE;\n      break;\n  }}\n\nrelease_event:\n  wl_event_release(ctx, event);\n  return result;\n}}\n"
+        "    default:\n      result.domain = {prefix}_RUNTIME_UNKNOWN_MESSAGE;\n      break;\n  }}\n\nrelease_event:\n  wl_event_release(ctx, event);\n  result.event_consumed = 1U;\n  return result;\n}}\n"
     )
     .unwrap();
     for route in &profile.retained_routes {
