@@ -274,7 +274,7 @@ rpc Local {
     assert!(
         generated
             .source
-            .contains("wl_send_reliable(ctx, RESPONSE_MESSAGE_ID, cached->response_data")
+            .contains("wl_send_reliable(ctx, RESPONSE_MESSAGE_ID, response.response_data")
     );
 }
 

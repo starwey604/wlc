@@ -49,9 +49,9 @@ rpc Execute {
 }
 "#;
 
-const HOT_PATH_TEXT_BUDGET: usize = 2944;
+const HOT_PATH_TEXT_BUDGET: usize = 3328;
 const ASSEMBLY_TEXT_BUDGET: usize = 1200;
-const COMBINED_TEXT_BUDGET: usize = 4096;
+const COMBINED_TEXT_BUDGET: usize = 4480;
 
 fn wirelink_root() -> std::path::PathBuf {
     fs::canonicalize(
@@ -117,13 +117,13 @@ fn combined_runtime_result_has_bounded_host_layout() {
     assert_host_layout(
         PROFILE,
         "runtime_size",
-        r#"_Static_assert(RUNTIME_SIZE_RUNTIME_CODEGEN_ABI_VERSION == 8U,
+        r#"_Static_assert(RUNTIME_SIZE_RUNTIME_CODEGEN_ABI_VERSION == 9U,
                "unexpected generated ABI");
 _Static_assert(sizeof(runtime_size_runtime_retained_detail_t) <= 12U,
                "retained detail regressed");
-_Static_assert(sizeof(runtime_size_runtime_rpc_detail_t) <= 88U,
+_Static_assert(sizeof(runtime_size_runtime_rpc_detail_t) <= 96U,
                "RPC detail regressed");
-_Static_assert(sizeof(runtime_size_runtime_result_t) <= 104U,
+_Static_assert(sizeof(runtime_size_runtime_result_t) <= 112U,
                "combined runtime result regressed");"#,
     );
 }
@@ -133,7 +133,7 @@ fn retained_only_result_elides_rpc_layout() {
     assert_host_layout(
         RETAINED_PROFILE,
         "retained_size",
-        r#"_Static_assert(RETAINED_SIZE_RUNTIME_CODEGEN_ABI_VERSION == 8U,
+        r#"_Static_assert(RETAINED_SIZE_RUNTIME_CODEGEN_ABI_VERSION == 9U,
                "unexpected generated ABI");
 _Static_assert(sizeof(retained_size_runtime_retained_detail_t) <= 12U,
                "retained detail regressed");
@@ -147,11 +147,11 @@ fn rpc_only_result_has_bounded_layout() {
     assert_host_layout(
         RPC_PROFILE,
         "rpc_size",
-        r#"_Static_assert(RPC_SIZE_RUNTIME_CODEGEN_ABI_VERSION == 8U,
+        r#"_Static_assert(RPC_SIZE_RUNTIME_CODEGEN_ABI_VERSION == 9U,
                "unexpected generated ABI");
-_Static_assert(sizeof(rpc_size_runtime_rpc_detail_t) <= 88U,
+_Static_assert(sizeof(rpc_size_runtime_rpc_detail_t) <= 96U,
                "RPC detail regressed");
-_Static_assert(sizeof(rpc_size_runtime_result_t) <= 104U,
+_Static_assert(sizeof(rpc_size_runtime_result_t) <= 112U,
                "RPC-only runtime result regressed");"#,
     );
 }

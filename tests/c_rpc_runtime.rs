@@ -466,6 +466,7 @@ static int check_server(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime) {
   wl_rpc_server_response_t cached;
   wl_rpc_deadline_hint_t deadline = {0};
   rpc_fixture_runtime_poll_result_t progress = {0};
+  rpc_fixture_runtime_service_result_t service = {0};
   rpc_fixture_runtime_result_t result;
   wl_rpc_request_identity_t first_identity;
   wl_rpc_request_identity_t second_identity;
@@ -523,8 +524,10 @@ static int check_server(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime) {
       (rpc_fixture_encode_scratch_t){encoded, sizeof(encoded)}, 103U);
   if (result.domain != RPC_FIXTURE_RUNTIME_OK || response.operation_id != 77U ||
       !response.has_status || response.status != SUCCESS ||
-      reliable_sends != 0U || sent_message_id != COMPUTE_RESPONSE_MESSAGE_ID ||
       result.detail.rpc.server_response.response_data == NULL ||
+      rpc_fixture_runtime_service(ctx, runtime, 103U, &service) != WL_RPC_OK ||
+      service.responses_submitted != 1U || reliable_sends != 0U ||
+      sent_message_id != COMPUTE_RESPONSE_MESSAGE_ID ||
       result.detail.rpc.payload_length != sent_payload_length ||
       memcmp(result.detail.rpc.server_response.response_data, sent_payload,
              sent_payload_length) != 0)
@@ -533,15 +536,15 @@ static int check_server(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime) {
   memcpy(first_cached, sent_payload, first_cached_length);
   cached = result.detail.rpc.server_response;
   result = rpc_fixture_compute_server_retry_cached(ctx, &cached);
-  if (result.domain != RPC_FIXTURE_RUNTIME_OK ||
-      sent_payload_length != first_cached_length ||
-      memcmp(sent_payload, first_cached, first_cached_length) != 0)
+  if (result.domain != RPC_FIXTURE_RUNTIME_OK)
     return 6;
 
   result = dispatch_request(ctx, runtime, request_same, sizeof(request_same),
                             peer_a, 104U);
   if (result.domain != RPC_FIXTURE_RUNTIME_OK ||
       result.detail.rpc.rpc_disposition != WL_RPC_SERVER_REPLAY || handler_calls != 2U ||
+      rpc_fixture_runtime_service(ctx, runtime, 104U, &service) != WL_RPC_OK ||
+      service.responses_submitted != 1U ||
       sent_payload_length != first_cached_length ||
       memcmp(sent_payload, first_cached, first_cached_length) != 0)
     return 7;
@@ -565,9 +568,12 @@ static int check_server(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime) {
   result = rpc_fixture_compute_server_reject(
       ctx, runtime, &second_identity, REJECTED, &response,
       (rpc_fixture_encode_scratch_t){encoded, sizeof(encoded)}, 107U);
-  if (result.domain != RPC_FIXTURE_RUNTIME_CORE_ERROR ||
-      result.detail.rpc.core_result != WL_ERR_BUSY ||
-      result.detail.rpc.application_result != REJECTED || response.status != REJECTED ||
+  if (result.domain != RPC_FIXTURE_RUNTIME_OK || response.status != REJECTED ||
+      rpc_fixture_runtime_service(ctx, runtime, 107U, &service) != WL_RPC_OK ||
+      service.responses_deferred != 1U ||
+      service.response.domain != RPC_FIXTURE_RUNTIME_CORE_ERROR ||
+      service.response.detail.rpc.core_result != WL_ERR_BUSY ||
+      service.response.detail.rpc.application_result != REJECTED ||
       compute_response_decode(sent_payload, sent_payload_length, &decoded) != WL_CODEC_OK ||
       decoded.operation_id != 78U || decoded.status != REJECTED)
     return 10;
@@ -575,7 +581,9 @@ static int check_server(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime) {
   result = dispatch_request(ctx, runtime, request_two, sizeof(request_two),
                             peer_a, 108U);
   if (result.domain != RPC_FIXTURE_RUNTIME_OK ||
-      result.detail.rpc.rpc_disposition != WL_RPC_SERVER_REPLAY || handler_calls != 4U)
+      result.detail.rpc.rpc_disposition != WL_RPC_SERVER_REPLAY || handler_calls != 4U ||
+      rpc_fixture_runtime_service(ctx, runtime, 108U, &service) != WL_RPC_OK ||
+      service.responses_submitted != 1U)
     return 11;
 
   result = dispatch_request(ctx, runtime, request_three, sizeof(request_three),
@@ -601,8 +609,12 @@ static int check_server(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime) {
   if (rpc_fixture_runtime_poll(runtime, 115U, &progress) != WL_RPC_OK ||
       progress.client_timed_out != 0U ||
       progress.server_pending_expired != 1U ||
+      progress.server_expired_identity.operation_id != 79U ||
       progress.server_cache_expired != 0U)
     return 15;
+  if (wl_rpc_server_abandon(runtime->rpc_server,
+                            &progress.server_expired_identity) != WL_RPC_OK)
+    return 23;
   result = dispatch_request(ctx, runtime, request_three, sizeof(request_three),
                             peer_a, 116U);
   if (result.domain != RPC_FIXTURE_RUNTIME_OK ||
