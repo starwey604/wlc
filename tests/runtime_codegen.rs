@@ -212,6 +212,17 @@ message State = 1 { optional uint32 sequence = 1; }
     assert!(first.header.contains("stable_api_runtime_pump_hooks"));
     assert!(
         first
+            .header
+            .contains("#define STABLE_API_RUNTIME_HAS_DEFAULT_STORAGE 1")
+    );
+    assert!(
+        first
+            .header
+            .contains("stable_api_runtime_default_storage_t")
+    );
+    assert!(first.source.contains("stable_api_runtime_config_defaults"));
+    assert!(
+        first
             .source
             .contains("return result.event_consumed != 0U ? WL_PUMP_EVENT_CONSUMED")
     );
@@ -220,6 +231,55 @@ message State = 1 { optional uint32 sequence = 1; }
         first
             .source
             .contains("init_failed:\n  memset(instance, 0, sizeof(*instance));")
+    );
+}
+
+#[test]
+fn unbounded_rpc_keeps_manual_capacity_path_without_a_false_static_recipe() {
+    let schema = schema(
+        r#"version 1;
+message Request = 1 {
+  optional uint32 operation_id = 1;
+  optional bytes payload = 2;
+}
+message Response = 2 {
+  optional uint32 operation_id = 1;
+  optional int32 status = 2;
+}
+"#,
+    );
+    let profile = profile(
+        r#"profile version 1;
+rpc Execute {
+  request = Request;
+  response = Response;
+  request_operation_id = operation_id;
+  response_operation_id = operation_id;
+  response_status = status;
+  request_delivery = reliable;
+  response_delivery = reliable;
+}
+"#,
+        &schema,
+    );
+    let generated = generate_runtime_c(&schema, &profile, "unbounded").unwrap();
+    assert!(
+        generated
+            .header
+            .contains("#define UNBOUNDED_RUNTIME_HAS_DEFAULT_STORAGE 0")
+    );
+    assert!(!generated.header.contains(
+        "typedef union {\n  max_align_t alignment;\n  uint8_t bytes[UNBOUNDED_RUNTIME_DEFAULT_STORAGE_CAPACITY]"
+    ));
+    assert!(
+        generated
+            .source
+            .contains("config->rpc_client_response_capacity = 12U;")
+    );
+    assert!(
+        !generated
+            .source
+            .contains("  config->execute_canonical_request_capacity = ")
     );
 }
 

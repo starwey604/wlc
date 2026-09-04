@@ -176,11 +176,31 @@ int main(void) {
   assembly_runtime_instance_t before;
   assembly_runtime_requirements_t requirements = {0};
   assembly_runtime_config_t config = valid_config();
+  assembly_runtime_config_t defaults;
   assembly_runtime_storage_t storage;
   wl_latest_stats_t latest_stats = {0};
   wl_fifo_stats_t fifo_stats = {0};
   uint32_t operation_id = 0U;
   int result;
+
+  if (ASSEMBLY_RUNTIME_HAS_DEFAULT_STORAGE != 0 ||
+      assembly_runtime_config_defaults(NULL) != WL_ERR_INVALID_ARG ||
+      assembly_runtime_config_defaults(&defaults) != WL_OK ||
+      defaults.state_latest_initial_generation != 1U ||
+      defaults.alarm_fifo_capacity != 1U ||
+      defaults.rpc_client_enabled != 0U ||
+      defaults.rpc_server_enabled != 0U ||
+      defaults.rpc_client_response_capacity == 0U ||
+      defaults.execute_canonical_request_capacity != 0U ||
+      assembly_runtime_config_enable_client(&defaults) != WL_OK ||
+      defaults.rpc_client_enabled != 1U ||
+      assembly_runtime_config_enable_server(&defaults) !=
+          WL_ERR_NOT_SUPPORTED)
+    return 30;
+  defaults.execute_canonical_request_capacity = 64U;
+  if (assembly_runtime_config_enable_server(&defaults) != WL_OK ||
+      defaults.rpc_server_enabled != 1U)
+    return 31;
 
   result = assembly_runtime_requirements(&config, &requirements);
   if (result != WL_OK || requirements.storage_size == 0U ||
@@ -367,6 +387,36 @@ fn generated_runtime_assembly_clears_instance_after_component_init_failure() {
     .unwrap();
     fs::write(directory.path().join("rollback_runtime.h"), runtime.header).unwrap();
     fs::write(directory.path().join("rollback_runtime.c"), runtime.source).unwrap();
+    fs::write(
+        directory.path().join("header.cpp"),
+        r#"#include "rollback_runtime.h"
+
+static_assert(ROLLBACK_RUNTIME_HAS_DEFAULT_STORAGE == 1);
+static_assert(sizeof(rollback_runtime_default_storage_t) >=
+              ROLLBACK_RUNTIME_DEFAULT_STORAGE_CAPACITY);
+"#,
+    )
+    .unwrap();
+    let header_status = Command::new("c++")
+        .args([
+            "-std=c++20",
+            "-Wall",
+            "-Wextra",
+            "-Wpedantic",
+            "-Werror",
+            "-fsyntax-only",
+            "-I",
+        ])
+        .arg(wirelink_root().join("include"))
+        .arg("-I")
+        .arg(directory.path())
+        .arg(directory.path().join("header.cpp"))
+        .status()
+        .unwrap();
+    assert!(
+        header_status.success(),
+        "generated bounded storage header must compile as C++20"
+    );
     fs::write(
         directory.path().join("main.c"),
         r#"#include "rollback_runtime.h"

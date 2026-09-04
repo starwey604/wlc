@@ -299,23 +299,27 @@ The manifest's `bounded_fields` array records each bounded field's message and
 field names/IDs, kind, and exact maximum byte length. Bounds also contribute to
 the schema identity; unbounded legacy types retain their existing identity tags.
 
-The generated header also provides a no-heap static assembly path:
+For a bounded profile, the generated header provides a no-heap default assembly
+path with one retained/RPC slot:
 
 ```c
-control_runtime_config_t config = {0};
-control_runtime_requirements_t requirements;
-control_runtime_storage_t storage;
+control_runtime_config_t config;
+control_runtime_default_storage_t arena;
 control_runtime_instance_t instance;
 
-config.alarm_event_fifo_capacity = 8U;
-config.rpc_client_enabled = 1U;
-config.rpc_client_slot_count = 4U;
-config.rpc_client_response_capacity = 128U;
-
-control_runtime_requirements(&config, &requirements);
-storage = (control_runtime_storage_t){arena, requirements.storage_size};
+control_runtime_config_defaults(&config);
+control_runtime_config_enable_client(&config);
+control_runtime_storage_t storage =
+    control_runtime_default_storage_descriptor(&arena);
 control_runtime_init(&instance, &config, &storage);
 ```
+
+Defaults use generation/operation ID one, one FIFO/RPC slot, exact schema
+encoded maxima, disabled roles, zero timeouts, and reject-new cache policy.
+The client/server helpers only enable a role; applications still set handlers
+and business expiry policy. `*_RUNTIME_HAS_DEFAULT_STORAGE` is `0` when an RPC
+payload is unbounded, in which case no misleading static arena type is emitted.
+Use the custom path below after supplying explicit capacities.
 
 `<module>_runtime_requirements()` validates all enabled component sizes and
 reports the exact byte count and base alignment for caller-owned storage.

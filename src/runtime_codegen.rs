@@ -10,7 +10,7 @@ use thiserror::Error;
 
 use crate::{
     ast::Cardinality,
-    codegen::{c_identifier, generate_c, type_name, upper_snake},
+    codegen::{c_identifier, generate_c, static_max_encoded_sizes, type_name, upper_snake},
     identity::{IDENTITY_ALGORITHM, binding_profile_identity, schema_identity},
     manifest::CODEGEN_ABI_VERSION,
     profile::BINDING_PROFILE_VERSION,
@@ -55,7 +55,7 @@ pub fn generate_runtime_c(
 
     Ok(GeneratedRuntimeC {
         header: emit_header(schema, profile, &module),
-        source: emit_source(profile, &module),
+        source: emit_source(schema, profile, &module),
     })
 }
 
@@ -86,6 +86,7 @@ fn validate_runtime_names(
         format!("{module}_runtime_pump_t"),
         format!("{module}_runtime_result_fn"),
         format!("{module}_runtime_config_t"),
+        format!("{module}_runtime_default_storage_t"),
         format!("{module}_runtime_requirements_t"),
         format!("{module}_runtime_storage_t"),
         format!("{module}_runtime_instance_t"),
@@ -94,6 +95,10 @@ fn validate_runtime_names(
         format!("{module}_runtime_storage_region"),
         format!("{module}_runtime_layout"),
         format!("{module}_runtime_requirements"),
+        format!("{module}_runtime_config_defaults"),
+        format!("{module}_runtime_config_enable_client"),
+        format!("{module}_runtime_config_enable_server"),
+        format!("{module}_runtime_default_storage_descriptor"),
         format!("{module}_runtime_init"),
         format!("{module}_runtime_dispatch_event"),
         format!("{module}_runtime_pump_init"),
@@ -108,6 +113,8 @@ fn validate_runtime_names(
         format!("{prefix}_BINDING_PROFILE_VERSION"),
         format!("{prefix}_IDENTITY_ALGORITHM"),
         format!("{prefix}_RUNTIME_CODEGEN_ABI_VERSION"),
+        format!("{prefix}_RUNTIME_HAS_DEFAULT_STORAGE"),
+        format!("{prefix}_RUNTIME_DEFAULT_STORAGE_CAPACITY"),
         format!("{prefix}_RUNTIME_DETAIL_NONE"),
         format!("{prefix}_RUNTIME_DETAIL_RETAINED"),
         format!("{prefix}_RUNTIME_DETAIL_RPC"),
@@ -577,7 +584,7 @@ fn emit_header(schema: &SemanticModel, profile: &BindingProfileModel, module: &s
         .unwrap();
     }
     writeln!(output, "}} {module}_runtime_pump_t;\n").unwrap();
-    emit_assembly_header(&mut output, profile, module);
+    emit_assembly_header(&mut output, schema, profile, module);
     output.push_str(concat!(
         "/* With non-null ctx/event every RX outcome is consumed. Matching RPC TX\n",
         " * terminal events advance the runtime and reclaim the handle. Inspect\n",
@@ -643,7 +650,107 @@ fn emit_retained_header_functions(output: &mut String, module: &str, route: &Ret
     .unwrap();
 }
 
-fn emit_assembly_header(output: &mut String, profile: &BindingProfileModel, module: &str) {
+struct RuntimeDefaultCapacities {
+    rpc_response: Option<u16>,
+    canonical_requests: Vec<(String, Option<u16>)>,
+}
+
+impl RuntimeDefaultCapacities {
+    fn has_storage(&self) -> bool {
+        self.rpc_response.is_some()
+            && self
+                .canonical_requests
+                .iter()
+                .all(|(_, capacity)| capacity.is_some())
+    }
+}
+
+fn runtime_default_capacities(
+    schema: &SemanticModel,
+    profile: &BindingProfileModel,
+) -> RuntimeDefaultCapacities {
+    let messages = schema
+        .declarations
+        .iter()
+        .filter_map(|symbol| match symbol {
+            Symbol::Message(message) => Some(message),
+            Symbol::Enum(_) => None,
+        })
+        .collect::<Vec<_>>();
+    let maxima = static_max_encoded_sizes(&messages);
+    let by_name = messages
+        .iter()
+        .map(|message| (message.name.as_str(), message.id))
+        .collect::<HashMap<_, _>>();
+    let mut rpc_response = Some(1_u16);
+    let mut canonical_requests = Vec::new();
+
+    for service in &profile.rpc_services {
+        let request_capacity = by_name
+            .get(service.request_name.as_str())
+            .and_then(|id| maxima.get(id))
+            .copied()
+            .flatten()
+            .map(|capacity| capacity.max(1))
+            .and_then(|capacity| u16::try_from(capacity).ok());
+        let response_capacity = by_name
+            .get(service.response_name.as_str())
+            .and_then(|id| maxima.get(id))
+            .copied()
+            .flatten()
+            .map(|capacity| capacity.max(1))
+            .and_then(|capacity| u16::try_from(capacity).ok());
+        rpc_response = match (rpc_response, response_capacity) {
+            (Some(current), Some(capacity)) => Some(current.max(capacity)),
+            _ => None,
+        };
+        canonical_requests.push((c_identifier(&service.name), request_capacity));
+    }
+    RuntimeDefaultCapacities {
+        rpc_response,
+        canonical_requests,
+    }
+}
+
+fn default_storage_terms(
+    profile: &BindingProfileModel,
+    capacities: &RuntimeDefaultCapacities,
+) -> Vec<String> {
+    let mut terms = Vec::new();
+    for route in &profile.retained_routes {
+        let message = type_name(&route.message_name);
+        match route.kind {
+            RetainedRouteKind::Latest => terms.push(format!(
+                "((sizeof(max_align_t) - 1U) + ((sizeof({message}_t) + (sizeof(max_align_t) - 1U)) * WL_LATEST_SLOT_COUNT))"
+            )),
+            RetainedRouteKind::Fifo => terms.push(format!(
+                "((sizeof(max_align_t) - 1U) + sizeof({message}_t) + (sizeof(max_align_t) - 1U))"
+            )),
+        }
+    }
+    if !profile.rpc_services.is_empty() {
+        terms.push("((sizeof(max_align_t) - 1U) + sizeof(wl_rpc_client_slot_t))".to_owned());
+        terms.push(format!("{}U", capacities.rpc_response.unwrap()));
+        terms
+            .push("((sizeof(max_align_t) - 1U) + sizeof(wl_rpc_server_pending_slot_t))".to_owned());
+        terms.push("((sizeof(max_align_t) - 1U) + sizeof(wl_rpc_server_cache_slot_t))".to_owned());
+        terms.push(format!("{}U", capacities.rpc_response.unwrap()));
+        terms.extend(
+            capacities
+                .canonical_requests
+                .iter()
+                .map(|(_, capacity)| format!("{}U", capacity.unwrap())),
+        );
+    }
+    terms
+}
+
+fn emit_assembly_header(
+    output: &mut String,
+    schema: &SemanticModel,
+    profile: &BindingProfileModel,
+    module: &str,
+) {
     output.push_str(concat!(
         "/* Static runtime assembly. requirements() validates every sizing field and\n",
         " * reports the exact caller-owned byte storage needed by init(). Configuration\n",
@@ -693,6 +800,29 @@ fn emit_assembly_header(output: &mut String, profile: &BindingProfileModel, modu
         }
     }
     writeln!(output, "}} {module}_runtime_config_t;\n").unwrap();
+    let default_capacities = runtime_default_capacities(schema, profile);
+    let prefix = upper_snake(module);
+    writeln!(
+        output,
+        "#define {prefix}_RUNTIME_HAS_DEFAULT_STORAGE {}",
+        u8::from(default_capacities.has_storage())
+    )
+    .unwrap();
+    if default_capacities.has_storage() {
+        writeln!(
+            output,
+            "#define {prefix}_RUNTIME_DEFAULT_STORAGE_CAPACITY \\"
+        )
+        .unwrap();
+        output.push_str("  (1U");
+        for term in default_storage_terms(profile, &default_capacities) {
+            output.push_str(" + \\\n   ");
+            output.push_str(&term);
+        }
+        output.push_str(")\n\ntypedef union {\n  max_align_t alignment;\n  uint8_t bytes[");
+        write!(output, "{prefix}_RUNTIME_DEFAULT_STORAGE_CAPACITY").unwrap();
+        writeln!(output, "];\n}} {module}_runtime_default_storage_t;\n").unwrap();
+    }
     write!(
         output,
         "typedef struct {{\n  size_t storage_size;\n  size_t storage_alignment;\n}} {module}_runtime_requirements_t;\n\ntypedef struct {{\n  void *data;\n  size_t size;\n}} {module}_runtime_storage_t;\n\ntypedef struct {{\n  {module}_runtime_t runtime;\n"
@@ -724,7 +854,26 @@ fn emit_assembly_header(output: &mut String, profile: &BindingProfileModel, modu
     }
     writeln!(
         output,
-        "}} {module}_runtime_instance_t;\n\nint {module}_runtime_requirements(const {module}_runtime_config_t *config, {module}_runtime_requirements_t *out_requirements);\nint {module}_runtime_init({module}_runtime_instance_t *instance, const {module}_runtime_config_t *config, const {module}_runtime_storage_t *storage);\n"
+        "}} {module}_runtime_instance_t;\n\n/* Mechanical defaults use one FIFO/RPC slot, generation/operation ID one,\n * bounded encoded maxima, disabled roles, zero timeouts, and reject-new cache.\n * Override policy fields after this call. */\nwl_err_t {module}_runtime_config_defaults({module}_runtime_config_t *config);\n"
+    )
+    .unwrap();
+    if !profile.rpc_services.is_empty() {
+        write!(
+            output,
+            "wl_err_t {module}_runtime_config_enable_client({module}_runtime_config_t *config);\nwl_err_t {module}_runtime_config_enable_server({module}_runtime_config_t *config);\n"
+        )
+        .unwrap();
+    }
+    if default_capacities.has_storage() {
+        writeln!(
+            output,
+            "{module}_runtime_storage_t {module}_runtime_default_storage_descriptor({module}_runtime_default_storage_t *storage);"
+        )
+        .unwrap();
+    }
+    write!(
+        output,
+        "int {module}_runtime_requirements(const {module}_runtime_config_t *config, {module}_runtime_requirements_t *out_requirements);\nint {module}_runtime_init({module}_runtime_instance_t *instance, const {module}_runtime_config_t *config, const {module}_runtime_storage_t *storage);\n"
     )
     .unwrap();
 }
@@ -751,7 +900,87 @@ fn emit_rpc_header_functions(output: &mut String, module: &str, service: &RpcSer
     .unwrap();
 }
 
-fn emit_assembly_source(output: &mut String, profile: &BindingProfileModel, module: &str) {
+fn emit_config_defaults(
+    output: &mut String,
+    schema: &SemanticModel,
+    profile: &BindingProfileModel,
+    module: &str,
+) {
+    let capacities = runtime_default_capacities(schema, profile);
+    write!(
+        output,
+        "wl_err_t {module}_runtime_config_defaults({module}_runtime_config_t *config) {{\n  if (config == NULL) return WL_ERR_INVALID_ARG;\n  memset(config, 0, sizeof(*config));\n"
+    )
+    .unwrap();
+    for route in &profile.retained_routes {
+        let message = type_name(&route.message_name);
+        match route.kind {
+            RetainedRouteKind::Latest => writeln!(
+                output,
+                "  config->{message}_latest_initial_generation = 1U;"
+            )
+            .unwrap(),
+            RetainedRouteKind::Fifo => {
+                writeln!(output, "  config->{message}_fifo_capacity = 1U;").unwrap()
+            }
+        }
+    }
+    if !profile.rpc_services.is_empty() {
+        output.push_str(
+            "  config->rpc_client_slot_count = 1U;\n  config->rpc_client_next_operation_id = 1U;\n  config->rpc_server_pending_slot_count = 1U;\n  config->rpc_server_cache_slot_count = 1U;\n  config->rpc_server_cache_policy = WL_RPC_CACHE_REJECT_NEW;\n",
+        );
+        if let Some(response_capacity) = capacities.rpc_response {
+            writeln!(
+                output,
+                "  config->rpc_client_response_capacity = {}U;\n  config->rpc_server_response_capacity = {}U;",
+                response_capacity, response_capacity
+            )
+            .unwrap();
+        }
+        for (service, capacity) in &capacities.canonical_requests {
+            if let Some(capacity) = capacity {
+                writeln!(
+                    output,
+                    "  config->{service}_canonical_request_capacity = {capacity}U;"
+                )
+                .unwrap();
+            }
+        }
+    }
+    output.push_str("  return WL_OK;\n}\n\n");
+
+    if !profile.rpc_services.is_empty() {
+        write!(
+            output,
+            "wl_err_t {module}_runtime_config_enable_client({module}_runtime_config_t *config) {{\n  if (config == NULL) return WL_ERR_INVALID_ARG;\n  if (config->rpc_client_slot_count == 0U || config->rpc_client_response_capacity == 0U) return WL_ERR_NOT_SUPPORTED;\n  config->rpc_client_enabled = 1U;\n  return WL_OK;\n}}\n\nwl_err_t {module}_runtime_config_enable_server({module}_runtime_config_t *config) {{\n  if (config == NULL) return WL_ERR_INVALID_ARG;\n  if (config->rpc_server_pending_slot_count == 0U || config->rpc_server_cache_slot_count == 0U || config->rpc_server_response_capacity == 0U) return WL_ERR_NOT_SUPPORTED;\n"
+        )
+        .unwrap();
+        for service in &profile.rpc_services {
+            let service_name = c_identifier(&service.name);
+            writeln!(
+                output,
+                "  if (config->{service_name}_canonical_request_capacity == 0U) return WL_ERR_NOT_SUPPORTED;"
+            )
+            .unwrap();
+        }
+        output.push_str("  config->rpc_server_enabled = 1U;\n  return WL_OK;\n}\n\n");
+    }
+    if capacities.has_storage() {
+        write!(
+            output,
+            "{module}_runtime_storage_t {module}_runtime_default_storage_descriptor({module}_runtime_default_storage_t *storage) {{\n  {module}_runtime_storage_t descriptor = {{0}};\n  if (storage != NULL) {{\n    descriptor.data = storage->bytes;\n    descriptor.size = sizeof(storage->bytes);\n  }}\n  return descriptor;\n}}\n\n"
+        )
+        .unwrap();
+    }
+}
+
+fn emit_assembly_source(
+    output: &mut String,
+    schema: &SemanticModel,
+    profile: &BindingProfileModel,
+    module: &str,
+) {
+    emit_config_defaults(output, schema, profile, module);
     write!(
         output,
         "typedef struct {{\n  uint8_t *base;\n  size_t size;\n  size_t offset;\n}} {module}_runtime_storage_cursor_t;\n\ntypedef struct {{\n"
@@ -873,7 +1102,7 @@ fn emit_assembly_source(output: &mut String, profile: &BindingProfileModel, modu
     ));
 }
 
-fn emit_source(profile: &BindingProfileModel, module: &str) -> String {
+fn emit_source(schema: &SemanticModel, profile: &BindingProfileModel, module: &str) -> String {
     let prefix = upper_snake(module);
     let mut output = format!(
         "#include \"{module}_runtime.h\"\n\n#include <string.h>\n\nstatic {module}_runtime_result_t {module}_runtime_result(const wl_event_t *event) {{\n  {module}_runtime_result_t result = {{0}};\n  result.domain = {prefix}_RUNTIME_INVALID_ARGUMENT;\n  if (event != NULL) {{\n    result.message_id = event->message_id;\n    result.event_type = event->type;\n  }}\n  return result;\n}}\n\n"
@@ -885,7 +1114,7 @@ fn emit_source(profile: &BindingProfileModel, module: &str) -> String {
         )
         .unwrap();
     }
-    emit_assembly_source(&mut output, profile, module);
+    emit_assembly_source(&mut output, schema, profile, module);
     if !profile.rpc_services.is_empty() {
         emit_rpc_runtime_progress_implementation(&mut output, module, &prefix, profile);
     }

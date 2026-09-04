@@ -119,7 +119,7 @@ pub fn generate_c(model: &SemanticModel, module_name: &str) -> Result<GeneratedC
     })
 }
 
-fn static_max_encoded_sizes(messages: &[&MessageSymbol]) -> HashMap<u16, Option<u64>> {
+pub(crate) fn static_max_encoded_sizes(messages: &[&MessageSymbol]) -> HashMap<u16, Option<u64>> {
     let messages_by_id = messages
         .iter()
         .map(|message| (message.id, *message))
