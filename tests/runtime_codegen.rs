@@ -175,6 +175,7 @@ message State = 1 { optional uint32 sequence = 1; }
             .contains("STABLE_API_RUNTIME_CODEGEN_ABI_VERSION")
     );
     assert!(first.header.contains("#include <wirelink/fifo.h>"));
+    assert!(first.header.contains("#include <wirelink/pump.h>"));
     assert!(!first.header.contains("#include <wirelink/latest.h>"));
     assert!(!first.header.contains("#include <wirelink/rpc.h>"));
     assert!(
@@ -208,6 +209,12 @@ message State = 1 { optional uint32 sequence = 1; }
     assert!(first.header.contains("result.event_consumed"));
     assert!(first.header.contains("uint8_t event_consumed;"));
     assert!(first.source.contains("result.event_consumed = 1U;"));
+    assert!(first.header.contains("stable_api_runtime_pump_hooks"));
+    assert!(
+        first
+            .source
+            .contains("return result.event_consumed != 0U ? WL_PUMP_EVENT_CONSUMED")
+    );
     assert!(first.source.contains("goto init_failed;"));
     assert!(
         first

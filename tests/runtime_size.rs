@@ -51,7 +51,8 @@ rpc Execute {
 
 const HOT_PATH_TEXT_BUDGET: usize = 3328;
 const ASSEMBLY_TEXT_BUDGET: usize = 1200;
-const COMBINED_TEXT_BUDGET: usize = 4480;
+const PUMP_BRIDGE_TEXT_BUDGET: usize = 320;
+const COMBINED_TEXT_BUDGET: usize = 4800;
 
 fn wirelink_root() -> std::path::PathBuf {
     fs::canonicalize(
@@ -230,9 +231,19 @@ fn combined_runtime_cortex_m_text_stays_within_split_budgets_when_toolchain_exis
                 .flatten()
         })
         .sum::<usize>();
+    let pump_bridge_text = symbols
+        .lines()
+        .filter_map(|line| {
+            let columns = line.split_whitespace().collect::<Vec<_>>();
+            let name = columns.last()?;
+            name.contains("runtime_size_runtime_pump_")
+                .then(|| usize::from_str_radix(columns.get(1)?, 16).ok())
+                .flatten()
+        })
+        .sum::<usize>();
     let hot_path_text = text_size
-        .checked_sub(assembly_text)
-        .expect("assembly symbols cannot exceed total text");
+        .checked_sub(assembly_text + pump_bridge_text)
+        .expect("classified symbols cannot exceed total text");
 
     assert!(
         hot_path_text <= HOT_PATH_TEXT_BUDGET,
@@ -241,6 +252,10 @@ fn combined_runtime_cortex_m_text_stays_within_split_budgets_when_toolchain_exis
     assert!(
         assembly_text <= ASSEMBLY_TEXT_BUDGET,
         "generated runtime assembly is {assembly_text} bytes, budget is {ASSEMBLY_TEXT_BUDGET}\n{stdout}\n{symbols}"
+    );
+    assert!(
+        pump_bridge_text <= PUMP_BRIDGE_TEXT_BUDGET,
+        "generated pump bridge is {pump_bridge_text} bytes, budget is {PUMP_BRIDGE_TEXT_BUDGET}\n{stdout}\n{symbols}"
     );
     assert!(
         text_size <= COMBINED_TEXT_BUDGET,

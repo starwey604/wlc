@@ -63,6 +63,8 @@ fn generated_rpc_runtime_executes_client_server_and_cache_lifecycles() {
             .contains("RPC_FIXTURE_RPC_REQUEST_FINGERPRINT_ALGORITHM")
     );
     assert!(runtime.header.contains("rpc_fixture_compute_client_start("));
+    assert!(runtime.header.contains("rpc_fixture_runtime_pump_t"));
+    assert!(runtime.header.contains("rpc_fixture_runtime_pump_hooks"));
     assert!(!runtime.header.contains("client_start_scratch"));
     assert!(!runtime.header.contains("client_start_direct"));
     assert!(
@@ -681,6 +683,9 @@ int main(void) {
   compute_request_t request_scratch = {0};
   compute_response_t response_scratch = {0};
   uint8_t canonical[64];
+  rpc_fixture_runtime_pump_t pump;
+  wl_pump_hooks_t pump_hooks;
+  wl_event_t unknown_event = {0};
   int result;
   if (rpc_fixture_runtime_requirements(&disabled_config,
                                        &disabled_requirements) != WL_OK ||
@@ -694,6 +699,22 @@ int main(void) {
   if (init_runtime(&runtime, &client, &server, &request_scratch,
                    &response_scratch, canonical, sizeof(canonical)) != 0)
     return 2;
+  if (rpc_fixture_runtime_pump_init(NULL, &runtime, NULL, NULL) !=
+          WL_ERR_INVALID_ARG ||
+      rpc_fixture_runtime_pump_init(&pump, &runtime, NULL, NULL) != WL_OK)
+    return 3;
+  pump_hooks = rpc_fixture_runtime_pump_hooks(&pump);
+  if (pump_hooks.application_user_data != &pump || pump_hooks.on_event == NULL ||
+      pump_hooks.application_progress == NULL ||
+      pump_hooks.application_deadline_hint == NULL)
+    return 4;
+  unknown_event.type = WL_EVT_UNRELIABLE_RX;
+  unknown_event.message_id = UINT16_C(0xFFFF);
+  if (pump_hooks.on_event(pump_hooks.application_user_data, &ctx,
+                          &unknown_event, 5U) != WL_PUMP_EVENT_CONSUMED ||
+      release_calls != 1U)
+    return 5;
+  release_calls = 0U;
   result = check_client(&ctx, &runtime, &client);
   if (result != 0) return 10 + result;
   result = check_server(&ctx, &runtime);

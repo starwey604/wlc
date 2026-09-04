@@ -83,6 +83,8 @@ fn validate_runtime_names(
         format!("{module}_runtime_detail_kind_t"),
         format!("{module}_runtime_detail_t"),
         format!("{module}_runtime_t"),
+        format!("{module}_runtime_pump_t"),
+        format!("{module}_runtime_result_fn"),
         format!("{module}_runtime_config_t"),
         format!("{module}_runtime_requirements_t"),
         format!("{module}_runtime_storage_t"),
@@ -94,6 +96,11 @@ fn validate_runtime_names(
         format!("{module}_runtime_requirements"),
         format!("{module}_runtime_init"),
         format!("{module}_runtime_dispatch_event"),
+        format!("{module}_runtime_pump_init"),
+        format!("{module}_runtime_pump_hooks"),
+        format!("{module}_runtime_pump_event"),
+        format!("{module}_runtime_pump_progress"),
+        format!("{module}_runtime_pump_deadline"),
         format!("{module}_runtime_result"),
         format!("WIRELINK_GENERATED_{prefix}_RUNTIME_H"),
         format!("{prefix}_SCHEMA_IDENTITY"),
@@ -430,8 +437,9 @@ fn retained_ownership_problem(
 fn emit_header(schema: &SemanticModel, profile: &BindingProfileModel, module: &str) -> String {
     let prefix = upper_snake(module);
     let guard = format!("WIRELINK_GENERATED_{prefix}_RUNTIME_H");
-    let mut output =
-        format!("#ifndef {guard}\n#define {guard}\n\n#include \"{module}_bindings.h\"\n");
+    let mut output = format!(
+        "#ifndef {guard}\n#define {guard}\n\n#include \"{module}_bindings.h\"\n#include <wirelink/pump.h>\n"
+    );
     if profile
         .retained_routes
         .iter()
@@ -556,6 +564,19 @@ fn emit_header(schema: &SemanticModel, profile: &BindingProfileModel, module: &s
         }
     }
     writeln!(output, "}} {module}_runtime_t;\n").unwrap();
+    write!(
+        output,
+        "typedef void (*{module}_runtime_result_fn)(void *user_data, const {module}_runtime_result_t *result);\n\ntypedef struct {{\n  {module}_runtime_t *runtime;\n  void *user_data;\n  {module}_runtime_result_fn on_result;\n"
+    )
+    .unwrap();
+    if !profile.rpc_services.is_empty() {
+        write!(
+            output,
+            "  wl_rpc_err_t last_service_result;\n  {module}_runtime_service_result_t last_service;\n"
+        )
+        .unwrap();
+    }
+    writeln!(output, "}} {module}_runtime_pump_t;\n").unwrap();
     emit_assembly_header(&mut output, profile, module);
     output.push_str(concat!(
         "/* With non-null ctx/event every RX outcome is consumed. Matching RPC TX\n",
@@ -577,6 +598,11 @@ fn emit_header(schema: &SemanticModel, profile: &BindingProfileModel, module: &s
         )
         .unwrap();
     }
+    write!(
+        output,
+        "/* Build pump hooks that dispatch events with the owner's time sample. RPC\n * profiles also service one queued response per pass and merge their deadline.\n * on_result may be null; result pointers are borrowed only for the callback. */\nwl_err_t {module}_runtime_pump_init({module}_runtime_pump_t *pump, {module}_runtime_t *runtime, {module}_runtime_result_fn on_result, void *user_data);\nwl_pump_hooks_t {module}_runtime_pump_hooks({module}_runtime_pump_t *pump);\n\n"
+    )
+    .unwrap();
     for service in &profile.rpc_services {
         emit_rpc_header_functions(&mut output, module, service);
     }
@@ -903,7 +929,37 @@ fn emit_source(profile: &BindingProfileModel, module: &str) -> String {
         output.push('\n');
         emit_rpc_implementation(&mut output, module, &prefix, service);
     }
+    output.push('\n');
+    emit_pump_implementation(&mut output, profile, module);
     output
+}
+
+fn emit_pump_implementation(output: &mut String, profile: &BindingProfileModel, module: &str) {
+    write!(
+        output,
+        "static wl_pump_event_disposition_t {module}_runtime_pump_event(void *user_data, wl_ctx_t *ctx, const wl_event_t *event, wl_time_ms_t now_ms) {{\n  {module}_runtime_pump_t *pump = ({module}_runtime_pump_t *)user_data;\n  {module}_runtime_result_t result;\n  if (pump == NULL || pump->runtime == NULL) return WL_PUMP_EVENT_UNHANDLED;\n  result = {module}_runtime_dispatch_event(ctx, event, pump->runtime, now_ms);\n  if (pump->on_result != NULL) pump->on_result(pump->user_data, &result);\n  return result.event_consumed != 0U ? WL_PUMP_EVENT_CONSUMED : WL_PUMP_EVENT_UNHANDLED;\n}}\n\n"
+    )
+    .unwrap();
+    if !profile.rpc_services.is_empty() {
+        write!(
+            output,
+            "static uint8_t {module}_runtime_pump_progress(void *user_data, wl_ctx_t *ctx, wl_time_ms_t now_ms) {{\n  {module}_runtime_pump_t *pump = ({module}_runtime_pump_t *)user_data;\n  if (pump == NULL || pump->runtime == NULL) return 0U;\n  pump->last_service_result = {module}_runtime_service(ctx, pump->runtime, now_ms, &pump->last_service);\n  if (pump->last_service_result != WL_RPC_OK) return 0U;\n  if (pump->last_service.response.message_id != 0U && pump->on_result != NULL)\n    pump->on_result(pump->user_data, &pump->last_service.response);\n  return pump->last_service.responses_submitted != 0U ? 1U : 0U;\n}}\n\nstatic uint32_t {module}_runtime_pump_deadline(const void *user_data, wl_time_ms_t now_ms) {{\n  const {module}_runtime_pump_t *pump = (const {module}_runtime_pump_t *)user_data;\n  wl_rpc_deadline_hint_t hint = {{0}};\n  if (pump == NULL || pump->runtime == NULL || {module}_runtime_get_deadline_hint(pump->runtime, now_ms, &hint) != WL_RPC_OK)\n    return WL_POLL_NO_DEADLINE_MS;\n  return hint.next_deadline_ms;\n}}\n\n"
+        )
+        .unwrap();
+    }
+    write!(
+        output,
+        "wl_err_t {module}_runtime_pump_init({module}_runtime_pump_t *pump, {module}_runtime_t *runtime, {module}_runtime_result_fn on_result, void *user_data) {{\n  if (pump == NULL || runtime == NULL) return WL_ERR_INVALID_ARG;\n  memset(pump, 0, sizeof(*pump));\n  pump->runtime = runtime;\n  pump->user_data = user_data;\n  pump->on_result = on_result;\n  return WL_OK;\n}}\n\nwl_pump_hooks_t {module}_runtime_pump_hooks({module}_runtime_pump_t *pump) {{\n  wl_pump_hooks_t hooks = {{0}};\n  if (pump == NULL) return hooks;\n  hooks.application_user_data = pump;\n  hooks.on_event = {module}_runtime_pump_event;\n"
+    )
+    .unwrap();
+    if !profile.rpc_services.is_empty() {
+        write!(
+            output,
+            "  hooks.application_progress = {module}_runtime_pump_progress;\n  hooks.application_deadline_hint = {module}_runtime_pump_deadline;\n"
+        )
+        .unwrap();
+    }
+    output.push_str("  return hooks;\n}\n");
 }
 
 fn emit_rpc_runtime_progress_implementation(

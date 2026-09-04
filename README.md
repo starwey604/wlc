@@ -346,6 +346,13 @@ larger RPC result fields. Generated runtime headers likewise include only the
 LATEST, FIFO, and RPC public headers selected by that profile. The fixed
 `<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `15` for this surface; regenerate
 all runtime sources and update field access together when that value changes.
+
+Generated runtimes also expose `<module>_runtime_pump_init()` and
+`<module>_runtime_pump_hooks()`. The returned hooks pass the pump's single
+`now_ms` sample into dispatch, apply `event_consumed`, service at most one
+queued RPC response per owner pass, and merge RPC deadlines. An optional
+result observer receives borrowed diagnostic results; RPC profiles retain the
+last service outcome in the pump state.
 ABI 8 changes RPC server completion from a bare operation ID to a copied
 `wl_rpc_request_identity_t`: generated callback types are named
 `<module>_<service>_rpc_request_handler_fn`, receive `completion_identity`
