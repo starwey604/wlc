@@ -350,7 +350,7 @@ and `detail_kind`) followed by a tagged union. Inspect
 has no domain payload. A retained-only profile therefore does not carry the
 larger RPC result fields. Generated runtime headers likewise include only the
 LATEST, FIFO, and RPC public headers selected by that profile. The fixed
-`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `8` for this surface; regenerate
+`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `10` for this surface; regenerate
 all runtime sources and update field access together when that value changes.
 ABI 8 changes RPC server completion from a bare operation ID to a copied
 `wl_rpc_request_identity_t`: generated callback types are named
