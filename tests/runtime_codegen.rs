@@ -89,6 +89,28 @@ rpc RpcClient {
     let error =
         generate_runtime_c(&service_collision, &reserved_member_profile, "control").unwrap_err();
     assert!(error.0.contains("rpc_client"), "{error}");
+
+    let encode_scratch_member_profile = profile(
+        r#"profile version 1;
+rpc RpcEncodeScratch {
+  request = Request;
+  response = Response;
+  request_operation_id = operation_id;
+  response_operation_id = operation_id;
+  response_status = status;
+  request_delivery = reliable;
+  response_delivery = reliable;
+}
+"#,
+        &service_collision,
+    );
+    let error = generate_runtime_c(
+        &service_collision,
+        &encode_scratch_member_profile,
+        "control",
+    )
+    .unwrap_err();
+    assert!(error.0.contains("rpc_encode_scratch"), "{error}");
 }
 
 #[test]
@@ -353,7 +375,12 @@ rpc Local {
     assert!(
         generated
             .source
-            .contains("response->has_operation_id = had_operation_id;")
+            .contains("encoded_response->has_operation_id = true;")
+    );
+    assert!(
+        generated
+            .header
+            .contains("const request_t *request, uint32_t timeout_ms")
     );
     assert!(generated.source.contains(
         "wl_send_reliable(ctx, response.identity.response_message_id, response.response_data"
@@ -391,7 +418,11 @@ rpc RequiredFields {
     assert!(
         generated
             .source
-            .contains("request->has_operation_id = true;")
+            .contains("encoded_request->has_operation_id = true;")
     );
-    assert!(generated.source.contains("response->has_status = true;"));
+    assert!(
+        generated
+            .source
+            .contains("encoded_response->has_status = true;")
+    );
 }

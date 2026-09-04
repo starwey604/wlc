@@ -63,6 +63,12 @@ fn generated_rpc_runtime_executes_client_server_and_cache_lifecycles() {
             .contains("RPC_FIXTURE_RPC_REQUEST_FINGERPRINT_ALGORITHM")
     );
     assert!(runtime.header.contains("rpc_fixture_compute_client_start("));
+    assert!(runtime.header.contains("const compute_request_t *request"));
+    assert!(
+        runtime
+            .header
+            .contains("const compute_response_t *response")
+    );
     assert!(runtime.header.contains("rpc_fixture_runtime_pump_t"));
     assert!(runtime.header.contains("rpc_fixture_runtime_pump_hooks"));
     assert!(!runtime.header.contains("client_start_scratch"));
@@ -74,6 +80,16 @@ fn generated_rpc_runtime_executes_client_server_and_cache_lifecycles() {
     );
     assert!(runtime.source.contains("wl_rpc_client_on_response"));
     assert!(runtime.source.contains("wl_rpc_server_begin"));
+    assert!(runtime.source.contains("*encoded_request = *request;"));
+    assert!(runtime.source.contains("*encoded_response = *response;"));
+    assert!(!runtime.source.lines().any(|line| {
+        line.trim_start()
+            .starts_with("request->has_operation_id = true;")
+    }));
+    assert!(!runtime.source.lines().any(|line| {
+        line.trim_start()
+            .starts_with("response->has_operation_id = true;")
+    }));
     assert!(
         runtime
             .source
@@ -232,6 +248,7 @@ static int32_t handle_compute(void *user_data,
 static int init_runtime(rpc_fixture_runtime_t *runtime,
                         wl_rpc_client_t *client,
                         wl_rpc_server_t *server,
+                        rpc_fixture_runtime_rpc_encode_scratch_t *encode_scratch,
                         compute_request_t *request_scratch,
                         compute_response_t *response_scratch,
                         uint8_t *canonical, size_t canonical_size) {
@@ -266,6 +283,7 @@ static int init_runtime(rpc_fixture_runtime_t *runtime,
   memset(runtime, 0, sizeof(*runtime));
   runtime->rpc_client = client;
   runtime->rpc_server = server;
+  runtime->rpc_encode_scratch = encode_scratch;
   runtime->compute.request_scratch = request_scratch;
   runtime->compute.response_scratch = response_scratch;
   runtime->compute.canonical_request_scratch =
@@ -290,18 +308,28 @@ static int check_client(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime,
   wl_rpc_deadline_hint_t deadline = {0};
   rpc_fixture_runtime_poll_result_t progress = {0};
   rpc_fixture_runtime_result_t result;
+  rpc_fixture_runtime_rpc_encode_scratch_t *encode_scratch;
 
   request.has_value = true;
   request.value = 9U;
   request.has_tag = true;
   request.tag.data = &tag;
   request.tag.length = 1U;
+  const compute_request_t read_only_request = request;
+  encode_scratch = runtime->rpc_encode_scratch;
+  runtime->rpc_encode_scratch = NULL;
   result = rpc_fixture_compute_client_start(
-      ctx, runtime, &request, 100U, 10U);
+      ctx, runtime, &read_only_request, 100U, 9U);
+  runtime->rpc_encode_scratch = encode_scratch;
+  if (result.domain != RPC_FIXTURE_RUNTIME_MISSING_SCRATCH ||
+      result.detail.rpc.operation_id != 0U || send_calls != 0U)
+    return 27;
+  result = rpc_fixture_compute_client_start(
+      ctx, runtime, &read_only_request, 100U, 10U);
   if (result.domain != RPC_FIXTURE_RUNTIME_OK ||
       result.detail_kind != RPC_FIXTURE_RUNTIME_DETAIL_RPC ||
       result.detail.rpc.operation_id != 1U ||
-      request.has_operation_id || request.operation_id != 0U ||
+      read_only_request.has_operation_id || read_only_request.operation_id != 0U ||
       reliable_sends != 1U || sent_message_id != COMPUTE_REQUEST_MESSAGE_ID)
     return 1;
   if (compute_request_decode(sent_payload, sent_payload_length,
@@ -532,6 +560,7 @@ static int check_server(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime) {
   rpc_fixture_runtime_poll_result_t progress = {0};
   rpc_fixture_runtime_service_result_t service = {0};
   rpc_fixture_runtime_result_t result;
+  rpc_fixture_runtime_rpc_encode_scratch_t *encode_scratch;
   wl_rpc_server_request_t first_request;
   wl_rpc_server_request_t second_request;
 
@@ -561,6 +590,14 @@ static int check_server(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime) {
       result.detail.rpc.rpc_disposition != WL_RPC_SERVER_CONFLICT ||
       result.detail.rpc.rpc_result != WL_RPC_ERR_OPERATION_CONFLICT || handler_calls != 1U)
     return 4;
+  encode_scratch = runtime->rpc_encode_scratch;
+  runtime->rpc_encode_scratch = NULL;
+  result = rpc_fixture_compute_server_complete(
+      runtime, &first_request, &response, 102U);
+  runtime->rpc_encode_scratch = encode_scratch;
+  if (result.domain != RPC_FIXTURE_RUNTIME_MISSING_SCRATCH ||
+      result.detail.rpc.operation_id != 77U)
+    return 27;
   {
     wl_rpc_server_request_t wrong_request = first_request;
     const uint32_t sends_at_conflict = send_calls;
@@ -589,19 +626,24 @@ static int check_server(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime) {
   response.operation_id = 900U;
   response.has_status = true;
   response.status = REJECTED;
-  result = rpc_fixture_compute_server_complete(
-      runtime, &first_request, &response, 103U);
-  if (result.domain != RPC_FIXTURE_RUNTIME_OK || !response.has_operation_id ||
-      response.operation_id != 900U || !response.has_status ||
-      response.status != REJECTED ||
-      result.detail.rpc.server_response.response_data == NULL ||
-      rpc_fixture_runtime_service(ctx, runtime, 103U, &service) != WL_RPC_OK ||
-      service.responses_submitted != 1U || reliable_sends != 0U ||
-      sent_message_id != COMPUTE_RESPONSE_MESSAGE_ID ||
-      result.detail.rpc.payload_length != sent_payload_length ||
-      memcmp(result.detail.rpc.server_response.response_data, sent_payload,
-             sent_payload_length) != 0)
-    return 5;
+  {
+    const compute_response_t read_only_response = response;
+    result = rpc_fixture_compute_server_complete(
+        runtime, &first_request, &read_only_response, 103U);
+    if (result.domain != RPC_FIXTURE_RUNTIME_OK ||
+        !read_only_response.has_operation_id ||
+        read_only_response.operation_id != 900U ||
+        !read_only_response.has_status ||
+        read_only_response.status != REJECTED ||
+        result.detail.rpc.server_response.response_data == NULL ||
+        rpc_fixture_runtime_service(ctx, runtime, 103U, &service) != WL_RPC_OK ||
+        service.responses_submitted != 1U || reliable_sends != 0U ||
+        sent_message_id != COMPUTE_RESPONSE_MESSAGE_ID ||
+        result.detail.rpc.payload_length != sent_payload_length ||
+        memcmp(result.detail.rpc.server_response.response_data, sent_payload,
+               sent_payload_length) != 0)
+      return 5;
+  }
   first_cached_length = sent_payload_length;
   memcpy(first_cached, sent_payload, first_cached_length);
   result = dispatch_request(ctx, runtime, request_same, sizeof(request_same),
@@ -680,6 +722,7 @@ int main(void) {
   rpc_fixture_runtime_config_t disabled_config = {0};
   rpc_fixture_runtime_requirements_t disabled_requirements = {0};
   const rpc_fixture_runtime_storage_t disabled_storage = {NULL, 0U};
+  rpc_fixture_runtime_rpc_encode_scratch_t encode_scratch = {0};
   compute_request_t request_scratch = {0};
   compute_response_t response_scratch = {0};
   uint8_t canonical[64];
@@ -696,7 +739,7 @@ int main(void) {
       disabled_instance.runtime.rpc_client != NULL ||
       disabled_instance.runtime.rpc_server != NULL)
     return 1;
-  if (init_runtime(&runtime, &client, &server, &request_scratch,
+  if (init_runtime(&runtime, &client, &server, &encode_scratch, &request_scratch,
                    &response_scratch, canonical, sizeof(canonical)) != 0)
     return 2;
   if (rpc_fixture_runtime_pump_init(NULL, &runtime, NULL, NULL) !=

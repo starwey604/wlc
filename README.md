@@ -348,7 +348,7 @@ TX handle; owner loops may apply their fallback action only while it is zero. In
 has no domain payload. A retained-only profile therefore does not carry the
 larger RPC result fields. Generated runtime headers likewise include only the
 LATEST, FIFO, and RPC public headers selected by that profile. The fixed
-`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `15` for this surface; regenerate
+`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `16` for this surface; regenerate
 all runtime sources and update field access together when that value changes.
 
 Generated runtimes also expose `<module>_runtime_pump_init()` and
@@ -408,9 +408,9 @@ capacity policy, and application deadline for peer-visible completion.
 For each RPC service the runtime header emits one typed client-start function,
 a request callback route, and typed server complete/reject functions. Client
 start uses a present nonzero operation ID exactly, or allocates one when the
-field is absent or zero. It temporarily writes the selected ID into the mutable
-request, encodes directly into core storage, then restores the request before
-returning. Reusing an explicit ID with the same canonical request lets an
+field is absent or zero. Request and response inputs are `const`: the runtime
+copies them into one shared, typed encode scratch before injecting operation ID
+and status. Reusing an explicit ID with the same canonical request lets an
 application retry address the server's bounded replay cache without adding a
 second generated start API.
 An encode or local submit failure releases the allocated client slot and returns
@@ -422,9 +422,10 @@ validates the mapped ID and status, copies the raw payload into
 `wl_rpc_client_t` before releasing the RX event, and leaves typed response
 scratch under caller ownership.
 
-The static instance owns the top-level request/response scratch objects and
-the storage arena owns canonical-encode scratch. With manual runtime assembly,
-the caller supplies those objects directly. Borrowed `bytes` and `string`
+The static instance owns per-service decode scratch plus one shared RPC encode
+scratch, and the storage arena owns canonical-request bytes. With manual
+runtime assembly, the caller supplies those objects directly and sets
+`runtime.rpc_encode_scratch`. Borrowed `bytes` and `string`
 fields in request/response scratch remain valid only until the callback or
 dispatcher returns. If an RPC message contains a `repeated` field, its element
 pointer and capacity are still application policy and must be set on the
@@ -432,15 +433,15 @@ instance scratch object after init and before dispatch. Canonical scratch must
 be writable and large enough for the complete decoded request; re-encoding
 drops unknown fields and makes field order irrelevant to duplicate
 classification. Client start requires a Wirelink envelope with direct TX
-support; the request's original operation-ID presence and value are restored
-before return.
+support. The shared encoder scratch is used synchronously on the runtime owner
+thread and no pointer into it escapes the generated call.
 
 Response dispatch copies the original encoded bytes into the client's fixed
 response storage before releasing RX. That copy remains valid until client
 release; decode it again for a durable typed view rather than retaining
-borrowed pointers from response scratch. Server complete/reject temporarily set
-the response operation ID and status for encoding, restore the caller-owned
-response before returning, and then cease borrowing response and encode scratch.
+borrowed pointers from response scratch. Server complete/reject copy the const
+response into shared encode scratch and set operation ID/status only on that
+private copy.
 
 Server dispatch decodes and canonically re-encodes the complete request before
 computing a separately domain-tagged payload fingerprint. `NEW` invokes the

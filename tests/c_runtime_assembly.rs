@@ -245,6 +245,7 @@ int main(void) {
           &instance.execute_scratch.request ||
       instance.runtime.execute.response_scratch !=
           &instance.execute_scratch.response ||
+      instance.runtime.rpc_encode_scratch != &instance.rpc_encode_scratch ||
       instance.runtime.execute.request_handler != execute ||
       instance.runtime.execute.user_data != (void *)(uintptr_t)0x1234U ||
       instance.runtime.execute.canonical_request_scratch.capacity != 96U)
@@ -324,7 +325,8 @@ int main(void) {
       instance.runtime.rpc_client != NULL ||
       instance.runtime.rpc_server != NULL ||
       instance.runtime.execute.request_scratch != NULL ||
-      instance.runtime.execute.response_scratch != NULL)
+      instance.runtime.execute.response_scratch != NULL ||
+      instance.runtime.rpc_encode_scratch != NULL)
     return 18;
   return 0;
 }
