@@ -478,7 +478,10 @@ static int check_server(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime) {
       result.detail.rpc.rpc_disposition != WL_RPC_SERVER_NEW || handler_calls != 1U ||
       result.detail.rpc.operation_id != 77U ||
       handled_request.identity.peer_session_id != peer_a ||
-      handled_request.generation == 0U) return 1;
+      handled_request.generation == 0U ||
+      result.detail.rpc.server_request.generation != handled_request.generation ||
+      result.detail.rpc.server_request.identity.operation_id != 77U ||
+      result.detail.rpc.server_request.identity.peer_session_id != peer_a) return 1;
   first_request = handled_request;
   if (rpc_fixture_runtime_get_deadline_hint(runtime, 101U, &deadline) != WL_RPC_OK ||
       deadline.next_deadline_ms != 4U)
@@ -538,6 +541,9 @@ static int check_server(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime) {
                             peer_a, 104U);
   if (result.domain != RPC_FIXTURE_RUNTIME_OK ||
       result.detail.rpc.rpc_disposition != WL_RPC_SERVER_REPLAY || handler_calls != 2U ||
+      result.detail.rpc.server_response.identity.operation_id != 77U ||
+      result.detail.rpc.server_response.identity.peer_session_id != peer_a ||
+      result.detail.rpc.server_response.response_data == NULL ||
       rpc_fixture_runtime_service(ctx, runtime, 104U, &service) != WL_RPC_OK ||
       service.responses_submitted != 1U ||
       sent_payload_length != first_cached_length ||
