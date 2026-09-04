@@ -254,7 +254,7 @@ fn emit_bindings_header(module: &str, codec_guard: &str, messages: &[&MessageSym
     let guard = format!("{codec_guard}_BINDINGS");
     let prefix = upper_snake(module);
     let mut output = format!(
-        "#ifndef {guard}\n#define {guard}\n\n#include \"{module}.h\"\n#include <wirelink/wirelink.h>\n\n#ifdef __cplusplus\nextern \"C\" {{\n#endif\n\n"
+        "#ifndef {guard}\n#define {guard}\n\n#include \"{module}.h\"\n#include <wirelink/link.h>\n\n#ifdef __cplusplus\nextern \"C\" {{\n#endif\n\n"
     );
     output.push_str(&format!(
         "typedef int32_t {module}_dispatch_domain_t;\nenum {{\n  {prefix}_DISPATCH_OK = 0,\n  {prefix}_DISPATCH_NON_RX,\n  {prefix}_DISPATCH_UNKNOWN_MESSAGE,\n  {prefix}_DISPATCH_MISSING_ROUTE,\n  {prefix}_DISPATCH_MISSING_SCRATCH,\n  {prefix}_DISPATCH_CODEC_ERROR,\n  {prefix}_DISPATCH_HANDLER_ERROR,\n  {prefix}_DISPATCH_INVALID_ARGUMENT\n}};\n\n"
@@ -761,22 +761,29 @@ static void wlc_clear(const wlc_desc_t *d, void *value) {
       *(uint64_t *)p = f->unsigned_default;
   }
 }
-static void wlc_put_fixed(uint8_t **p, uint64_t v, size_t n) {
-  while (n-- != 0U) *(*p)++ = (uint8_t)(v >> (8U * n));
+static inline void wlc_put32(uint8_t **p, uint32_t v) {
+  *(*p)++ = (uint8_t)(v >> 24U);
+  *(*p)++ = (uint8_t)(v >> 16U);
+  *(*p)++ = (uint8_t)(v >> 8U);
+  *(*p)++ = (uint8_t)v;
+}
+static inline void wlc_put64(uint8_t **p, uint64_t v) {
+  wlc_put32(p, (uint32_t)(v >> 32U));
+  wlc_put32(p, (uint32_t)v);
 }
 static wl_codec_status_t wlc_emit_fixed(uint8_t kind, const void *value,
                                         uint8_t **out) {
-  uint64_t bits;
-  if (kind == WLC_F32) bits = *(const uint32_t *)value;
-  else if (kind == WLC_F64) bits = *(const uint64_t *)value;
+  if (kind == WLC_F32) wlc_put32(out, *(const uint32_t *)value);
+  else if (kind == WLC_F64) wlc_put64(out, *(const uint64_t *)value);
   else if (kind == WLC_FLOAT32) {
     uint32_t bits32;
     memcpy(&bits32, value, sizeof(bits32));
-    bits = bits32;
+    wlc_put32(out, bits32);
   } else if (kind == WLC_FLOAT64) {
+    uint64_t bits;
     memcpy(&bits, value, sizeof(bits));
+    wlc_put64(out, bits);
   } else return WL_CODEC_ERR_INVALID_VALUE;
-  wlc_put_fixed(out, bits, (kind == WLC_F32 || kind == WLC_FLOAT32) ? 4U : 8U);
   return WL_CODEC_OK;
 }
 static wl_codec_status_t wlc_emit_value(const wlc_field_t *f, const void *p,
@@ -824,9 +831,20 @@ static wl_codec_status_t wlc_emit_packed(const wlc_field_t *f, const void *p,
   wl_codec_status_t s = wlc_packed_bytes(f, &bytes);
   if (s != WL_CODEC_OK) return s;
   wlc_putv(out, bytes);
-  for (size_t j = 0U; j < f->packed_count; ++j) {
-    if ((s = wlc_emit_fixed(f->kind, (const uint8_t *)p + j * f->element, out))
-        != WL_CODEC_OK) return s;
+  if (f->kind == WLC_F32 || f->kind == WLC_FLOAT32) {
+    for (size_t j = 0U; j < f->packed_count; ++j) {
+      uint32_t bits;
+      memcpy(&bits, (const uint8_t *)p + j * f->element, sizeof(bits));
+      wlc_put32(out, bits);
+    }
+  } else if (f->kind == WLC_F64 || f->kind == WLC_FLOAT64) {
+    for (size_t j = 0U; j < f->packed_count; ++j) {
+      uint64_t bits;
+      memcpy(&bits, (const uint8_t *)p + j * f->element, sizeof(bits));
+      wlc_put64(out, bits);
+    }
+  } else {
+    return WL_CODEC_ERR_INVALID_VALUE;
   }
   return WL_CODEC_OK;
 }
@@ -968,10 +986,23 @@ static wl_codec_status_t wlc_read_packed(const wlc_field_t *f,
   if ((s = wlc_packed_bytes(f, &expected_bytes)) != WL_CODEC_OK) return s;
   if (encoded_bytes != expected_bytes || expected_bytes > n - *at)
     return WL_CODEC_ERR_MALFORMED;
-  for (size_t j = 0U; j < f->packed_count; ++j) {
-    if ((s = wlc_read_fixed(f->kind, in, n, at,
-                            (uint8_t *)out + j * f->element)) != WL_CODEC_OK)
-      return s;
+  if (f->kind == WLC_F32 || f->kind == WLC_FLOAT32) {
+    for (size_t j = 0U; j < f->packed_count; ++j) {
+      uint32_t bits = ((uint32_t)in[*at] << 24U) |
+                      ((uint32_t)in[*at + 1U] << 16U) |
+                      ((uint32_t)in[*at + 2U] << 8U) |
+                      (uint32_t)in[*at + 3U];
+      memcpy((uint8_t *)out + j * f->element, &bits, sizeof(bits));
+      *at += 4U;
+    }
+  } else if (f->kind == WLC_F64 || f->kind == WLC_FLOAT64) {
+    for (size_t j = 0U; j < f->packed_count; ++j) {
+      uint64_t bits = 0U;
+      for (size_t i = 0U; i < 8U; ++i) bits = (bits << 8U) | in[(*at)++];
+      memcpy((uint8_t *)out + j * f->element, &bits, sizeof(bits));
+    }
+  } else {
+    return WL_CODEC_ERR_INVALID_VALUE;
   }
   return WL_CODEC_OK;
 }

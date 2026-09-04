@@ -151,7 +151,7 @@ Compilation produces deterministic `<module>.h/.c`,
 `<module>_runtime.h/.c`. The codec files contain only the payload data model
 and codec and continue to depend solely on `wirelink/codec.h`. The binding
 files form a separate, optional translation unit which depends on the public
-`wirelink/wirelink.h` API. A codec-only firmware therefore does not pull send,
+`wirelink/link.h` API. A codec-only firmware therefore does not pull send,
 dispatch, or Wirelink core symbols into its link.
 
 The bindings header declares a module-prefixed router. Each message route has
@@ -350,7 +350,7 @@ and `detail_kind`) followed by a tagged union. Inspect
 has no domain payload. A retained-only profile therefore does not carry the
 larger RPC result fields. Generated runtime headers likewise include only the
 LATEST, FIFO, and RPC public headers selected by that profile. The fixed
-`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `10` for this surface; regenerate
+`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `12` for this surface; regenerate
 all runtime sources and update field access together when that value changes.
 ABI 8 changes RPC server completion from a bare operation ID to a copied
 `wl_rpc_request_identity_t`: generated callback types are named

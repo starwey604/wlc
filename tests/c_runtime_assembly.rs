@@ -214,9 +214,9 @@ int main(void) {
       instance.runtime.rpc_client != &instance.rpc_client ||
       instance.runtime.rpc_server != &instance.rpc_server ||
       instance.runtime.execute.request_scratch !=
-          &instance.execute_request_scratch ||
+          &instance.execute_scratch.request ||
       instance.runtime.execute.response_scratch !=
-          &instance.execute_response_scratch ||
+          &instance.execute_scratch.response ||
       instance.runtime.execute.request_handler != execute ||
       instance.runtime.execute.user_data != (void *)(uintptr_t)0x1234U ||
       instance.runtime.execute.canonical_request_scratch.capacity != 96U)

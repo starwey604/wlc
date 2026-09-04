@@ -271,11 +271,10 @@ rpc Local {
     assert!(generated.header.contains("local_rpc_local_client_inspect"));
     assert!(generated.header.contains("local_rpc_local_client_decode"));
     assert!(generated.source.contains("local_rpc_local_client_release"));
-    assert!(
-        generated
-            .source
-            .contains("wl_send_reliable(ctx, RESPONSE_MESSAGE_ID, response.response_data")
-    );
+    assert!(generated.source.contains(
+        "wl_send_reliable(ctx, response.identity.response_message_id, response.response_data"
+    ));
+    assert!(generated.source.contains("reliable_response = 1U;"));
 }
 
 #[test]

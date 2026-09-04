@@ -684,12 +684,18 @@ fn emit_assembly_header(output: &mut String, profile: &BindingProfileModel, modu
     }
     if !profile.rpc_services.is_empty() {
         output.push_str("  wl_rpc_client_t rpc_client;\n  wl_rpc_server_t rpc_server;\n");
+        output.push_str(
+            "  /* Dispatch is serialized; request and response decode scratch lifetimes do not overlap. */\n",
+        );
         for service in &profile.rpc_services {
             let service_name = c_identifier(&service.name);
             let request = type_name(&service.request_name);
             let response = type_name(&service.response_name);
-            writeln!(output, "  {request}_t {service_name}_request_scratch;").unwrap();
-            writeln!(output, "  {response}_t {service_name}_response_scratch;").unwrap();
+            writeln!(
+                output,
+                "  union {{ {request}_t request; {response}_t response; }} {service_name}_scratch;"
+            )
+            .unwrap();
         }
     }
     writeln!(
@@ -828,7 +834,7 @@ fn emit_assembly_source(output: &mut String, profile: &BindingProfileModel, modu
             let service_name = c_identifier(&service.name);
             write!(
                 output,
-                "  if (config->rpc_server_enabled != 0U) {{\n    instance->runtime.{service_name}.request_scratch = &instance->{service_name}_request_scratch;\n    instance->runtime.{service_name}.canonical_request_scratch.data = (uint8_t *)layout.{service_name}_canonical_request_storage;\n    instance->runtime.{service_name}.canonical_request_scratch.capacity = config->{service_name}_canonical_request_capacity;\n    instance->runtime.{service_name}.request_handler = config->{service_name}_request_handler;\n    instance->runtime.{service_name}.user_data = config->{service_name}_user_data;\n  }}\n  if (config->rpc_client_enabled != 0U) instance->runtime.{service_name}.response_scratch = &instance->{service_name}_response_scratch;\n"
+                "  if (config->rpc_server_enabled != 0U) {{\n    instance->runtime.{service_name}.request_scratch = &instance->{service_name}_scratch.request;\n    instance->runtime.{service_name}.canonical_request_scratch.data = (uint8_t *)layout.{service_name}_canonical_request_storage;\n    instance->runtime.{service_name}.canonical_request_scratch.capacity = config->{service_name}_canonical_request_capacity;\n    instance->runtime.{service_name}.request_handler = config->{service_name}_request_handler;\n    instance->runtime.{service_name}.user_data = config->{service_name}_user_data;\n  }}\n  if (config->rpc_client_enabled != 0U) instance->runtime.{service_name}.response_scratch = &instance->{service_name}_scratch.response;\n"
             )
             .unwrap();
         }
@@ -910,50 +916,30 @@ fn emit_rpc_runtime_progress_implementation(
 ) {
     write!(
         output,
-        "wl_rpc_err_t {module}_runtime_poll({module}_runtime_t *runtime, wl_time_ms_t now_ms, {module}_runtime_poll_result_t *out_result) {{\n  wl_rpc_err_t result;\n  wl_rpc_server_expiry_t server_expiry = {{0}};\n  if (out_result != NULL) memset(out_result, 0, sizeof(*out_result));\n  if (runtime == NULL || out_result == NULL) return WL_RPC_ERR_INVALID_ARG;\n  if (runtime->rpc_client != NULL) {{\n    result = wl_rpc_client_poll(runtime->rpc_client, now_ms, &out_result->client_timed_out);\n    if (result != WL_RPC_OK) return result;\n  }}\n  if (runtime->rpc_server != NULL) {{\n    result = wl_rpc_server_expired_acquire(runtime->rpc_server, now_ms, &out_result->server_expired_request);\n    if (result == WL_RPC_OK) out_result->server_pending_expired = 1U;\n    else if (result != WL_RPC_ERR_NOT_FOUND) return result;\n    result = wl_rpc_server_poll(runtime->rpc_server, now_ms, &server_expiry);\n    if (result != WL_RPC_OK) return result;\n    out_result->server_cache_expired = server_expiry.cache_expired;\n  }}\n  return WL_RPC_OK;\n}}\n\nwl_rpc_err_t {module}_runtime_service(wl_ctx_t *ctx, {module}_runtime_t *runtime, wl_time_ms_t now_ms, {module}_runtime_service_result_t *out_result) {{\n  wl_rpc_server_response_t response = {{0}};\n  wl_rpc_err_t result;\n  if (out_result != NULL) memset(out_result, 0, sizeof(*out_result));\n  if (ctx == NULL || runtime == NULL || out_result == NULL) return WL_RPC_ERR_INVALID_ARG;\n  out_result->response = {module}_runtime_result(NULL);\n  result = {module}_runtime_poll(runtime, now_ms, &out_result->deadlines);\n  if (result != WL_RPC_OK) return result;\n  if (runtime->rpc_server == NULL) return WL_RPC_OK;\n  result = wl_rpc_server_response_acquire(runtime->rpc_server, &response);\n  if (result == WL_RPC_ERR_NOT_FOUND) return WL_RPC_OK;\n  if (result != WL_RPC_OK) return result;\n  out_result->response.message_id = response.identity.response_message_id;\n  out_result->response.detail_kind = {prefix}_RUNTIME_DETAIL_RPC;\n  out_result->response.detail.rpc.operation_id = response.identity.operation_id;\n  out_result->response.detail.rpc.application_result = response.application_status;\n  out_result->response.detail.rpc.payload_length = response.response_length;\n  out_result->response.detail.rpc.server_response = response;\n  switch (response.identity.response_message_id) {{\n"
+        "wl_rpc_err_t {module}_runtime_poll({module}_runtime_t *runtime, wl_time_ms_t now_ms, {module}_runtime_poll_result_t *out_result) {{\n  wl_rpc_err_t result;\n  wl_rpc_server_expiry_t server_expiry = {{0}};\n  if (out_result != NULL) memset(out_result, 0, sizeof(*out_result));\n  if (runtime == NULL || out_result == NULL) return WL_RPC_ERR_INVALID_ARG;\n  if (runtime->rpc_client != NULL) {{\n    result = wl_rpc_client_poll(runtime->rpc_client, now_ms, &out_result->client_timed_out);\n    if (result != WL_RPC_OK) return result;\n  }}\n  if (runtime->rpc_server != NULL) {{\n    result = wl_rpc_server_expired_acquire(runtime->rpc_server, now_ms, &out_result->server_expired_request);\n    if (result == WL_RPC_OK) out_result->server_pending_expired = 1U;\n    else if (result != WL_RPC_ERR_NOT_FOUND) return result;\n    result = wl_rpc_server_poll(runtime->rpc_server, now_ms, &server_expiry);\n    if (result != WL_RPC_OK) return result;\n    out_result->server_cache_expired = server_expiry.cache_expired;\n  }}\n  return WL_RPC_OK;\n}}\n\nwl_rpc_err_t {module}_runtime_service(wl_ctx_t *ctx, {module}_runtime_t *runtime, wl_time_ms_t now_ms, {module}_runtime_service_result_t *out_result) {{\n  wl_rpc_server_response_t response = {{0}};\n  wl_rpc_err_t result;\n  uint8_t reliable_response = 0U;\n  if (out_result != NULL) memset(out_result, 0, sizeof(*out_result));\n  if (ctx == NULL || runtime == NULL || out_result == NULL) return WL_RPC_ERR_INVALID_ARG;\n  out_result->response = {module}_runtime_result(NULL);\n  result = {module}_runtime_poll(runtime, now_ms, &out_result->deadlines);\n  if (result != WL_RPC_OK) return result;\n  if (runtime->rpc_server == NULL) return WL_RPC_OK;\n  result = wl_rpc_server_response_acquire(runtime->rpc_server, &response);\n  if (result == WL_RPC_ERR_NOT_FOUND) return WL_RPC_OK;\n  if (result != WL_RPC_OK) return result;\n  out_result->response.message_id = response.identity.response_message_id;\n  out_result->response.detail_kind = {prefix}_RUNTIME_DETAIL_RPC;\n  out_result->response.detail.rpc.operation_id = response.identity.operation_id;\n  out_result->response.detail.rpc.application_result = response.application_status;\n  out_result->response.detail.rpc.payload_length = response.response_length;\n  out_result->response.detail.rpc.server_response = response;\n  switch (response.identity.response_message_id) {{\n"
     )
     .unwrap();
     for service in &profile.rpc_services {
         let request_macro = upper_snake(&service.request_name);
         let response_macro = upper_snake(&service.response_name);
-        let send_call = match service.response_delivery {
-            DeliveryPolicy::Unreliable => format!(
-                "wl_send_unreliable(ctx, {response_macro}_MESSAGE_ID, response.response_data, response.response_length)"
-            ),
-            DeliveryPolicy::Reliable => format!(
-                "wl_send_reliable(ctx, {response_macro}_MESSAGE_ID, response.response_data, response.response_length, &out_result->response.detail.rpc.handle)"
-            ),
+        let reliable = match service.response_delivery {
+            DeliveryPolicy::Unreliable => "0U",
+            DeliveryPolicy::Reliable => "1U",
         };
         writeln!(
             output,
-            "    case {response_macro}_MESSAGE_ID:\n      if (response.identity.request_message_id != {request_macro}_MESSAGE_ID) {{\n        result = WL_RPC_ERR_RESPONSE_MISMATCH;\n        break;\n      }}\n      out_result->response.detail.rpc.core_result = {send_call};\n      break;"
+            "    case {response_macro}_MESSAGE_ID:\n      if (response.identity.request_message_id != {request_macro}_MESSAGE_ID) {{\n        result = WL_RPC_ERR_RESPONSE_MISMATCH;\n        break;\n      }}\n      reliable_response = {reliable};\n      break;"
         )
         .unwrap();
     }
     write!(
         output,
-        "    default:\n      result = WL_RPC_ERR_RESPONSE_MISMATCH;\n      break;\n  }}\n  if (result != WL_RPC_OK) {{\n    (void)wl_rpc_server_response_defer(runtime->rpc_server, &response);\n    return result;\n  }}\n  if (out_result->response.detail.rpc.core_result != WL_OK) {{\n    result = wl_rpc_server_response_defer(runtime->rpc_server, &response);\n    if (result != WL_RPC_OK) return result;\n    out_result->response.domain = {prefix}_RUNTIME_CORE_ERROR;\n    out_result->responses_deferred = 1U;\n    return WL_RPC_OK;\n  }}\n  switch (response.identity.response_message_id) {{\n"
+        "    default:\n      result = WL_RPC_ERR_RESPONSE_MISMATCH;\n      break;\n  }}\n  if (result != WL_RPC_OK) {{\n    (void)wl_rpc_server_response_defer(runtime->rpc_server, &response);\n    return result;\n  }}\n  if (reliable_response != 0U) {{\n    out_result->response.detail.rpc.core_result = wl_send_reliable(ctx, response.identity.response_message_id, response.response_data, response.response_length, &out_result->response.detail.rpc.handle);\n  }} else {{\n    out_result->response.detail.rpc.core_result = wl_send_unreliable(ctx, response.identity.response_message_id, response.response_data, response.response_length);\n  }}\n  if (out_result->response.detail.rpc.core_result != WL_OK) {{\n    result = wl_rpc_server_response_defer(runtime->rpc_server, &response);\n    if (result != WL_RPC_OK) return result;\n    out_result->response.domain = {prefix}_RUNTIME_CORE_ERROR;\n    out_result->responses_deferred = 1U;\n    return WL_RPC_OK;\n  }}\n  if (reliable_response != 0U) {{\n    result = wl_rpc_server_response_submitted(runtime->rpc_server, &response, out_result->response.detail.rpc.handle);\n  }} else {{\n    result = wl_rpc_server_response_sent(runtime->rpc_server, &response);\n  }}\n"
     )
     .unwrap();
-    for service in &profile.rpc_services {
-        let response_macro = upper_snake(&service.response_name);
-        let transition = match service.response_delivery {
-            DeliveryPolicy::Unreliable => {
-                "wl_rpc_server_response_sent(runtime->rpc_server, &response)"
-            }
-            DeliveryPolicy::Reliable => {
-                "wl_rpc_server_response_submitted(runtime->rpc_server, &response, out_result->response.detail.rpc.handle)"
-            }
-        };
-        writeln!(
-            output,
-            "    case {response_macro}_MESSAGE_ID:\n      result = {transition};\n      break;"
-        )
-        .unwrap();
-    }
     write!(
         output,
-        "    default:\n      result = WL_RPC_ERR_RESPONSE_MISMATCH;\n      break;\n  }}\n  if (result != WL_RPC_OK) {{\n    (void)wl_rpc_server_response_defer(runtime->rpc_server, &response);\n    return result;\n  }}\n  out_result->response.domain = {prefix}_RUNTIME_OK;\n  out_result->responses_submitted = 1U;\n  return WL_RPC_OK;\n}}\n\nwl_rpc_err_t {module}_runtime_get_deadline_hint(const {module}_runtime_t *runtime, wl_time_ms_t now_ms, wl_rpc_deadline_hint_t *out_hint) {{\n  wl_rpc_deadline_hint_t component = {{WL_RPC_NO_DEADLINE_MS}};\n  wl_rpc_err_t result;\n  uint32_t nearest = WL_RPC_NO_DEADLINE_MS;\n  if (out_hint != NULL) out_hint->next_deadline_ms = WL_RPC_NO_DEADLINE_MS;\n  if (runtime == NULL || out_hint == NULL) return WL_RPC_ERR_INVALID_ARG;\n  if (runtime->rpc_client != NULL) {{\n    result = wl_rpc_client_get_deadline_hint(runtime->rpc_client, now_ms, &component);\n    if (result != WL_RPC_OK) return result;\n    if (component.next_deadline_ms < nearest) nearest = component.next_deadline_ms;\n  }}\n  if (runtime->rpc_server != NULL) {{\n    result = wl_rpc_server_get_deadline_hint(runtime->rpc_server, now_ms, &component);\n    if (result != WL_RPC_OK) return result;\n    if (component.next_deadline_ms < nearest) nearest = component.next_deadline_ms;\n  }}\n  out_hint->next_deadline_ms = nearest;\n  return WL_RPC_OK;\n}}\n\n"
+        "  if (result != WL_RPC_OK) {{\n    (void)wl_rpc_server_response_defer(runtime->rpc_server, &response);\n    return result;\n  }}\n  out_result->response.domain = {prefix}_RUNTIME_OK;\n  out_result->responses_submitted = 1U;\n  return WL_RPC_OK;\n}}\n\nwl_rpc_err_t {module}_runtime_get_deadline_hint(const {module}_runtime_t *runtime, wl_time_ms_t now_ms, wl_rpc_deadline_hint_t *out_hint) {{\n  wl_rpc_deadline_hint_t component = {{WL_RPC_NO_DEADLINE_MS}};\n  wl_rpc_err_t result;\n  uint32_t nearest = WL_RPC_NO_DEADLINE_MS;\n  if (out_hint != NULL) out_hint->next_deadline_ms = WL_RPC_NO_DEADLINE_MS;\n  if (runtime == NULL || out_hint == NULL) return WL_RPC_ERR_INVALID_ARG;\n  if (runtime->rpc_client != NULL) {{\n    result = wl_rpc_client_get_deadline_hint(runtime->rpc_client, now_ms, &component);\n    if (result != WL_RPC_OK) return result;\n    if (component.next_deadline_ms < nearest) nearest = component.next_deadline_ms;\n  }}\n  if (runtime->rpc_server != NULL) {{\n    result = wl_rpc_server_get_deadline_hint(runtime->rpc_server, now_ms, &component);\n    if (result != WL_RPC_OK) return result;\n    if (component.next_deadline_ms < nearest) nearest = component.next_deadline_ms;\n  }}\n  out_hint->next_deadline_ms = nearest;\n  return WL_RPC_OK;\n}}\n\n"
     )
     .unwrap();
 }
