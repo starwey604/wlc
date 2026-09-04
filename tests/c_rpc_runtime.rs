@@ -458,7 +458,6 @@ static int check_server(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime) {
   uint8_t request_three[] = {
     0x08U, 0x4FU, 0x10U, 0x06U, 0x1AU, 0x01U, 0xAAU
   };
-  uint8_t encoded[64];
   uint8_t first_cached[64];
   size_t first_cached_length;
   uint32_t sends_before;
@@ -502,8 +501,7 @@ static int check_server(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime) {
     const uint32_t sends_at_conflict = send_calls;
     wrong_request.generation += UINT64_C(1000);
     result = rpc_fixture_compute_server_complete(
-        runtime, &wrong_request, &response,
-        (rpc_fixture_encode_scratch_t){encoded, sizeof(encoded)}, 102U);
+        runtime, &wrong_request, &response, 102U);
     if (result.domain != RPC_FIXTURE_RUNTIME_RPC_ERROR ||
         result.detail.rpc.rpc_result != WL_RPC_ERR_NOT_FOUND ||
         send_calls != sends_at_conflict)
@@ -523,8 +521,7 @@ static int check_server(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime) {
   response.has_output = true;
   response.output = 84U;
   result = rpc_fixture_compute_server_complete(
-      runtime, &first_request, &response,
-      (rpc_fixture_encode_scratch_t){encoded, sizeof(encoded)}, 103U);
+      runtime, &first_request, &response, 103U);
   if (result.domain != RPC_FIXTURE_RUNTIME_OK || response.operation_id != 77U ||
       !response.has_status || response.status != SUCCESS ||
       result.detail.rpc.server_response.response_data == NULL ||
@@ -567,8 +564,7 @@ static int check_server(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime) {
   response.output = 10U;
   next_core_result = WL_ERR_BUSY;
   result = rpc_fixture_compute_server_reject(
-      runtime, &second_request, REJECTED, &response,
-      (rpc_fixture_encode_scratch_t){encoded, sizeof(encoded)}, 107U);
+      runtime, &second_request, REJECTED, &response, 107U);
   if (result.domain != RPC_FIXTURE_RUNTIME_OK || response.status != REJECTED ||
       rpc_fixture_runtime_service(ctx, runtime, 107U, &service) != WL_RPC_OK ||
       service.responses_deferred != 1U ||
