@@ -86,6 +86,7 @@ fn validate_runtime_names(
         format!("{module}_runtime_pump_t"),
         format!("{module}_runtime_result_fn"),
         format!("{module}_runtime_config_t"),
+        format!("{module}_runtime_default_storage_alignment_t"),
         format!("{module}_runtime_default_storage_t"),
         format!("{module}_runtime_requirements_t"),
         format!("{module}_runtime_storage_t"),
@@ -114,6 +115,7 @@ fn validate_runtime_names(
         format!("{prefix}_IDENTITY_ALGORITHM"),
         format!("{prefix}_RUNTIME_CODEGEN_ABI_VERSION"),
         format!("{prefix}_RUNTIME_HAS_DEFAULT_STORAGE"),
+        format!("{prefix}_RUNTIME_DEFAULT_STORAGE_ALIGNMENT"),
         format!("{prefix}_RUNTIME_DEFAULT_STORAGE_CAPACITY"),
         format!("{prefix}_RUNTIME_DETAIL_NONE"),
         format!("{prefix}_RUNTIME_DETAIL_RETAINED"),
@@ -715,25 +717,28 @@ fn runtime_default_capacities(
 fn default_storage_terms(
     profile: &BindingProfileModel,
     capacities: &RuntimeDefaultCapacities,
+    prefix: &str,
 ) -> Vec<String> {
+    let padding = format!("({prefix}_RUNTIME_DEFAULT_STORAGE_ALIGNMENT - 1U)");
     let mut terms = Vec::new();
     for route in &profile.retained_routes {
         let message = type_name(&route.message_name);
         match route.kind {
             RetainedRouteKind::Latest => terms.push(format!(
-                "((sizeof(max_align_t) - 1U) + ((sizeof({message}_t) + (sizeof(max_align_t) - 1U)) * WL_LATEST_SLOT_COUNT))"
+                "({padding} + ((sizeof({message}_t) + {padding}) * WL_LATEST_SLOT_COUNT))"
             )),
-            RetainedRouteKind::Fifo => terms.push(format!(
-                "((sizeof(max_align_t) - 1U) + sizeof({message}_t) + (sizeof(max_align_t) - 1U))"
-            )),
+            RetainedRouteKind::Fifo => {
+                terms.push(format!("({padding} + sizeof({message}_t) + {padding})"))
+            }
         }
     }
     if !profile.rpc_services.is_empty() {
-        terms.push("((sizeof(max_align_t) - 1U) + sizeof(wl_rpc_client_slot_t))".to_owned());
+        terms.push(format!("({padding} + sizeof(wl_rpc_client_slot_t))"));
         terms.push(format!("{}U", capacities.rpc_response.unwrap()));
-        terms
-            .push("((sizeof(max_align_t) - 1U) + sizeof(wl_rpc_server_pending_slot_t))".to_owned());
-        terms.push("((sizeof(max_align_t) - 1U) + sizeof(wl_rpc_server_cache_slot_t))".to_owned());
+        terms.push(format!(
+            "({padding} + sizeof(wl_rpc_server_pending_slot_t))"
+        ));
+        terms.push(format!("({padding} + sizeof(wl_rpc_server_cache_slot_t))"));
         terms.push(format!("{}U", capacities.rpc_response.unwrap()));
         terms.extend(
             capacities
@@ -809,17 +814,41 @@ fn emit_assembly_header(
     )
     .unwrap();
     if default_capacities.has_storage() {
+        output.push_str("typedef union {\n  uint8_t byte;\n");
+        for route in &profile.retained_routes {
+            let message = type_name(&route.message_name);
+            let kind = match route.kind {
+                RetainedRouteKind::Latest => "latest",
+                RetainedRouteKind::Fifo => "fifo",
+            };
+            writeln!(output, "  {message}_t {message}_{kind};").unwrap();
+        }
+        if !profile.rpc_services.is_empty() {
+            output.push_str(
+                "  wl_rpc_client_slot_t rpc_client_slot;\n  wl_rpc_server_pending_slot_t rpc_server_pending_slot;\n  wl_rpc_server_cache_slot_t rpc_server_cache_slot;\n",
+            );
+        }
+        writeln!(
+            output,
+            "}} {module}_runtime_default_storage_alignment_t;\n\n#if defined(__cplusplus)\n#define {prefix}_RUNTIME_DEFAULT_STORAGE_ALIGNMENT alignof({module}_runtime_default_storage_alignment_t)\n#elif defined(_MSC_VER)\n#define {prefix}_RUNTIME_DEFAULT_STORAGE_ALIGNMENT __alignof({module}_runtime_default_storage_alignment_t)\n#else\n#define {prefix}_RUNTIME_DEFAULT_STORAGE_ALIGNMENT _Alignof({module}_runtime_default_storage_alignment_t)\n#endif"
+        )
+        .unwrap();
         writeln!(
             output,
             "#define {prefix}_RUNTIME_DEFAULT_STORAGE_CAPACITY \\"
         )
         .unwrap();
         output.push_str("  (1U");
-        for term in default_storage_terms(profile, &default_capacities) {
+        for term in default_storage_terms(profile, &default_capacities, &prefix) {
             output.push_str(" + \\\n   ");
             output.push_str(&term);
         }
-        output.push_str(")\n\ntypedef union {\n  max_align_t alignment;\n  uint8_t bytes[");
+        output.push_str(")\n\ntypedef union {\n  ");
+        write!(
+            output,
+            "{module}_runtime_default_storage_alignment_t alignment;\n  uint8_t bytes["
+        )
+        .unwrap();
         write!(output, "{prefix}_RUNTIME_DEFAULT_STORAGE_CAPACITY").unwrap();
         writeln!(output, "];\n}} {module}_runtime_default_storage_t;\n").unwrap();
     }

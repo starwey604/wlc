@@ -220,6 +220,11 @@ message State = 1 { optional uint32 sequence = 1; }
             .header
             .contains("stable_api_runtime_default_storage_t")
     );
+    assert!(
+        first
+            .header
+            .contains("#define STABLE_API_RUNTIME_DEFAULT_STORAGE_ALIGNMENT _Alignof(")
+    );
     assert!(first.source.contains("stable_api_runtime_config_defaults"));
     assert!(
         first

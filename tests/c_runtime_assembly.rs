@@ -392,6 +392,10 @@ fn generated_runtime_assembly_clears_instance_after_component_init_failure() {
         r#"#include "rollback_runtime.h"
 
 static_assert(ROLLBACK_RUNTIME_HAS_DEFAULT_STORAGE == 1);
+static_assert(ROLLBACK_RUNTIME_DEFAULT_STORAGE_ALIGNMENT ==
+              alignof(rollback_runtime_default_storage_alignment_t));
+static_assert(alignof(rollback_runtime_default_storage_t) >=
+              ROLLBACK_RUNTIME_DEFAULT_STORAGE_ALIGNMENT);
 static_assert(sizeof(rollback_runtime_default_storage_t) >=
               ROLLBACK_RUNTIME_DEFAULT_STORAGE_CAPACITY);
 "#,
