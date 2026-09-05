@@ -17,6 +17,9 @@ pub(crate) enum TokenKind {
     True,
     False,
     Equal,
+    At,
+    LeftParen,
+    RightParen,
     Semicolon,
     LeftBrace,
     RightBrace,
@@ -88,6 +91,18 @@ impl Lexer<'_> {
             '=' => {
                 self.advance();
                 TokenKind::Equal
+            }
+            '@' => {
+                self.advance();
+                TokenKind::At
+            }
+            '(' => {
+                self.advance();
+                TokenKind::LeftParen
+            }
+            ')' => {
+                self.advance();
+                TokenKind::RightParen
             }
             ';' => {
                 self.advance();

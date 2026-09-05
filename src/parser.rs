@@ -136,8 +136,7 @@ impl Parser {
     fn parse_message(&mut self) -> Result<Message, ParseError> {
         self.expect_keyword(TokenKind::Message, "`message`")?;
         let name = self.identifier("message name")?;
-        self.expect_symbol(TokenKind::Equal, "`=` after message name")?;
-        let id = self.positive_u16("message id")?;
+        let id = self.schema_id("message id")?;
         self.expect_symbol(TokenKind::LeftBrace, "`{` before message fields")?;
 
         let mut fields = Vec::new();
@@ -260,8 +259,7 @@ impl Parser {
         } else {
             cardinality
         };
-        self.expect_symbol(TokenKind::Equal, "`=` after field name")?;
-        let number = self.positive_u16("field number")?;
+        let number = self.schema_id("field number")?;
         let default = if matches!(self.current().kind, TokenKind::LeftBracket) {
             self.advance();
             if cardinality != Cardinality::Optional {
@@ -311,8 +309,7 @@ impl Parser {
     fn parse_enum(&mut self) -> Result<Enum, ParseError> {
         self.expect_keyword(TokenKind::Enum, "`enum`")?;
         let name = self.identifier("enum name")?;
-        self.expect_symbol(TokenKind::Equal, "`=` after enum name")?;
-        let id = self.positive_u16("enum id")?;
+        let id = self.schema_id("enum id")?;
         self.expect_symbol(TokenKind::LeftBrace, "`{` before enum values")?;
 
         let mut values = Vec::new();
@@ -378,6 +375,30 @@ impl Parser {
             reserved_numbers,
             values,
         })
+    }
+
+    /// IDs are explicit attributes, not assignments. Keep the original `= N`
+    /// spelling readable so existing schemas retain their wire identities.
+    fn schema_id(&mut self, description: &str) -> Result<Spanned<u16>, ParseError> {
+        if matches!(self.current().kind, TokenKind::Equal) {
+            self.advance();
+            return self.positive_u16(description);
+        }
+        self.expect_symbol(TokenKind::At, "`@id(...)` or legacy `= number`")?;
+        let attribute = self.identifier("`id` attribute name")?;
+        if attribute.value != "id" {
+            return Err(self.error(
+                attribute.span,
+                format!(
+                    "unknown schema attribute `@{}`; expected `@id(...)`",
+                    attribute.value
+                ),
+            ));
+        }
+        self.expect_symbol(TokenKind::LeftParen, "`(` after `@id`")?;
+        let id = self.positive_u16(description)?;
+        self.expect_symbol(TokenKind::RightParen, "`)` after ID")?;
+        Ok(id)
     }
 
     fn identifier(&mut self, expected: &str) -> Result<Spanned<String>, ParseError> {
