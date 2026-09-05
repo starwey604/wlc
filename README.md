@@ -4,6 +4,9 @@
 checks a revision against its predecessor, and generates allocation-free C11
 payload codecs plus optional typed Wirelink bindings.
 
+A Chinese review version is available in [`README-cn.md`](README-cn.md). This
+English document and the generated/public interfaces remain normative.
+
 ## Prebuilt compiler
 
 Tagged releases publish host tools for Windows x86-64, Linux x86-64/aarch64
