@@ -19,6 +19,22 @@ The compiler version and generated-code ABI are separate compatibility axes.
 records `compiler.codegen_abi`. Build integrations should pin both rather than
 following a branch or the newest release.
 
+`wlc codegen-abi` prints this revision without requiring a schema. Current
+development generates ABI 19. It adds default endpoint assembly to each bounded
+profile's runtime header: `*_endpoint_t`, `init`/`init_config`, `step`/`close`,
+profile-selected `endpoint_send_*` and copying `endpoint_read_*` operations,
+plus endpoint-based RPC start/inspect/release/complete wrappers.
+
+The endpoint owns its static link buffers, runtime arena, and pump glue. It
+creates no thread or heap allocation. Zero-initialize it before first init;
+its private members are not supported API. `endpoint_handle()` connects an
+adapter, while `endpoint_runtime()` preserves advanced borrowed access. Sizing
+uses only profile-selected messages; `*_HAS_DEFAULT_ENDPOINT=0` advertises that
+an unbounded or oversized selected message needs custom storage. Default link
+settings are native packets and CRC32C; RPC roles and expiry policy remain explicit.
+These development artifacts require the matching Wirelink endpoint API and
+must not be mixed with older core installations.
+
 ## Schema grammar
 
 ```text
@@ -360,7 +376,7 @@ TX handle; owner loops may apply their fallback action only while it is zero. In
 has no domain payload. A retained-only profile therefore does not carry the
 larger RPC result fields. Generated runtime headers likewise include only the
 LATEST, FIFO, and RPC public headers selected by that profile. The fixed
-`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `18` for this surface; regenerate
+`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `19` for this surface; regenerate
 all runtime sources and update field access together when that value changes.
 
 Every generated result exposes `*_runtime_result_ok()` for the common success

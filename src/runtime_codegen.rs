@@ -98,6 +98,8 @@ fn validate_runtime_names(
         member_names.insert(format!("{}_{kind}", type_name(&route.message_name)));
     }
     let mut runtime_names = BTreeSet::from([
+        format!("{module}_endpoint_t"),
+        format!("{module}_endpoint_config_t"),
         format!("{module}_runtime_domain_t"),
         format!("{module}_runtime_result_t"),
         format!("{module}_runtime_result_ok"),
@@ -233,6 +235,45 @@ fn validate_runtime_names(
     }
 
     let mut schema_names = BTreeSet::new();
+    for suffix in [
+        "config_defaults",
+        "handle",
+        "runtime",
+        "record",
+        "init_config",
+        "init",
+        "step",
+        "result",
+        "close",
+    ] {
+        runtime_names.insert(format!("{module}_endpoint_{suffix}"));
+    }
+    for suffix in [
+        "MAX_PAYLOAD",
+        "RAW_CAPACITY",
+        "UNIT_CAPACITY",
+        "CONTROL_CAPACITY",
+    ] {
+        runtime_names.insert(format!("{prefix}_ENDPOINT_{suffix}"));
+    }
+    runtime_names.insert(format!("{prefix}_HAS_DEFAULT_ENDPOINT"));
+    for route in &profile.retained_routes {
+        let message = type_name(&route.message_name);
+        for verb in ["send", "read"] {
+            runtime_names.insert(format!("{module}_endpoint_{verb}_{message}"));
+        }
+    }
+    for service in &profile.rpc_services {
+        let name = c_identifier(&service.name);
+        for verb in ["start", "inspect", "release", "complete"] {
+            let symbol = format!("{module}_endpoint_{name}_{verb}");
+            if !runtime_names.insert(symbol.clone()) {
+                return Err(RuntimeCodegenError(format!(
+                    "generated endpoint symbols collide as C identifier `{symbol}`"
+                )));
+            }
+        }
+    }
     for symbol in &schema.declarations {
         let name = type_name(symbol.name());
         schema_names.insert(format!("{name}_t"));
@@ -477,7 +518,7 @@ fn emit_header(
     let prefix = upper_snake(module);
     let guard = format!("WIRELINK_GENERATED_{prefix}_RUNTIME_H");
     let mut output = format!(
-        "#ifndef {guard}\n#define {guard}\n\n#include \"{codec_module}_bindings.h\"\n#include <wirelink/pump.h>\n"
+        "#ifndef {guard}\n#define {guard}\n\n#include \"{codec_module}_bindings.h\"\n#include <wirelink/pump.h>\n#include <wirelink/endpoint.h>\n#include <wirelink/frame.h>\n#include <string.h>\n"
     );
     if profile
         .retained_routes
@@ -666,6 +707,13 @@ fn emit_header(
     for service in &profile.rpc_services {
         emit_rpc_header_functions(&mut output, module, service);
     }
+    output.push_str(&crate::endpoint_codegen::emit(
+        schema,
+        profile,
+        codec_module,
+        module,
+        runtime_default_capacities(schema, profile).has_storage(),
+    ));
     output.push_str("#ifdef __cplusplus\n}\n#endif\n\n#endif\n");
     output
 }

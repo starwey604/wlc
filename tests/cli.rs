@@ -4,6 +4,16 @@ use assert_cmd::Command;
 use tempfile::tempdir;
 
 #[test]
+fn codegen_abi_is_queryable_without_a_schema() {
+    Command::cargo_bin("wlc")
+        .unwrap()
+        .arg("codegen-abi")
+        .assert()
+        .success()
+        .stdout(format!("{}\n", wlc::CODEGEN_ABI_VERSION));
+}
+
+#[test]
 fn version_reports_the_package_release() {
     let output = Command::cargo_bin("wlc")
         .unwrap()

@@ -2,6 +2,7 @@
 
 pub mod ast;
 pub mod codegen;
+mod endpoint_codegen;
 pub mod identity;
 mod lexer;
 pub mod manifest;

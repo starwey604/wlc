@@ -15,6 +15,8 @@ struct Arguments {
 
 #[derive(clap::Subcommand)]
 enum Command {
+    /// Print the generated C API/layout revision for build-tool compatibility checks.
+    CodegenAbi,
     /// Validate a schema and optionally check it against its predecessor.
     Validate {
         schema: PathBuf,
@@ -82,6 +84,10 @@ fn is_portable_c_identifier(value: &str) -> bool {
 fn main() -> Result<()> {
     let arguments = Arguments::parse();
     let (schema_path, previous, profile, operation) = match arguments.command {
+        Command::CodegenAbi => {
+            println!("{}", wlc::CODEGEN_ABI_VERSION);
+            return Ok(());
+        }
         Command::Validate {
             schema,
             previous,

@@ -190,9 +190,21 @@ tagged union 组成。只在匹配 tag 时通过生成 accessor 读取 detail；
 dispatch release RX 或 reclaim 匹配 TX handle 后设置 `event_consumed`，owner fallback 只能在
 其为零时执行。
 
-ABI 18 的固定宏为 `<MODULE>_RUNTIME_CODEGEN_ABI_VERSION 18`。ABI 改变时所有 runtime
+当前固定宏为 `<MODULE>_RUNTIME_CODEGEN_ABI_VERSION 19`；`wlc codegen-abi` 可直接查询。
+ABI 改变时所有 runtime
 source 和字段访问一起更新。pump helper 共用一次 `now_ms`，最多 service 一个 response，
 合并 RPC deadline，并可把借用 diagnostic result 交给 observer。
+
+ABI 19 在 runtime 头文件中增加默认端点 `*_endpoint_t`：自动组合连接缓冲区、
+runtime arena 和 pump。应用使用 `endpoint_init`、`step`、`close`，以及按 profile
+选择传输方式的 `endpoint_send_*`、返回用户副本的 `endpoint_read_*`。
+RPC 增加端点形式的 start/inspect/release/complete。对象必须从零初始化且不能移动，
+`private_state` 成员不属于应用 API。
+
+`endpoint_handle()` 用于连接适配器，`endpoint_runtime()` 保留高级借用接口。
+容量根据 profile 选中的消息推导；消息无界或超过单帧上限时，
+`*_HAS_DEFAULT_ENDPOINT=0`，继续使用高级自定义存储。默认整包传输和 CRC32C，
+RPC 角色与过期策略仍显式选择。生成产物必须与支持端点 API 的 Wirelink 配套。
 
 Cortex-M4/Thumb/`-Os` regression fixture 当前 gate：dispatch/RPC/consumer 3328 bytes、
 assembly helper 1200、pump 320、optional diagnostic 288、完整 object 5088；retained-only

@@ -1,0 +1,144 @@
+/* Default endpoint assembly. Members named private_state are not application
+ * API. Zero-initialize once, keep at a stable address, close before reuse.
+ * All profile-selected messages must have finite one-frame bounds. */
+#define @P@_HAS_DEFAULT_ENDPOINT 1
+#define @P@_ENDPOINT_MAX_PAYLOAD @MAX@U
+/* Reserve for any supported envelope using CRC32C (the largest checksum). */
+#define @P@_ENDPOINT_RAW_CAPACITY (@P@_ENDPOINT_MAX_PAYLOAD + WL_FRAME_HEADER_SIZE + WL_FRAME_MAX_CRC)
+#define @P@_ENDPOINT_UNIT_CAPACITY (@P@_ENDPOINT_RAW_CAPACITY + @P@_ENDPOINT_RAW_CAPACITY / 254U + 2U)
+#define @P@_ENDPOINT_CONTROL_CAPACITY (WL_FRAME_HEADER_SIZE + WL_FRAME_MAX_CRC + 2U)
+
+typedef struct {
+  wl_config_t link;
+  @M@_runtime_config_t runtime;
+  size_t event_budget;
+  @M@_runtime_result_fn on_result;
+  void *user_data;
+} @M@_endpoint_config_t;
+
+typedef struct {
+  struct {
+    wl_endpoint_t owner;
+    @M@_runtime_instance_t instance;
+    @M@_runtime_default_storage_t arena;
+    @M@_runtime_pump_t pump;
+    @M@_runtime_result_t result;
+    @M@_runtime_result_fn on_result;
+    void *user_data;
+    size_t event_budget;
+    uint8_t tx_payload[@P@_ENDPOINT_MAX_PAYLOAD];
+    uint8_t tx_unit[@P@_ENDPOINT_UNIT_CAPACITY];
+    uint8_t control_unit[@P@_ENDPOINT_CONTROL_CAPACITY];
+    uint8_t rx_fallback[@P@_ENDPOINT_UNIT_CAPACITY];
+    uint8_t rx_fifo[@P@_ENDPOINT_UNIT_CAPACITY];
+  } private_state;
+} @M@_endpoint_t;
+
+/* Config descriptors can be temporary; callbacks/user_data must outlive use.
+ * No retry/expiry policy is invented. RPC roles remain explicitly selected. */
+static inline wl_err_t @M@_endpoint_config_defaults(
+    @M@_endpoint_config_t *config, uint64_t session_id) {
+  if (config == NULL || session_id == 0U) return WL_ERR_INVALID_ARG;
+  memset(config, 0, sizeof(*config));
+  config->link.max_payload_len = @P@_ENDPOINT_MAX_PAYLOAD;
+  config->link.envelope = WL_ENVELOPE_NATIVE_PACKET;
+  config->link.integrity = WL_INTEGRITY_CRC32C;
+  config->link.session_id = session_id;
+  config->event_budget = 16U;
+  return @M@_runtime_config_defaults(&config->runtime);
+}
+
+static inline wl_endpoint_t *@M@_endpoint_handle(@M@_endpoint_t *endpoint) {
+  return endpoint != NULL ? &endpoint->private_state.owner : NULL;
+}
+
+/* Advanced integration only: do not also dispatch/take events consumed by step. */
+static inline @M@_runtime_t *@M@_endpoint_runtime(@M@_endpoint_t *endpoint) {
+  return endpoint != NULL && wl_endpoint_link(@M@_endpoint_handle(endpoint)) != NULL
+      ? &endpoint->private_state.instance.runtime : NULL;
+}
+
+static inline void @M@_endpoint_record(void *context,
+                                      const @M@_runtime_result_t *result) {
+  @M@_endpoint_t *endpoint = (@M@_endpoint_t *)context;
+  @M@_runtime_result_t terminal;
+  if (result->domain == @P@_RUNTIME_NON_RX) {
+    if (result->event_type != WL_EVT_TX_TIMEOUT && result->event_type != WL_EVT_TX_FAILED)
+      return; /* Normal transport completion is not an application failure. */
+    terminal = *result;
+    terminal.domain = @P@_RUNTIME_CORE_ERROR;
+    result = &terminal;
+  }
+  /* Retain the first failure even if later events in the same pass succeed. */
+  if (@M@_runtime_result_ok(&endpoint->private_state.result))
+    endpoint->private_state.result = *result;
+  if (endpoint->private_state.on_result != NULL)
+    endpoint->private_state.on_result(endpoint->private_state.user_data, result);
+}
+
+static inline wl_err_t @M@_endpoint_init_config(
+    @M@_endpoint_t *endpoint, const @M@_endpoint_config_t *config) {
+  wl_storage_t link_storage;
+  @M@_runtime_storage_t storage;
+  wl_pump_hooks_t hooks;
+  int result;
+  if (endpoint == NULL || config == NULL || config->event_budget == 0U)
+    return WL_ERR_INVALID_ARG;
+  if (wl_endpoint_link(@M@_endpoint_handle(endpoint)) != NULL)
+    return WL_ERR_INVALID_STATE;
+  memset(&link_storage, 0, sizeof(link_storage));
+  link_storage.tx_payload = endpoint->private_state.tx_payload;
+  link_storage.tx_payload_size = sizeof(endpoint->private_state.tx_payload);
+  link_storage.tx_unit = endpoint->private_state.tx_unit;
+  link_storage.tx_unit_size = sizeof(endpoint->private_state.tx_unit);
+  link_storage.control_unit = endpoint->private_state.control_unit;
+  link_storage.control_unit_size = sizeof(endpoint->private_state.control_unit);
+  link_storage.rx_fallback = endpoint->private_state.rx_fallback;
+  link_storage.rx_fallback_size = sizeof(endpoint->private_state.rx_fallback);
+  link_storage.rx_fifo = endpoint->private_state.rx_fifo;
+  link_storage.rx_fifo_size = sizeof(endpoint->private_state.rx_fifo);
+  storage = @M@_runtime_default_storage_descriptor(&endpoint->private_state.arena);
+  result = @M@_runtime_init(&endpoint->private_state.instance, &config->runtime, &storage);
+  if (result != WL_OK) return result;
+  result = @M@_runtime_pump_init(&endpoint->private_state.pump,
+      &endpoint->private_state.instance.runtime, @M@_endpoint_record, endpoint);
+  if (result != WL_OK) return result;
+  hooks = @M@_runtime_pump_hooks(&endpoint->private_state.pump);
+  result = wl_endpoint_init(&endpoint->private_state.owner, &config->link,
+                            &link_storage, &hooks);
+  if (result != WL_OK) return result;
+  endpoint->private_state.on_result = config->on_result;
+  endpoint->private_state.user_data = config->user_data;
+  endpoint->private_state.event_budget = config->event_budget;
+  memset(&endpoint->private_state.result, 0, sizeof(endpoint->private_state.result));
+  return WL_OK;
+}
+
+static inline wl_err_t @M@_endpoint_init(@M@_endpoint_t *endpoint, uint64_t session_id) {
+  @M@_endpoint_config_t config;
+  int result = @M@_endpoint_config_defaults(&config, session_id);
+  return result == WL_OK ? @M@_endpoint_init_config(endpoint, &config) : result;
+}
+
+/* One bounded owner pass: service transport, dispatch and release events,
+ * advance RPC work. NO_DATA/backpressure during transport service is normal.
+ * Inspect endpoint_result/last_step for details when this returns an error. */
+static inline wl_err_t @M@_endpoint_step(@M@_endpoint_t *endpoint, wl_time_ms_t now_ms) {
+  int result;
+  if (endpoint == NULL) return WL_ERR_INVALID_ARG;
+  memset(&endpoint->private_state.result, 0, sizeof(endpoint->private_state.result));
+  result = wl_endpoint_step(&endpoint->private_state.owner, now_ms,
+                             endpoint->private_state.event_budget);
+  if (result != WL_OK) return result;
+@RPC_CHECK@
+  return @M@_runtime_result_ok(&endpoint->private_state.result)
+      ? WL_OK : WL_ERR_INVALID_STATE;
+}
+
+static inline const @M@_runtime_result_t *@M@_endpoint_result(const @M@_endpoint_t *endpoint) {
+  return endpoint != NULL ? &endpoint->private_state.result : NULL;
+}
+
+static inline void @M@_endpoint_close(@M@_endpoint_t *endpoint) {
+  wl_endpoint_close(@M@_endpoint_handle(endpoint));
+}
