@@ -314,6 +314,8 @@ prefix (zero discriminator, version, kind, reserved zero, BE32 call ID, BE32
 status). Successful responses carry a business body; nonzero rejections carry
 only the prefix. Default endpoints provide `*_call_t`, `*_result_t`, and reply
 tokens, with `call/inspect/release/cancel/complete/reject` operations.
+Endpoint call/reply operations return `wl_rpc_err_t`; generic runtime result
+unions stay out of ordinary handlers. Detailed failures remain in `endpoint_result()`.
 All metadata capacity is included in generated bounds; managed-only runtimes
 omit typed encoding scratch and encode directly into TX/cache storage.
 

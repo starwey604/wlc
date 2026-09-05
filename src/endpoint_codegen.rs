@@ -59,7 +59,9 @@ pub(crate) fn emit(
         .any(|service| service.is_managed());
     let mut output = include_str!("endpoint.h.in")
         .replace("@RPC_CHECK@", &rpc_check)
-        .replace("@RPC_STATE@", if managed { "    uint64_t incarnation;" } else { "" })
+        .replace("@RPC_STATE@", if managed { "    uint64_t incarnation;\n    bool stepping;" } else { "" })
+        .replace("@RPC_STEP_BEGIN@", if managed { "  endpoint->private_state.stepping = true;" } else { "" })
+        .replace("@RPC_STEP_END@", if managed { "  endpoint->private_state.stepping = false;" } else { "" })
         .replace("@RPC_BEGIN_INIT@", if managed {
             "  if (endpoint->private_state.incarnation == UINT64_MAX) return WL_ERR_INVALID_STATE;\n  ++endpoint->private_state.incarnation;"
         } else { "" })

@@ -11,6 +11,9 @@ static wl_time_ms_t now;
 static demo_execute_request_token_t tokens[8];
 static unsigned calls;
 static int32_t inputs[8];
+static bool reply_on_unknown;
+static demo_execute_request_token_t observer_token;
+static wl_rpc_err_t observer_reply;
 static wl_rpc_client_t concurrent_client;
 static wl_rpc_client_slot_t client_slots[2];
 static uint8_t client_responses[2][18];
@@ -18,6 +21,13 @@ static wl_rpc_server_t concurrent_server;
 static wl_rpc_server_pending_slot_t pending_slots[2];
 static wl_rpc_server_cache_slot_t cache_slots[4];
 static uint8_t cached_responses[4][18];
+
+static void observe(void *context, const demo_runtime_result_t *result) {
+  if (reply_on_unknown && result->domain == DEMO_RUNTIME_UNKNOWN_MESSAGE) {
+    reply_on_unknown = false;
+    observer_reply = demo_endpoint_execute_reject(context, &observer_token, 7, now);
+  }
+}
 
 static int32_t execute(void *user, const request_t *request,
                        const demo_execute_request_token_t *token,
@@ -50,6 +60,8 @@ static int init(void) {
   CHECK(demo_runtime_config_enable_server(&cb.runtime) == WL_OK);
   ca.link.ack_timeout_ms = cb.link.ack_timeout_ms = 10U;
   cb.runtime.execute_request_handler = execute;
+  cb.on_result = observe;
+  cb.user_data = &b;
   CHECK(demo_endpoint_init_config(&a, &ca) == WL_OK);
   CHECK(demo_endpoint_init_config(&b, &cb) == WL_OK);
   // Advanced test storage permits two concurrent calls, beyond the one-slot default.
@@ -74,12 +86,10 @@ static int call(int32_t value, uint32_t timeout, demo_execute_call_t *out) {
 
 static int complete(unsigned index, int32_t value) {
   response_t response;
-  demo_runtime_result_t result;
   response_clear(&response);
   response.has_output = true;
   response.output = value;
-  result = demo_endpoint_execute_complete(&b, &tokens[index], &response, now);
-  CHECK(demo_runtime_result_ok(&result));
+  CHECK(demo_endpoint_execute_complete(&b, &tokens[index], &response, now) == WL_RPC_OK);
   return drain();
 }
 
@@ -122,7 +132,7 @@ int main(void) {
   demo_auxiliary_call_t wrong_service;
   auxiliary_request_t auxiliary;
   demo_auxiliary_result_t auxiliary_result;
-  demo_runtime_result_t completed;
+  wl_rpc_err_t completed;
   demo_execute_request_token_t old_token;
   response_t response;
   request_t missing;
@@ -188,7 +198,7 @@ int main(void) {
   CHECK(call(-1, 1000U, &first) == 0);
   CHECK(demo_endpoint_execute_inspect(&a, &saved, &result) == WL_RPC_ERR_NOT_FOUND);
   completed = demo_endpoint_execute_reject(&b, &tokens[2], INT32_MIN, now);
-  CHECK(demo_runtime_result_ok(&completed) && completed.detail.rpc.payload_length == 12U);
+  CHECK(completed == WL_RPC_OK && demo_endpoint_result(&b)->detail.rpc.payload_length == 12U);
   CHECK(drain() == 0);
   CHECK(demo_endpoint_execute_inspect(&a, &first, &result) == WL_RPC_OK);
   CHECK(result.state == WL_RPC_CLIENT_APPLICATION_ERROR && result.application_status == INT32_MIN && !result.response_valid);
@@ -219,10 +229,21 @@ int main(void) {
   response.has_output = true;
   response.output = 6;
   completed = demo_endpoint_execute_complete(&b, &old_token, &response, now);
-  CHECK(!demo_runtime_result_ok(&completed));
+  CHECK(completed != WL_RPC_OK);
   completed = demo_endpoint_execute_complete(&a, &tokens[0], &response, now);
-  CHECK(!demo_runtime_result_ok(&completed));
+  CHECK(completed != WL_RPC_OK);
   CHECK(complete(0U, 6) == 0);
+  CHECK(demo_endpoint_execute_release(&a, &first) == WL_RPC_OK);
+  CHECK(call(8, 1000U, &first) == 0);
+  observer_token = tokens[1];
+  observer_reply = WL_RPC_ERR_INVALID_STATE;
+  reply_on_unknown = true;
+  CHECK(inject(&b, 999U, NULL, 0U, REQUEST_RELIABLE != 0, WL_ERR_INVALID_STATE) == 0);
+  CHECK(observer_reply == WL_RPC_OK && !reply_on_unknown);
+  CHECK(demo_endpoint_result(&b)->domain == DEMO_RUNTIME_UNKNOWN_MESSAGE);
+  CHECK(drain() == 0);
+  CHECK(demo_endpoint_execute_inspect(&a, &first, &result) == WL_RPC_OK);
+  CHECK(result.application_status == 7 && !result.response_valid);
   CHECK(demo_endpoint_execute_release(&a, &first) == WL_RPC_OK);
   // Empty business messages are valid and carry only managed metadata.
   auxiliary_request_clear(&auxiliary);

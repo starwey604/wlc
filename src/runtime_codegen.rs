@@ -290,7 +290,14 @@ fn validate_runtime_names(
         let name = c_identifier(&service.name);
         let verbs: &[&str] = if service.is_managed() {
             &[
-                "call", "call_get", "inspect", "release", "cancel", "complete", "reject",
+                "call",
+                "call_get",
+                "record_result",
+                "inspect",
+                "release",
+                "cancel",
+                "complete",
+                "reject",
             ]
         } else {
             &["start", "inspect", "release", "complete"]

@@ -130,8 +130,10 @@ static inline wl_err_t @M@_endpoint_step(@M@_endpoint_t *endpoint, wl_time_ms_t 
   int result;
   if (endpoint == NULL) return WL_ERR_INVALID_ARG;
   memset(&endpoint->private_state.result, 0, sizeof(endpoint->private_state.result));
+@RPC_STEP_BEGIN@
   result = wl_endpoint_step(&endpoint->private_state.owner, now_ms,
                              endpoint->private_state.event_budget);
+@RPC_STEP_END@
   if (result != WL_OK) return result;
 @RPC_CHECK@
   return @M@_runtime_result_ok(&endpoint->private_state.result)

@@ -151,7 +151,9 @@ rpc Home {
 runtime 管理 12 字节前缀：零区分字节、版本、请求／响应类型、保留零、
 大端 uint32 调用编号和大端 int32 状态。成功响应带业务体，非零拒绝只带前缀。
 默认端点生成 `*_call_t`、`*_result_t` 和回复 token，使用
-`call/inspect/release/cancel/complete/reject`；容量包含元数据，纯托管路径不再
+`call/inspect/release/cancel/complete/reject`。端点发起／回复统一返回 `wl_rpc_err_t`，
+普通 handler 无需创建通用 runtime result；详细失败保留在 `endpoint_result()`。
+容量包含元数据，纯托管路径不再
 分配用于注入字段的类型化编码暂存区，请求／响应直接写 TX／缓存。
 
 接入已有 schema 时，可以显式写出 `request_operation_id`、`response_operation_id`、
