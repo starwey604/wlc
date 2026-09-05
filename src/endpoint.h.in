@@ -26,6 +26,7 @@ typedef struct {
     @M@_runtime_result_fn on_result;
     void *user_data;
     size_t event_budget;
+@RPC_STATE@
     uint8_t tx_payload[@P@_ENDPOINT_MAX_PAYLOAD];
     uint8_t tx_unit[@P@_ENDPOINT_UNIT_CAPACITY];
     uint8_t control_unit[@P@_ENDPOINT_CONTROL_CAPACITY];
@@ -86,6 +87,7 @@ static inline wl_err_t @M@_endpoint_init_config(
     return WL_ERR_INVALID_ARG;
   if (wl_endpoint_link(@M@_endpoint_handle(endpoint)) != NULL)
     return WL_ERR_INVALID_STATE;
+@RPC_BEGIN_INIT@
   memset(&link_storage, 0, sizeof(link_storage));
   link_storage.tx_payload = endpoint->private_state.tx_payload;
   link_storage.tx_payload_size = sizeof(endpoint->private_state.tx_payload);
@@ -100,6 +102,7 @@ static inline wl_err_t @M@_endpoint_init_config(
   storage = @M@_runtime_default_storage_descriptor(&endpoint->private_state.arena);
   result = @M@_runtime_init(&endpoint->private_state.instance, &config->runtime, &storage);
   if (result != WL_OK) return result;
+@RPC_INCARNATION@
   result = @M@_runtime_pump_init(&endpoint->private_state.pump,
       &endpoint->private_state.instance.runtime, @M@_endpoint_record, endpoint);
   if (result != WL_OK) return result;

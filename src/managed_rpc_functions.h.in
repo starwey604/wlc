@@ -1,0 +1,19 @@
+/* Advanced runtime integration. The default endpoint call API below hides
+ * numeric correlation IDs. Managed metadata uses a separate 12-byte header. */
+@M@_runtime_result_t @M@_@S@_client_start(wl_ctx_t *ctx,
+    @M@_runtime_t *runtime, const @REQ@_t *request, uint32_t timeout_ms,
+    wl_time_ms_t now_ms);
+wl_rpc_err_t @M@_@S@_client_inspect(const @M@_runtime_t *runtime,
+    uint32_t operation_id, wl_rpc_client_result_t *out_client);
+/* Response fields which borrow bytes remain valid until call release. */
+@M@_runtime_result_t @M@_@S@_client_decode(const wl_rpc_client_result_t *client,
+    @RES@_t *response);
+wl_rpc_err_t @M@_@S@_client_release(@M@_runtime_t *runtime, uint32_t operation_id);
+@M@_runtime_result_t @M@_@S@_server_complete(@M@_runtime_t *runtime,
+    const @M@_@S@_request_token_t *token, const @RES@_t *response,
+    wl_time_ms_t now_ms);
+/* A nonzero business status is sent without a response body. */
+@M@_runtime_result_t @M@_@S@_server_reject(@M@_runtime_t *runtime,
+    const @M@_@S@_request_token_t *token, int32_t application_status,
+    wl_time_ms_t now_ms);
+

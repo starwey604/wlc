@@ -5,6 +5,7 @@ pub mod codegen;
 mod endpoint_codegen;
 pub mod identity;
 mod lexer;
+mod managed_rpc_codegen;
 pub mod manifest;
 mod parser;
 pub mod profile;

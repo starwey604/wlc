@@ -1,0 +1,117 @@
+/* A copyable call handle, not a wire ID. Do not inspect private_state. Calls
+ * belong to one endpoint incarnation; release only after a terminal result. */
+typedef struct {
+  struct {
+    const @M@_endpoint_t *owner;
+    uint64_t incarnation;
+    wl_rpc_client_handle_t handle;
+  } private_state;
+} @M@_@S@_call_t;
+
+typedef struct {
+  wl_rpc_client_state_t state;
+  int32_t application_status;
+  int32_t link_result;
+  wl_rpc_err_t runtime_error;
+  bool response_valid;
+  /* Borrowed fields, if present in the schema, live until call release. */
+  @RES@_t response;
+} @M@_@S@_result_t;
+
+/* On success out_call identifies this invocation. On failure it is cleared;
+ * endpoint_result retains detailed codec/link diagnostics. */
+static inline wl_rpc_err_t @M@_endpoint_@S@_call(@M@_endpoint_t *endpoint,
+    const @REQ@_t *request, uint32_t timeout_ms, wl_time_ms_t now_ms,
+    @M@_@S@_call_t *out_call) {
+  @M@_runtime_t *runtime = @M@_endpoint_runtime(endpoint);
+  @M@_runtime_result_t result;
+  wl_rpc_err_t error;
+  if (out_call == NULL) return WL_RPC_ERR_INVALID_ARG;
+  memset(out_call, 0, sizeof(*out_call));
+  if (runtime == NULL) return WL_RPC_ERR_NOT_INITIALIZED;
+  result = @M@_@S@_client_start(wl_endpoint_link(@M@_endpoint_handle(endpoint)),
+      runtime, request, timeout_ms, now_ms);
+  endpoint->private_state.result = result;
+  if (!@M@_runtime_result_ok(&result)) {
+    return result.detail.rpc.rpc_result != WL_RPC_OK ? result.detail.rpc.rpc_result :
+        (result.domain == @P@_RUNTIME_INVALID_ARGUMENT ? WL_RPC_ERR_INVALID_ARG : WL_RPC_ERR_INVALID_STATE);
+  }
+  error = wl_rpc_client_get_handle(runtime->rpc_client,
+      result.detail.rpc.operation_id, &out_call->private_state.handle);
+  if (error != WL_RPC_OK) return error;
+  out_call->private_state.owner = endpoint;
+  out_call->private_state.incarnation = endpoint->private_state.incarnation;
+  return WL_RPC_OK;
+}
+
+static inline wl_rpc_err_t @M@_endpoint_@S@_call_get(@M@_endpoint_t *endpoint,
+    const @M@_@S@_call_t *call, wl_rpc_client_result_t *result) {
+  @M@_runtime_t *runtime = @M@_endpoint_runtime(endpoint);
+  wl_rpc_err_t error;
+  if (call == NULL || result == NULL) return WL_RPC_ERR_INVALID_ARG;
+  if (runtime == NULL) return WL_RPC_ERR_NOT_INITIALIZED;
+  if (call->private_state.owner != endpoint ||
+      call->private_state.incarnation != endpoint->private_state.incarnation)
+    return WL_RPC_ERR_NOT_FOUND;
+  error = wl_rpc_client_get_by_handle(runtime->rpc_client, &call->private_state.handle, result);
+  if (error != WL_RPC_OK) return error;
+  return result->request_message_id == @REQ_ID@ && result->response_message_id == @RES_ID@
+      ? WL_RPC_OK : WL_RPC_ERR_RESPONSE_MISMATCH;
+}
+
+/* Pending and terminal states both return RPC_OK. A rejection has a nonzero
+ * application_status and no response body; it is not a decode failure. */
+static inline wl_rpc_err_t @M@_endpoint_@S@_inspect(@M@_endpoint_t *endpoint,
+    const @M@_@S@_call_t *call, @M@_@S@_result_t *out_result) {
+  wl_rpc_client_result_t client;
+  wl_rpc_err_t error;
+  @M@_runtime_result_t decoded;
+  if (out_result == NULL) return WL_RPC_ERR_INVALID_ARG;
+  memset(out_result, 0, sizeof(*out_result));
+  error = @M@_endpoint_@S@_call_get(endpoint, call, &client);
+  if (error != WL_RPC_OK) return error;
+  out_result->state = client.state;
+  out_result->application_status = client.application_status;
+  out_result->link_result = client.link_result;
+  out_result->runtime_error = client.runtime_error;
+  if (client.state != WL_RPC_CLIENT_COMPLETED) return WL_RPC_OK;
+  decoded = @M@_@S@_client_decode(&client, &out_result->response);
+  if (!@M@_runtime_result_ok(&decoded)) {
+    endpoint->private_state.result = decoded;
+    return decoded.detail.rpc.rpc_result != WL_RPC_OK ? decoded.detail.rpc.rpc_result : WL_RPC_ERR_INVALID_STATE;
+  }
+  out_result->response_valid = true;
+  return WL_RPC_OK;
+}
+
+static inline wl_rpc_err_t @M@_endpoint_@S@_release(@M@_endpoint_t *endpoint,
+    const @M@_@S@_call_t *call) {
+  wl_rpc_client_result_t client;
+  wl_rpc_err_t error = @M@_endpoint_@S@_call_get(endpoint, call, &client);
+  return error == WL_RPC_OK ? wl_rpc_client_release_handle(
+      @M@_endpoint_runtime(endpoint)->rpc_client, &call->private_state.handle) : error;
+}
+
+static inline wl_rpc_err_t @M@_endpoint_@S@_cancel(@M@_endpoint_t *endpoint,
+    const @M@_@S@_call_t *call) {
+  wl_rpc_client_result_t client;
+  wl_rpc_err_t error = @M@_endpoint_@S@_call_get(endpoint, call, &client);
+  if (error != WL_RPC_OK) return error;
+  error = wl_rpc_client_cancel_handle(@M@_endpoint_runtime(endpoint)->rpc_client,
+      &call->private_state.handle);
+  if (error == WL_RPC_OK && client.tx_handle != 0U)
+    (void)wl_tx_cancel(wl_endpoint_link(@M@_endpoint_handle(endpoint)), client.tx_handle);
+  return error;
+}
+
+static inline @M@_runtime_result_t @M@_endpoint_@S@_complete(@M@_endpoint_t *endpoint,
+    const @M@_@S@_request_token_t *token, const @RES@_t *response,
+    wl_time_ms_t now_ms) {
+  return @M@_@S@_server_complete(@M@_endpoint_runtime(endpoint), token, response, now_ms);
+}
+static inline @M@_runtime_result_t @M@_endpoint_@S@_reject(@M@_endpoint_t *endpoint,
+    const @M@_@S@_request_token_t *token, int32_t application_status,
+    wl_time_ms_t now_ms) {
+  return @M@_@S@_server_reject(@M@_endpoint_runtime(endpoint), token, application_status, now_ms);
+}
+

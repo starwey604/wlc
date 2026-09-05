@@ -1,0 +1,170 @@
+@M@_runtime_result_t @M@_@S@_client_start(wl_ctx_t *ctx,
+    @M@_runtime_t *runtime, const @REQ@_t *request, uint32_t timeout_ms,
+    wl_time_ms_t now_ms) {
+  @M@_runtime_result_t result = @M@_runtime_result(NULL);
+  wl_tx_payload_claim_t claim = {0};
+  uint32_t operation_id = 0U;
+  size_t encoded_length = 0U;
+  result.message_id = @REQ_ID@;
+  result.detail_kind = @P@_RUNTIME_DETAIL_RPC;
+  if (ctx == NULL || runtime == NULL || runtime->rpc_client == NULL || request == NULL)
+    return result;
+  result.detail.rpc.rpc_result = wl_rpc_client_begin(runtime->rpc_client,
+      @REQ_ID@, @RES_ID@, timeout_ms, now_ms, &operation_id);
+  if (result.detail.rpc.rpc_result != WL_RPC_OK) {
+    result.domain = @P@_RUNTIME_RPC_ERROR;
+    return result;
+  }
+  result.detail.rpc.operation_id = operation_id;
+  result.detail.rpc.core_result = wl_tx_payload_claim(ctx, @REQ_ID@, @REQ_DELIVERY@, &claim);
+  if (result.detail.rpc.core_result != WL_OK) {
+    result.domain = @P@_RUNTIME_CORE_ERROR;
+    goto start_failed;
+  }
+  if (claim.span.length < 12U) {
+    result.detail.rpc.core_result = WL_ERR_BUF_TOO_SMALL;
+    result.domain = @P@_RUNTIME_CORE_ERROR;
+    (void)wl_tx_payload_abort(ctx, &claim);
+    goto start_failed;
+  }
+  /* Encode directly into the link claim: no whole-request copy or heap. */
+  @M@_rpc_header_write(claim.span.data, 1U, operation_id, 0);
+  result.detail.rpc.codec_status = @REQ@_encode(request, claim.span.data + 12U,
+      claim.span.length - 12U, &encoded_length);
+  if (result.detail.rpc.codec_status != WL_CODEC_OK) {
+    result.detail.rpc.core_result = WL_ERR_CORRUPT_PAYLOAD;
+    result.domain = @P@_RUNTIME_CODEC_ERROR;
+    (void)wl_tx_payload_abort(ctx, &claim);
+    goto start_failed;
+  }
+  result.detail.rpc.payload_length = encoded_length + 12U;
+  result.detail.rpc.core_result = wl_tx_payload_commit(ctx, &claim,
+      encoded_length + 12U, &result.detail.rpc.handle);
+  if (result.detail.rpc.core_result != WL_OK) {
+    result.domain = @P@_RUNTIME_CORE_ERROR;
+    goto start_failed;
+  }
+  result.detail.rpc.rpc_result = @TRANSITION@;
+  result.domain = result.detail.rpc.rpc_result == WL_RPC_OK ? @P@_RUNTIME_OK : @P@_RUNTIME_RPC_ERROR;
+  return result;
+start_failed:
+  result.detail.rpc.rpc_result = wl_rpc_client_link_failed(runtime->rpc_client,
+      operation_id, result.detail.rpc.core_result);
+  if (result.detail.rpc.rpc_result == WL_RPC_OK)
+    result.detail.rpc.rpc_result = wl_rpc_client_release(runtime->rpc_client, operation_id);
+  if (result.detail.rpc.rpc_result == WL_RPC_OK) result.detail.rpc.operation_id = 0U;
+  return result;
+}
+
+wl_rpc_err_t @M@_@S@_client_inspect(const @M@_runtime_t *runtime,
+    uint32_t operation_id, wl_rpc_client_result_t *out_client) {
+  wl_rpc_err_t result;
+  if (out_client != NULL) memset(out_client, 0, sizeof(*out_client));
+  if (runtime == NULL || runtime->rpc_client == NULL || out_client == NULL)
+    return WL_RPC_ERR_INVALID_ARG;
+  result = wl_rpc_client_get(runtime->rpc_client, operation_id, out_client);
+  if (result != WL_RPC_OK) return result;
+  return out_client->request_message_id == @REQ_ID@ && out_client->response_message_id == @RES_ID@
+      ? WL_RPC_OK : WL_RPC_ERR_RESPONSE_MISMATCH;
+}
+
+@M@_runtime_result_t @M@_@S@_client_decode(const wl_rpc_client_result_t *client,
+    @RES@_t *response) {
+  @M@_runtime_result_t result = @M@_runtime_result(NULL);
+  uint32_t operation_id;
+  int32_t status;
+  result.message_id = @RES_ID@;
+  result.detail_kind = @P@_RUNTIME_DETAIL_RPC;
+  if (client == NULL || response == NULL) return result;
+  result.detail.rpc.operation_id = client->operation_id;
+  result.detail.rpc.application_result = client->application_status;
+  result.detail.rpc.core_result = client->link_result;
+  result.detail.rpc.payload_length = client->response_length;
+  if (client->request_message_id != @REQ_ID@ || client->response_message_id != @RES_ID@) {
+    result.detail.rpc.rpc_result = WL_RPC_ERR_RESPONSE_MISMATCH;
+    result.domain = @P@_RUNTIME_RPC_ERROR;
+    return result;
+  }
+  if (client->state != WL_RPC_CLIENT_COMPLETED) {
+    result.detail.rpc.rpc_result = WL_RPC_ERR_INVALID_STATE;
+    result.domain = @P@_RUNTIME_RPC_ERROR;
+    return result;
+  }
+  result.detail.rpc.rpc_result = @M@_rpc_header_read(client->response_data,
+      client->response_length, 2U, &operation_id, &status);
+  if (result.detail.rpc.rpc_result != WL_RPC_OK ||
+      operation_id != client->operation_id || status != 0) {
+    result.detail.rpc.rpc_result = WL_RPC_ERR_RESPONSE_MISMATCH;
+    result.domain = @P@_RUNTIME_RPC_ERROR;
+    return result;
+  }
+  result.detail.rpc.codec_status = @RES@_decode(client->response_data + 12U,
+      client->response_length - 12U, response);
+  result.domain = result.detail.rpc.codec_status == WL_CODEC_OK ? @P@_RUNTIME_OK : @P@_RUNTIME_CODEC_ERROR;
+  return result;
+}
+
+wl_rpc_err_t @M@_@S@_client_release(@M@_runtime_t *runtime, uint32_t operation_id) {
+  wl_rpc_client_result_t client;
+  wl_rpc_err_t result = @M@_@S@_client_inspect(runtime, operation_id, &client);
+  return result == WL_RPC_OK ? wl_rpc_client_release(runtime->rpc_client, operation_id) : result;
+}
+
+static @M@_runtime_result_t @M@_@S@_server_finish(@M@_runtime_t *runtime,
+    const @M@_@S@_request_token_t *token, int32_t application_status,
+    const @RES@_t *response, wl_time_ms_t now_ms) {
+  @M@_runtime_result_t result = @M@_runtime_result(NULL);
+  wl_rpc_server_response_buffer_t buffer = {0};
+  wl_rpc_server_response_t cached = {0};
+  const wl_rpc_server_request_t *request;
+  size_t encoded_length = 0U;
+  result.message_id = @RES_ID@;
+  result.detail_kind = @P@_RUNTIME_DETAIL_RPC;
+  result.detail.rpc.application_result = application_status;
+  if (runtime == NULL || runtime->rpc_server == NULL || token == NULL ||
+      token->private_state.owner != runtime ||
+      token->private_state.incarnation != runtime->rpc_incarnation ||
+      (application_status == 0 && response == NULL)) return result;
+  request = &token->private_state.request;
+  if (request->identity.request_message_id != @REQ_ID@ ||
+      request->identity.response_message_id != @RES_ID@) return result;
+  result.detail.rpc.operation_id = request->identity.operation_id;
+  result.detail.rpc.rpc_result = wl_rpc_server_response_prepare(runtime->rpc_server, request, &buffer);
+  if (result.detail.rpc.rpc_result != WL_RPC_OK) {
+    result.domain = @P@_RUNTIME_RPC_ERROR;
+    return result;
+  }
+  if (buffer.capacity < 12U) {
+    result.detail.rpc.rpc_result = WL_RPC_ERR_RESPONSE_TOO_LARGE;
+    result.domain = @P@_RUNTIME_RPC_ERROR;
+    return result;
+  }
+  @M@_rpc_header_write(buffer.data, 2U, request->identity.operation_id, application_status);
+  if (application_status == 0) {
+    result.detail.rpc.codec_status = @RES@_encode(response, buffer.data + 12U,
+        buffer.capacity - 12U, &encoded_length);
+    if (result.detail.rpc.codec_status != WL_CODEC_OK) {
+      result.domain = @P@_RUNTIME_CODEC_ERROR;
+      return result;
+    }
+  }
+  result.detail.rpc.rpc_result = wl_rpc_server_response_commit(runtime->rpc_server,
+      &buffer, application_status, encoded_length + 12U, now_ms, &cached);
+  if (result.detail.rpc.rpc_result != WL_RPC_OK) {
+    result.domain = @P@_RUNTIME_RPC_ERROR;
+    return result;
+  }
+  result.detail.rpc.server_response = cached;
+  result.detail.rpc.payload_length = cached.response_length;
+  result.domain = @P@_RUNTIME_OK;
+  return result;
+}
+
+@M@_runtime_result_t @M@_@S@_server_complete(@M@_runtime_t *runtime,
+    const @M@_@S@_request_token_t *token, const @RES@_t *response, wl_time_ms_t now_ms) {
+  return @M@_@S@_server_finish(runtime, token, 0, response, now_ms);
+}
+@M@_runtime_result_t @M@_@S@_server_reject(@M@_runtime_t *runtime,
+    const @M@_@S@_request_token_t *token, int32_t application_status, wl_time_ms_t now_ms) {
+  return @M@_@S@_server_finish(runtime, token, application_status, NULL, now_ms);
+}

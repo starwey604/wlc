@@ -59,12 +59,23 @@ pub struct RpcService {
     pub request_id: u16,
     pub response_name: String,
     pub response_id: u16,
-    pub request_operation_id: RpcFieldMapping,
-    pub response_operation_id: RpcFieldMapping,
-    pub response_status: RpcFieldMapping,
-    pub status_domain: RpcStatusDomain,
+    pub request_operation_id: Option<RpcFieldMapping>,
+    pub response_operation_id: Option<RpcFieldMapping>,
+    pub response_status: Option<RpcFieldMapping>,
+    pub status_domain: Option<RpcStatusDomain>,
     pub request_delivery: DeliveryPolicy,
     pub response_delivery: DeliveryPolicy,
+}
+
+impl RpcService {
+    /// No field mappings means the runtime owns the versioned RPC header.
+    pub fn is_managed(&self) -> bool {
+        self.request_operation_id.is_none()
+    }
+
+    pub fn metadata_size(&self) -> u64 {
+        if self.is_managed() { 12 } else { 0 }
+    }
 }
 
 #[derive(Clone, Debug, Diagnostic, Error, Eq, PartialEq)]
@@ -213,35 +224,55 @@ pub fn analyze_binding_profile(
             &mut errors,
         );
 
-        let request_operation_id = resolve_operation_id(
-            request,
+        let mappings = match (
             &rpc.request_operation_id,
-            "request_operation_id",
-            &mut errors,
-        );
-        let response_operation_id = resolve_operation_id(
-            response,
             &rpc.response_operation_id,
-            "response_operation_id",
-            &mut errors,
-        );
-        let response_status = resolve_status(response, &rpc.response_status, schema, &mut errors);
+            &rpc.response_status,
+        ) {
+            (None, None, None) => Some((None, None, None, None)),
+            (Some(request_field), Some(response_field), Some(status_field)) => {
+                let request_mapping = resolve_operation_id(
+                    request,
+                    request_field,
+                    "request_operation_id",
+                    &mut errors,
+                );
+                let response_mapping = resolve_operation_id(
+                    response,
+                    response_field,
+                    "response_operation_id",
+                    &mut errors,
+                );
+                let status_mapping = resolve_status(response, status_field, schema, &mut errors);
+                match (request_mapping, response_mapping, status_mapping) {
+                    (
+                        Some(request_mapping),
+                        Some(response_mapping),
+                        Some((status_mapping, domain)),
+                    ) => Some((
+                        Some(request_mapping),
+                        Some(response_mapping),
+                        Some(status_mapping),
+                        Some(domain),
+                    )),
+                    _ => None,
+                }
+            }
+            _ => {
+                errors.push(ProfileSemanticError::new(rpc.name.span,
+                    "RPC field mappings must specify all of request_operation_id, response_operation_id, and response_status, or omit all three for runtime-owned metadata"));
+                None
+            }
+        };
         let request_delivery = resolve_delivery(&rpc.request_delivery, &mut errors);
         let response_delivery = resolve_delivery(&rpc.response_delivery, &mut errors);
 
         if let (
-            Some(request_operation_id),
-            Some(response_operation_id),
-            Some((response_status, status_domain)),
+            Some((request_operation_id, response_operation_id, response_status, status_domain)),
             Some(request_delivery),
             Some(response_delivery),
-        ) = (
-            request_operation_id,
-            response_operation_id,
-            response_status,
-            request_delivery,
-            response_delivery,
-        ) {
+        ) = (mappings, request_delivery, response_delivery)
+        {
             rpc_services.push(RpcService {
                 name: rpc.name.value.clone(),
                 request_name: request.name.clone(),

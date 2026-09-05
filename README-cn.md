@@ -16,14 +16,16 @@ manifest 的 `compiler.codegen_abi` 记录生成 ABI；build 必须同时 pin �
 
 ## Schema Grammar
 
-完整 grammar 和 wire 约束见 [`../docs/schema-v1-cn.md`](../docs/schema-v1-cn.md)。所有
+完整 grammar 和 wire 约束见 [Wirelink schema 文档](https://github.com/starwey604/wirelink/blob/dev/wirelink-p0-hardening/docs/schema-v1-cn.md)。所有
 declaration/field ID 都显式分配；message/enum 共用非零 16-bit global ID namespace，field
 ID 在 message 内唯一。packed count 和 borrowed-field bound 为 1…65535。
+新源码用 `@id(n)` 标记编号；原 `= n` 仍接受，生成 C、manifest、identity 和字节相同。
+枚举值和默认值仍使用 `=`。仅修改编号拼法不需要递增 schema revision，不按排列自动分配编号。
 
 ```wl
-message JointControl = 16 {
-  packed float32 position[6] = 1;
-  packed float32 velocity[6] = 2;
+message JointControl @id(16) {
+  packed float32 position[6] @id(1);
+  packed float32 velocity[6] @id(2);
 }
 ```
 
@@ -140,13 +142,25 @@ fifo AlarmEvent { delivery = reliable; }
 rpc Home {
   request = HomeRequest;
   response = HomeResponse;
-  request_operation_id = operation_id;
-  response_operation_id = operation_id;
-  response_status = status;
   request_delivery = reliable;
   response_delivery = reliable;
 }
 ```
+
+三个编号／状态映射全部省略，即选择托管 RPC，`.wl` 只定义业务参数。
+runtime 管理 12 字节前缀：零区分字节、版本、请求／响应类型、保留零、
+大端 uint32 调用编号和大端 int32 状态。成功响应带业务体，非零拒绝只带前缀。
+默认端点生成 `*_call_t`、`*_result_t` 和回复 token，使用
+`call/inspect/release/cancel/complete/reject`；容量包含元数据，纯托管路径不再
+分配用于注入字段的类型化编码暂存区，请求／响应直接写 TX／缓存。
+
+接入已有 schema 时，可以显式写出 `request_operation_id`、`response_operation_id`、
+`response_status` 三个映射，保持旧编码；只写部分会报错。托管与映射两种模式不能直接
+互通，模式进入 profile identity，迁移需同步两端。仅 retained 策略和本地角色不同仍可共享 codec。
+调用关联与有界重放不等于持久化业务幂等。本地 token 在 runtime 重建后应丢弃，
+默认端点增加归属／代次检查，但不保证客户端跨重启或线上编号复用后的响应新鲜度。
+
+
 
 不同 host/device profile 可共用同一 wire schema。`--runtime-name` 给非对称角色独立 C
 namespace。生成 dispatcher 直接解码进 LATEST/FIFO claim，成功才 publish、失败都 abort，
@@ -190,7 +204,7 @@ tagged union 组成。只在匹配 tag 时通过生成 accessor 读取 detail；
 dispatch release RX 或 reclaim 匹配 TX handle 后设置 `event_consumed`，owner fallback 只能在
 其为零时执行。
 
-当前固定宏为 `<MODULE>_RUNTIME_CODEGEN_ABI_VERSION 19`；`wlc codegen-abi` 可直接查询。
+当前固定宏为 `<MODULE>_RUNTIME_CODEGEN_ABI_VERSION 20`；`wlc codegen-abi` 可直接查询。
 ABI 改变时所有 runtime
 source 和字段访问一起更新。pump helper 共用一次 `now_ms`，最多 service 一个 response，
 合并 RPC deadline，并可把借用 diagnostic result 交给 observer。
@@ -198,7 +212,8 @@ source 和字段访问一起更新。pump helper 共用一次 `now_ms`，最多 
 ABI 19 在 runtime 头文件中增加默认端点 `*_endpoint_t`：自动组合连接缓冲区、
 runtime arena 和 pump。应用使用 `endpoint_init`、`step`、`close`，以及按 profile
 选择传输方式的 `endpoint_send_*`、返回用户副本的 `endpoint_read_*`。
-RPC 增加端点形式的 start/inspect/release/complete。对象必须从零初始化且不能移动，
+ABI 20 的托管 RPC 使用 call/inspect/release/cancel/complete/reject 和生成句柄。
+旧映射 RPC 保留 start/inspect/release/complete。对象必须从零初始化且不能移动，
 `private_state` 成员不属于应用 API。
 
 `endpoint_handle()` 用于连接适配器，`endpoint_runtime()` 保留高级借用接口。
@@ -223,8 +238,9 @@ LATEST coalescing、codec/handler/RPC failure 不会 NACK 或重启 ARQ。peer-v
 必须通过 RPC response/status 和应用 deadline 表达。
 
 每个 RPC service 生成 client start/inspect/decode/release、request handler 和 server
-complete/reject。request/response input 为 `const`，runtime 在 shared typed scratch 上注入 ID/
-status。client response 原始字节保留到 release；借用字段也只在此前有效。server canonical
+complete/reject；默认端点还提供句柄与类型化结果。request/response input 为 `const`，
+只有映射模式在 shared typed scratch 上注入 ID/status，纯托管模式不分配这个暂存区。
+client response 原始字节保留到 release；借用字段也只在此前有效。server canonical
 re-encode 后计算 domain-tagged fingerprint，按 NEW/PENDING_DUPLICATE/REPLAY/CONFLICT
 处理；complete/reject 先 cache 后 send。
 

@@ -1,0 +1,31 @@
+/* Managed RPC v1: 00 01 kind 00, BE32 correlation, BE32 signed status.
+ * The zero discriminator is not a valid legacy codec field tag. */
+static uint32_t @M@_rpc_read_u32(const uint8_t *data) {
+  return ((uint32_t)data[0] << 24U) | ((uint32_t)data[1] << 16U) |
+         ((uint32_t)data[2] << 8U) | (uint32_t)data[3];
+}
+static void @M@_rpc_write_u32(uint8_t *data, uint32_t value) {
+  data[0] = (uint8_t)(value >> 24U);
+  data[1] = (uint8_t)(value >> 16U);
+  data[2] = (uint8_t)(value >> 8U);
+  data[3] = (uint8_t)value;
+}
+static wl_rpc_err_t @M@_rpc_header_read(const uint8_t *data, size_t length,
+    uint8_t kind, uint32_t *operation_id, int32_t *status) {
+  uint32_t bits;
+  if (data == NULL || length < 12U || data[0] != 0U || data[1] != 1U ||
+      data[2] != kind || data[3] != 0U) return WL_RPC_ERR_MALFORMED_METADATA;
+  *operation_id = @M@_rpc_read_u32(data + 4U);
+  bits = @M@_rpc_read_u32(data + 8U);
+  *status = bits <= INT32_MAX ? (int32_t)bits : -1 - (int32_t)(UINT32_MAX - bits);
+  if (*operation_id == 0U || (kind == 1U && *status != 0))
+    return WL_RPC_ERR_MALFORMED_METADATA;
+  return WL_RPC_OK;
+}
+static void @M@_rpc_header_write(uint8_t *data, uint8_t kind,
+    uint32_t operation_id, int32_t status) {
+  data[0] = 0U; data[1] = 1U; data[2] = kind; data[3] = 0U;
+  @M@_rpc_write_u32(data + 4U, operation_id);
+  @M@_rpc_write_u32(data + 8U, (uint32_t)status);
+}
+

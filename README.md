@@ -20,10 +20,10 @@ records `compiler.codegen_abi`. Build integrations should pin both rather than
 following a branch or the newest release.
 
 `wlc codegen-abi` prints this revision without requiring a schema. Current
-development generates ABI 19. It adds default endpoint assembly to each bounded
+development generates ABI 20. It provides default endpoint assembly for each bounded
 profile's runtime header: `*_endpoint_t`, `init`/`init_config`, `step`/`close`,
 profile-selected `endpoint_send_*` and copying `endpoint_read_*` operations,
-plus endpoint-based RPC start/inspect/release/complete wrappers.
+plus managed RPC call handles and typed inspect/release/cancel/complete/reject.
 
 The endpoint owns its static link buffers, runtime arena, and pump glue. It
 creates no thread or heap allocation. Zero-initialize it before first init;
@@ -42,22 +42,23 @@ schema         = "version" positive-integer ";" item+
 item           = declaration | reservation
 declaration    = message | enum
 reservation    = "reserved" positive-integer ";"
-message        = "message" identifier "=" positive-integer
+id-attribute   = "@" "id" "(" positive-integer ")" | "=" positive-integer
+message        = "message" identifier id-attribute
                  "{" (field | reservation)* "}"
 field          = optional-field | required-field | repeated-field
                  | packed-field | required-packed-field
-optional-field = "optional" type identifier "=" positive-integer
+optional-field = "optional" type identifier id-attribute
                  ("[" "default" "=" literal "]")? ";"
-required-field = "required" type identifier "=" positive-integer ";"
-repeated-field = "repeated" type identifier "=" positive-integer ";"
+required-field = "required" type identifier id-attribute ";"
+repeated-field = "repeated" type identifier id-attribute ";"
 packed-field   = "packed" packed-type identifier "[" positive-integer "]"
-                 "=" positive-integer ";"
+                 id-attribute ";"
 required-packed-field = "required" "packed" packed-type identifier
-                        "[" positive-integer "]" "=" positive-integer ";"
+                        "[" positive-integer "]" id-attribute ";"
 packed-type    = "float32" | "float64" | "fixed32" | "fixed64"
 type           = identifier | bounded-borrowed-type
 bounded-borrowed-type = ("string" | "bytes") "<" positive-integer ">"
-enum           = "enum" identifier "=" positive-integer
+enum           = "enum" identifier id-attribute
                  "{" enum-value (enum-value | enum-reservation)* "}"
 enum-value     = identifier "=" integer ";"
 enum-reservation = "reserved" integer ";"
@@ -67,9 +68,9 @@ literal        = integer | string | "true" | "false"
 For example, a six-axis control vector is declared as:
 
 ```wl
-message JointControl = 16 {
-  packed float32 position[6] = 1;
-  packed float32 velocity[6] = 2;
+message JointControl @id(16) {
+  packed float32 position[6] @id(1);
+  packed float32 velocity[6] @id(2);
 }
 ```
 
@@ -77,6 +78,11 @@ Line comments start with `//`. `version` must be first and positive. Message
 and enum identifiers share one global namespace and one nonzero 16-bit ID
 namespace. Field IDs are nonzero 16-bit numbers and unique within a message.
 Packed element counts and borrowed-field length bounds are in `1..=65535`.
+
+`@id(n)` is the recommended spelling for declaration/field identifiers. Legacy
+`= n` remains accepted and generates identical C, manifests, identities, and wire
+bytes. Enum values and optional defaults still use `=`; no IDs are inferred from
+declaration order. Changing only ID spelling needs no schema revision increment.
 
 The built-in types are `bool`, `bytes`, `string`, `int8`, `uint8`, `int16`,
 `uint16`, `int32`, `uint32`, `int64`, `uint64`, `fixed32`, `fixed64`, `float32`,
@@ -297,13 +303,31 @@ fifo AlarmEvent {
 rpc Home {
   request = HomeRequest;
   response = HomeResponse;
-  request_operation_id = operation_id;
-  response_operation_id = operation_id;
-  response_status = status;
   request_delivery = reliable;
   response_delivery = reliable;
 }
 ```
+
+Omitting all three operation/status mappings selects managed RPC: the `.wl`
+messages contain only business fields. The runtime owns a versioned 12-byte
+prefix (zero discriminator, version, kind, reserved zero, BE32 call ID, BE32
+status). Successful responses carry a business body; nonzero rejections carry
+only the prefix. Default endpoints provide `*_call_t`, `*_result_t`, and reply
+tokens, with `call/inspect/release/cancel/complete/reject` operations.
+All metadata capacity is included in generated bounds; managed-only runtimes
+omit typed encoding scratch and encode directly into TX/cache storage.
+
+To integrate an existing schema, explicitly supply all of
+`request_operation_id`, `response_operation_id`, and `response_status` mappings.
+This preserves the old payload format. Partial mappings are rejected. Managed
+and mapped modes cannot interoperate without an explicit peer migration, and
+have different profile identities. Different retained storage/role policies
+can still share one codec. Call correlation and bounded replay are not durable
+business idempotency. Local tokens expire on runtime reinit; default endpoints
+add ownership/incarnation checks. They do not guarantee response freshness
+across client restarts or wire-ID reuse.
+
+
 
 Use `--profile path/to/device.bind.wl` with `validate`, or use
 `compile-runtime` after compiling the schema. Runtime compilation writes only
@@ -314,9 +338,9 @@ remains available for one-runtime callers. The runtime header embeds the
 separate schema/profile diagnostic identities. Its generated dispatcher
 decodes a retained message directly into a `wl_latest_t` or `wl_fifo_t` write
 claim, publishes only after successful decode, aborts every failed claim, and
-releases each valid RX event exactly once. The same wire schema can therefore
-use different host and device profiles without changing message IDs or
-payload bytes.
+releases each valid RX event exactly once. The same schema can therefore use
+different retained/role policies on host and device without changing bytes,
+provided communicating RPC peers agree on managed versus mapped metadata mode.
 
 The manifest's `bounded_fields` array records each bounded field's message and
 field names/IDs, kind, and exact maximum byte length. Bounds also contribute to
@@ -376,7 +400,7 @@ TX handle; owner loops may apply their fallback action only while it is zero. In
 has no domain payload. A retained-only profile therefore does not carry the
 larger RPC result fields. Generated runtime headers likewise include only the
 LATEST, FIFO, and RPC public headers selected by that profile. The fixed
-`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `19` for this surface; regenerate
+`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `20` for this surface; regenerate
 all runtime sources and update field access together when that value changes.
 
 Every generated result exposes `*_runtime_result_ok()` for the common success
@@ -421,7 +445,7 @@ events remain caller-owned.
 
 `LATEST` and `FIFO` retain decoded values after the RX callback. WLC rejects a
 retained route whose message contains `bytes`, `string`, or `repeated` storage,
-including through nested messages. RPC operation IDs must map to optional or
+including through nested messages. In mapped RPC, operation IDs must map to optional or
 required `uint32` fields. Its response status must map to an optional or
 required `int32` or enum;
 an enum status domain must declare numeric value zero for success. Request and
@@ -441,7 +465,7 @@ missing storage, codec/handler/RPC failure, and replay-send failure therefore
 do not NACK the packet or restart link ARQ. Use an RPC response/status,
 capacity policy, and application deadline for peer-visible completion.
 
-For each RPC service the runtime header emits one typed client-start function,
+For each mapped RPC service the runtime header emits one typed client-start function,
 a request callback route, and typed server complete/reject functions. Client
 start uses a present nonzero operation ID exactly, or allocates one when the
 field is absent or zero. Request and response inputs are `const`: the runtime
@@ -458,8 +482,8 @@ validates the mapped ID and status, copies the raw payload into
 `wl_rpc_client_t` before releasing the RX event, and leaves typed response
 scratch under caller ownership.
 
-The static instance owns per-service decode scratch plus one shared RPC encode
-scratch, and the storage arena owns canonical-request bytes. With manual
+The static instance owns per-service decode scratch; mapped services additionally
+share RPC encode scratch. The storage arena owns canonical-request bytes. With manual
 runtime assembly, the caller supplies those objects directly and sets
 `runtime.rpc_encode_scratch`. Borrowed `bytes` and `string`
 fields in request/response scratch remain valid only until the callback or
@@ -477,7 +501,8 @@ response storage before releasing RX. That copy remains valid until client
 release; decode it again for a durable typed view rather than retaining
 borrowed pointers from response scratch. Server complete/reject copy the const
 response into shared encode scratch and set operation ID/status only on that
-private copy.
+private copy in mapped mode. Managed requests encode directly into the TX claim;
+managed responses encode directly into the reserved cache segment.
 
 Server dispatch decodes and canonically re-encodes the complete request before
 computing a separately domain-tagged payload fingerprint. `NEW` invokes the

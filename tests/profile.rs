@@ -132,15 +132,15 @@ fn resolves_and_canonically_orders_route_and_rpc_metadata() {
     assert_eq!(service.name, "Start");
     assert_eq!(service.request_id, 20);
     assert_eq!(service.response_id, 21);
-    assert_eq!(service.request_operation_id.number, 1);
-    assert_eq!(service.response_operation_id.number, 1);
-    assert_eq!(service.response_status.number, 2);
+    assert_eq!(service.request_operation_id.as_ref().unwrap().number, 1);
+    assert_eq!(service.response_operation_id.as_ref().unwrap().number, 1);
+    assert_eq!(service.response_status.as_ref().unwrap().number, 2);
     assert_eq!(
         service.status_domain,
-        RpcStatusDomain::Enum {
+        Some(RpcStatusDomain::Enum {
             name: "OperationStatus".to_owned(),
             id: 1
-        }
+        })
     );
     assert_eq!(service.request_delivery, DeliveryPolicy::Reliable);
     assert_eq!(service.response_delivery, DeliveryPolicy::Reliable);
@@ -172,7 +172,7 @@ fn profile_parser_reports_unknown_duplicate_and_missing_rpc_properties() {
     assert!(
         missing
             .message
-            .contains("missing RPC property `request_operation_id`")
+            .contains("missing RPC property `request_delivery`")
     );
 }
 

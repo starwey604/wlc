@@ -1,0 +1,103 @@
+    case @REQ_ID@: {
+      wl_rpc_request_identity_t identity = {0};
+      wl_rpc_server_request_t server_request = {0};
+      wl_rpc_server_response_t replay = {0};
+      @M@_@S@_request_token_t token;
+      size_t canonical_length = 0U;
+      int32_t status = 0;
+      result.detail_kind = @P@_RUNTIME_DETAIL_RPC;
+      if (event->type != @REQ_EVENT@) {
+        result.domain = @P@_RUNTIME_DELIVERY_MISMATCH;
+        break;
+      }
+      if (runtime->rpc_server == NULL) {
+        result.domain = @P@_RUNTIME_MISSING_ROUTE;
+        break;
+      }
+      result.detail.rpc.rpc_result = @M@_rpc_header_read(event->payload,
+          event->payload_len, 1U, &result.detail.rpc.operation_id, &status);
+      if (result.detail.rpc.rpc_result != WL_RPC_OK) {
+        result.domain = @P@_RUNTIME_RPC_ERROR;
+        break;
+      }
+      if (runtime->@S@.request_scratch == NULL ||
+          runtime->@S@.canonical_request_scratch.data == NULL) {
+        result.domain = @P@_RUNTIME_MISSING_SCRATCH;
+        break;
+      }
+      result.detail.rpc.codec_status = @REQ@_decode(event->payload + 12U,
+          event->payload_len - 12U, runtime->@S@.request_scratch);
+      if (result.detail.rpc.codec_status != WL_CODEC_OK) {
+        result.domain = @P@_RUNTIME_CODEC_ERROR;
+        break;
+      }
+      result.detail.rpc.codec_status = @REQ@_encode(runtime->@S@.request_scratch,
+          runtime->@S@.canonical_request_scratch.data,
+          runtime->@S@.canonical_request_scratch.capacity, &canonical_length);
+      if (result.detail.rpc.codec_status != WL_CODEC_OK) {
+        result.domain = @P@_RUNTIME_CODEC_ERROR;
+        break;
+      }
+      if (event->peer_session_id != 0U &&
+          runtime->rpc_peer.session_id != event->peer_session_id) {
+        wl_rpc_peer_observation_t observation = {0};
+        result.detail.rpc.rpc_result = @M@_runtime_peer_observe(ctx, runtime,
+            event->peer_session_id, &observation);
+        if (result.detail.rpc.rpc_result != WL_RPC_OK) {
+          result.domain = @P@_RUNTIME_RPC_ERROR;
+          break;
+        }
+        result.detail.rpc.peer_changed = observation.changed;
+      }
+      identity.operation_id = result.detail.rpc.operation_id;
+      identity.request_message_id = @REQ_ID@;
+      identity.response_message_id = @RES_ID@;
+      identity.request_fingerprint = @M@_rpc_request_fingerprint(
+          runtime->@S@.canonical_request_scratch.data, canonical_length);
+      identity.peer_session_id = event->peer_session_id;
+      result.detail.rpc.payload_length = canonical_length + 12U;
+      result.detail.rpc.rpc_result = wl_rpc_server_begin(runtime->rpc_server,
+          &identity, now_ms, &result.detail.rpc.rpc_disposition, &server_request, &replay);
+      if (result.detail.rpc.rpc_result != WL_RPC_OK) {
+        result.domain = @P@_RUNTIME_RPC_ERROR;
+        break;
+      }
+      switch (result.detail.rpc.rpc_disposition) {
+        case WL_RPC_SERVER_NEW:
+          result.detail.rpc.server_request = server_request;
+          if (runtime->@S@.request_handler == NULL) {
+            result.detail.rpc.rpc_result = wl_rpc_server_abandon(runtime->rpc_server, &server_request);
+            result.domain = @P@_RUNTIME_MISSING_ROUTE;
+            break;
+          }
+          memset(&token, 0, sizeof(token));
+          token.private_state.owner = runtime;
+          token.private_state.incarnation = runtime->rpc_incarnation;
+          token.private_state.request = server_request;
+          result.detail.rpc.application_result = runtime->@S@.request_handler(
+              runtime->@S@.user_data, runtime->@S@.request_scratch, &token, @REQ_DELIVERY@);
+          if (result.detail.rpc.application_result != 0) {
+            result.detail.rpc.rpc_result = wl_rpc_server_abandon(runtime->rpc_server, &server_request);
+            result.domain = @P@_RUNTIME_APPLICATION_ERROR;
+          } else result.domain = @P@_RUNTIME_OK;
+          break;
+        case WL_RPC_SERVER_PENDING_DUPLICATE:
+          result.domain = @P@_RUNTIME_OK;
+          break;
+        case WL_RPC_SERVER_REPLAY:
+          result.detail.rpc.server_response = replay;
+          result.detail.rpc.application_result = replay.application_status;
+          result.detail.rpc.payload_length = replay.response_length;
+          result.domain = @P@_RUNTIME_OK;
+          break;
+        case WL_RPC_SERVER_CONFLICT:
+          result.detail.rpc.rpc_result = WL_RPC_ERR_OPERATION_CONFLICT;
+          result.domain = @P@_RUNTIME_RPC_ERROR;
+          break;
+        default:
+          result.detail.rpc.rpc_result = WL_RPC_ERR_INVALID_STATE;
+          result.domain = @P@_RUNTIME_RPC_ERROR;
+          break;
+      }
+      break;
+    }

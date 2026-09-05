@@ -90,6 +90,9 @@ fn validate_runtime_names(
         "rpc_encode_scratch".to_owned(),
         "rpc_server".to_owned(),
     ]);
+    if profile.rpc_services.iter().any(RpcService::is_managed) {
+        member_names.insert("rpc_incarnation".to_owned());
+    }
     for route in &profile.retained_routes {
         let kind = match route.kind {
             RetainedRouteKind::Latest => "latest",
@@ -234,6 +237,26 @@ fn validate_runtime_names(
         }
     }
 
+    if profile.rpc_services.iter().any(RpcService::is_managed) {
+        for suffix in ["read_u32", "write_u32", "header_read", "header_write"] {
+            runtime_names.insert(format!("{module}_rpc_{suffix}"));
+        }
+    }
+    for service in profile
+        .rpc_services
+        .iter()
+        .filter(|service| service.is_managed())
+    {
+        let name = c_identifier(&service.name);
+        for suffix in ["request_token_t", "call_t", "result_t"] {
+            let symbol = format!("{module}_{name}_{suffix}");
+            if !runtime_names.insert(symbol.clone()) {
+                return Err(RuntimeCodegenError(format!(
+                    "generated runtime symbols collide as C identifier `{symbol}`"
+                )));
+            }
+        }
+    }
     let mut schema_names = BTreeSet::new();
     for suffix in [
         "config_defaults",
@@ -265,7 +288,14 @@ fn validate_runtime_names(
     }
     for service in &profile.rpc_services {
         let name = c_identifier(&service.name);
-        for verb in ["start", "inspect", "release", "complete"] {
+        let verbs: &[&str] = if service.is_managed() {
+            &[
+                "call", "call_get", "inspect", "release", "cancel", "complete", "reject",
+            ]
+        } else {
+            &["start", "inspect", "release", "complete"]
+        };
+        for verb in verbs {
             let symbol = format!("{module}_endpoint_{name}_{verb}");
             if !runtime_names.insert(symbol.clone()) {
                 return Err(RuntimeCodegenError(format!(
@@ -366,15 +396,29 @@ fn validate_profile_model(
                 )));
             }
         }
+        match (
+            &service.request_operation_id,
+            &service.response_operation_id,
+            &service.response_status,
+            &service.status_domain,
+        ) {
+            (None, None, None, None) => continue,
+            (Some(_), Some(_), Some(_), Some(_)) => {}
+            _ => {
+                return Err(RuntimeCodegenError(
+                    "RPC metadata mappings must be all present or all absent".to_owned(),
+                ));
+            }
+        }
         validate_operation_field(
             request,
-            &service.request_operation_id.name,
-            service.request_operation_id.number,
+            &service.request_operation_id.as_ref().unwrap().name,
+            service.request_operation_id.as_ref().unwrap().number,
         )?;
         validate_operation_field(
             response,
-            &service.response_operation_id.name,
-            service.response_operation_id.number,
+            &service.response_operation_id.as_ref().unwrap().name,
+            service.response_operation_id.as_ref().unwrap().number,
         )?;
         validate_status_field(schema, response, service)?;
     }
@@ -433,7 +477,7 @@ fn validate_status_field(
     response: &MessageSymbol,
     service: &RpcService,
 ) -> Result<(), RuntimeCodegenError> {
-    let mapping = &service.response_status;
+    let mapping = service.response_status.as_ref().unwrap();
     let Some(field) = response
         .fields
         .iter()
@@ -453,7 +497,7 @@ fn validate_status_field(
             response.name, mapping.name
         )));
     }
-    match (&field.ty, &service.status_domain) {
+    match (&field.ty, service.status_domain.as_ref().unwrap()) {
         (ResolvedType::Int32, RpcStatusDomain::Int32) => Ok(()),
         (
             ResolvedType::Enum { id, name },
@@ -618,17 +662,27 @@ fn emit_header(
         emit_rpc_header_types(&mut output, codec_module, module, service);
     }
     if !profile.rpc_services.is_empty() {
-        output.push_str(
+        if profile
+            .rpc_services
+            .iter()
+            .any(|service| !service.is_managed())
+        {
+            output.push_str(
             "/* Shared by synchronous RPC encoders. Runtime APIs are owner-thread\n * operations and do not retain pointers to this scratch after return. */\ntypedef union {\n",
         );
-        for service in &profile.rpc_services {
-            let service_name = c_identifier(&service.name);
-            let request = type_name(&service.request_name);
-            let response = type_name(&service.response_name);
-            writeln!(output, "  {request}_t {service_name}_request;").unwrap();
-            writeln!(output, "  {response}_t {service_name}_response;").unwrap();
+            for service in profile
+                .rpc_services
+                .iter()
+                .filter(|service| !service.is_managed())
+            {
+                let service_name = c_identifier(&service.name);
+                let request = type_name(&service.request_name);
+                let response = type_name(&service.response_name);
+                writeln!(output, "  {request}_t {service_name}_request;").unwrap();
+                writeln!(output, "  {response}_t {service_name}_response;").unwrap();
+            }
+            writeln!(output, "}} {module}_runtime_rpc_encode_scratch_t;\n").unwrap();
         }
-        writeln!(output, "}} {module}_runtime_rpc_encode_scratch_t;\n").unwrap();
         write!(
             output,
             "typedef struct {{\n  uint16_t client_timed_out;\n  uint16_t server_pending_expired;\n  uint16_t server_cache_expired;\n  wl_rpc_server_request_t server_expired_request;\n}} {module}_runtime_poll_result_t;\n\ntypedef struct {{\n  {module}_runtime_poll_result_t deadlines;\n  {module}_runtime_result_t response;\n  uint16_t responses_submitted;\n  uint16_t responses_deferred;\n}} {module}_runtime_service_result_t;\n\n"
@@ -651,9 +705,23 @@ fn emit_header(
     if !profile.rpc_services.is_empty() {
         writeln!(
             output,
-            "  wl_rpc_client_t *rpc_client;\n  wl_rpc_server_t *rpc_server;\n  wl_rpc_peer_t rpc_peer;\n  wl_rpc_peer_observation_t rpc_peer_observation;\n  {module}_runtime_rpc_encode_scratch_t *rpc_encode_scratch;"
+            "  wl_rpc_client_t *rpc_client;\n  wl_rpc_server_t *rpc_server;\n  wl_rpc_peer_t rpc_peer;\n  wl_rpc_peer_observation_t rpc_peer_observation;"
         )
         .unwrap();
+        if profile.rpc_services.iter().any(RpcService::is_managed) {
+            output.push_str("  uint64_t rpc_incarnation;\n");
+        }
+        if profile
+            .rpc_services
+            .iter()
+            .any(|service| !service.is_managed())
+        {
+            writeln!(
+                output,
+                "  {module}_runtime_rpc_encode_scratch_t *rpc_encode_scratch;"
+            )
+            .unwrap();
+        }
         for service in &profile.rpc_services {
             let service_name = c_identifier(&service.name);
             writeln!(output, "  {module}_{service_name}_rpc_t {service_name};").unwrap();
@@ -826,7 +894,7 @@ fn runtime_default_capacities(
             .and_then(|id| maxima.get(id))
             .copied()
             .flatten()
-            .map(|capacity| capacity.max(1))
+            .map(|capacity| (capacity + service.metadata_size()).max(1))
             .and_then(|capacity| u16::try_from(capacity).ok());
         rpc_response = match (rpc_response, response_capacity) {
             (Some(current), Some(capacity)) => Some(current.max(capacity)),
@@ -993,11 +1061,17 @@ fn emit_assembly_header(
     }
     if !profile.rpc_services.is_empty() {
         output.push_str("  wl_rpc_client_t rpc_client;\n  wl_rpc_server_t rpc_server;\n");
-        writeln!(
-            output,
-            "  {module}_runtime_rpc_encode_scratch_t rpc_encode_scratch;"
-        )
-        .unwrap();
+        if profile
+            .rpc_services
+            .iter()
+            .any(|service| !service.is_managed())
+        {
+            writeln!(
+                output,
+                "  {module}_runtime_rpc_encode_scratch_t rpc_encode_scratch;"
+            )
+            .unwrap();
+        }
         output.push_str(
             "  /* Dispatch is serialized; request and response decode scratch lifetimes do not overlap. */\n",
         );
@@ -1044,6 +1118,14 @@ fn emit_rpc_header_types(
     module: &str,
     service: &RpcService,
 ) {
+    if service.is_managed() {
+        output.push_str(&crate::managed_rpc_codegen::header_types(
+            module,
+            codec_module,
+            service,
+        ));
+        return;
+    }
     let service_name = c_identifier(&service.name);
     let request = type_name(&service.request_name);
     let response = type_name(&service.response_name);
@@ -1055,6 +1137,12 @@ fn emit_rpc_header_types(
 }
 
 fn emit_rpc_header_functions(output: &mut String, module: &str, service: &RpcService) {
+    if service.is_managed() {
+        output.push_str(&crate::managed_rpc_codegen::header_functions(
+            module, service,
+        ));
+        return;
+    }
     let service_name = c_identifier(&service.name);
     let request = type_name(&service.request_name);
     let response = type_name(&service.response_name);
@@ -1293,11 +1381,17 @@ fn emit_assembly_source(
             )
             .unwrap();
         }
-        writeln!(
+        if profile
+            .rpc_services
+            .iter()
+            .any(|service| !service.is_managed())
+        {
+            writeln!(
             output,
             "  if (config->rpc_client_enabled != 0U || config->rpc_server_enabled != 0U) instance->runtime.rpc_encode_scratch = &instance->rpc_encode_scratch;"
         )
         .unwrap();
+        }
     }
     output.push_str(concat!(
         "  return WL_OK;\n",
@@ -1324,6 +1418,9 @@ fn emit_source(
         "#include \"{module}_runtime.h\"\n\n#include <string.h>\n\nstatic {module}_runtime_result_t {module}_runtime_result(const wl_event_t *event) {{\n  {module}_runtime_result_t result = {{0}};\n  result.domain = {prefix}_RUNTIME_INVALID_ARGUMENT;\n  if (event != NULL) {{\n    result.message_id = event->message_id;\n    result.event_type = event->type;\n  }}\n  return result;\n}}\n\n"
     );
     emit_result_str_implementation(&mut output, module, &prefix);
+    if profile.rpc_services.iter().any(RpcService::is_managed) {
+        output.push_str(&crate::managed_rpc_codegen::helpers(module));
+    }
     if !profile.rpc_services.is_empty() {
         write!(
             output,
@@ -1504,11 +1601,15 @@ fn delivery_value(delivery: DeliveryPolicy) -> &'static str {
 }
 
 fn emit_rpc_request_case(output: &mut String, module: &str, prefix: &str, service: &RpcService) {
+    if service.is_managed() {
+        output.push_str(&crate::managed_rpc_codegen::request_case(module, service));
+        return;
+    }
     let service_name = c_identifier(&service.name);
     let request = type_name(&service.request_name);
     let request_macro = upper_snake(&service.request_name);
     let response_macro = upper_snake(&service.response_name);
-    let operation_field = c_identifier(&service.request_operation_id.name);
+    let operation_field = c_identifier(&service.request_operation_id.as_ref().unwrap().name);
     let expected_event = delivery_event(service.request_delivery);
     let delivery = delivery_value(service.request_delivery);
     let now_ms = "now_ms";
@@ -1531,11 +1632,15 @@ fn emit_rpc_request_case(output: &mut String, module: &str, prefix: &str, servic
 }
 
 fn emit_rpc_response_case(output: &mut String, module: &str, prefix: &str, service: &RpcService) {
+    if service.is_managed() {
+        output.push_str(&crate::managed_rpc_codegen::response_case(module, service));
+        return;
+    }
     let service_name = c_identifier(&service.name);
     let response = type_name(&service.response_name);
     let response_macro = upper_snake(&service.response_name);
-    let operation_field = c_identifier(&service.response_operation_id.name);
-    let status_field = c_identifier(&service.response_status.name);
+    let operation_field = c_identifier(&service.response_operation_id.as_ref().unwrap().name);
+    let status_field = c_identifier(&service.response_status.as_ref().unwrap().name);
     let expected_event = delivery_event(service.response_delivery);
     write!(
         output,
@@ -1553,6 +1658,10 @@ fn emit_rpc_implementation(
     codec_prefix: &str,
     service: &RpcService,
 ) {
+    if service.is_managed() {
+        output.push_str(&crate::managed_rpc_codegen::implementation(module, service));
+        return;
+    }
     emit_rpc_client_implementation(output, module, prefix, codec_module, codec_prefix, service);
     emit_rpc_server_implementation(output, module, prefix, service);
 }
@@ -1570,9 +1679,10 @@ fn emit_rpc_client_implementation(
     let request_macro = upper_snake(&service.request_name);
     let response = type_name(&service.response_name);
     let response_macro = upper_snake(&service.response_name);
-    let operation_field = c_identifier(&service.request_operation_id.name);
-    let response_operation_field = c_identifier(&service.response_operation_id.name);
-    let status_field = c_identifier(&service.response_status.name);
+    let operation_field = c_identifier(&service.request_operation_id.as_ref().unwrap().name);
+    let response_operation_field =
+        c_identifier(&service.response_operation_id.as_ref().unwrap().name);
+    let status_field = c_identifier(&service.response_status.as_ref().unwrap().name);
     let delivery = delivery_value(service.request_delivery);
     let transition = match service.request_delivery {
         DeliveryPolicy::Unreliable => {
@@ -1604,8 +1714,8 @@ fn emit_rpc_server_implementation(
     let request_macro = upper_snake(&service.request_name);
     let response = type_name(&service.response_name);
     let response_macro = upper_snake(&service.response_name);
-    let operation_field = c_identifier(&service.response_operation_id.name);
-    let status_field = c_identifier(&service.response_status.name);
+    let operation_field = c_identifier(&service.response_operation_id.as_ref().unwrap().name);
+    let status_field = c_identifier(&service.response_status.as_ref().unwrap().name);
     write!(
         output,
         "static {module}_runtime_result_t {module}_{service_name}_server_finish({module}_runtime_t *runtime, const wl_rpc_server_request_t *server_request, int32_t application_status, const {response}_t *response, wl_time_ms_t now_ms, bool reject) {{\n  {module}_runtime_result_t result = {module}_runtime_result(NULL);\n  wl_rpc_server_response_buffer_t buffer = {{0}};\n  wl_rpc_server_response_t cached = {{0}};\n  {response}_t *encoded_response;\n  size_t encoded_length = 0U;\n  result.message_id = {response_macro}_MESSAGE_ID;\n  result.detail_kind = {prefix}_RUNTIME_DETAIL_RPC;\n  result.detail.rpc.application_result = application_status;\n  if (runtime == NULL || runtime->rpc_server == NULL || server_request == NULL || server_request->generation == 0U || server_request->identity.operation_id == 0U || server_request->identity.request_message_id != {request_macro}_MESSAGE_ID || server_request->identity.response_message_id != {response_macro}_MESSAGE_ID || response == NULL) return result;\n  result.detail.rpc.operation_id = server_request->identity.operation_id;\n  result.detail.rpc.server_request = *server_request;\n  if (runtime->rpc_encode_scratch == NULL) {{\n    result.domain = {prefix}_RUNTIME_MISSING_SCRATCH;\n    return result;\n  }}\n  encoded_response = &runtime->rpc_encode_scratch->{service_name}_response;\n  if ((const void *)response == (const void *)encoded_response) return result;\n  if (reject && application_status == 0) {{\n    result.detail.rpc.rpc_result = WL_RPC_ERR_INVALID_ARG;\n    result.domain = {prefix}_RUNTIME_RPC_ERROR;\n    return result;\n  }}\n  result.detail.rpc.rpc_result = wl_rpc_server_response_prepare(runtime->rpc_server, server_request, &buffer);\n  if (result.detail.rpc.rpc_result != WL_RPC_OK) {{\n    result.domain = {prefix}_RUNTIME_RPC_ERROR;\n    return result;\n  }}\n  *encoded_response = *response;\n  encoded_response->has_{operation_field} = true;\n  encoded_response->{operation_field} = server_request->identity.operation_id;\n  encoded_response->has_{status_field} = true;\n  encoded_response->{status_field} = application_status;\n  result.detail.rpc.codec_status = {response}_encode(encoded_response, buffer.data, buffer.capacity, &encoded_length);\n  result.detail.rpc.payload_length = encoded_length;\n  if (result.detail.rpc.codec_status != WL_CODEC_OK) {{\n    result.domain = {prefix}_RUNTIME_CODEC_ERROR;\n    return result;\n  }}\n  result.detail.rpc.rpc_result = wl_rpc_server_response_commit(runtime->rpc_server, &buffer, application_status, encoded_length, now_ms, &cached);\n  if (result.detail.rpc.rpc_result != WL_RPC_OK) {{\n    result.domain = {prefix}_RUNTIME_RPC_ERROR;\n    return result;\n  }}\n  result.detail.rpc.server_response = cached;\n  result.detail.rpc.application_result = cached.application_status;\n  result.detail.rpc.payload_length = cached.response_length;\n  result.detail.rpc.core_result = WL_OK;\n  result.domain = {prefix}_RUNTIME_OK;\n  return result;\n}}\n\n{module}_runtime_result_t {module}_{service_name}_server_complete({module}_runtime_t *runtime, const wl_rpc_server_request_t *server_request, const {response}_t *response, wl_time_ms_t now_ms) {{\n  return {module}_{service_name}_server_finish(runtime, server_request, 0, response, now_ms, false);\n}}\n\n{module}_runtime_result_t {module}_{service_name}_server_reject({module}_runtime_t *runtime, const wl_rpc_server_request_t *server_request, int32_t application_status, const {response}_t *response, wl_time_ms_t now_ms) {{\n  return {module}_{service_name}_server_finish(runtime, server_request, application_status, response, now_ms, true);\n}}\n"

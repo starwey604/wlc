@@ -1,7 +1,8 @@
 //! Parser and source model for optional application binding profiles.
 //!
 //! Binding profiles deliberately use a sidecar grammar. They describe local
-//! routing and service policy without extending the frozen `.wl` wire schema.
+//! routing and service policy without extending the `.wl` business codec schema.
+//! RPC metadata mode also selects a payload wrapper and must match on both peers.
 
 use miette::{Diagnostic, SourceSpan};
 use thiserror::Error;
@@ -35,9 +36,9 @@ pub struct RpcBinding {
     pub name: Spanned<String>,
     pub request: Spanned<String>,
     pub response: Spanned<String>,
-    pub request_operation_id: Spanned<String>,
-    pub response_operation_id: Spanned<String>,
-    pub response_status: Spanned<String>,
+    pub request_operation_id: Option<Spanned<String>>,
+    pub response_operation_id: Option<Spanned<String>>,
+    pub response_status: Option<Spanned<String>>,
     pub request_delivery: Spanned<String>,
     pub response_delivery: Spanned<String>,
 }
@@ -316,17 +317,9 @@ impl Parser {
             name,
             request: required_property(request, "request", closing_span)?,
             response: required_property(response, "response", closing_span)?,
-            request_operation_id: required_property(
-                request_operation_id,
-                "request_operation_id",
-                closing_span,
-            )?,
-            response_operation_id: required_property(
-                response_operation_id,
-                "response_operation_id",
-                closing_span,
-            )?,
-            response_status: required_property(response_status, "response_status", closing_span)?,
+            request_operation_id,
+            response_operation_id,
+            response_status,
             request_delivery: required_property(
                 request_delivery,
                 "request_delivery",

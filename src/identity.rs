@@ -94,18 +94,27 @@ pub fn binding_profile_identity(model: &BindingProfileModel) -> u64 {
         hash.u16(service.request_id);
         hash.string(&service.response_name);
         hash.u16(service.response_id);
-        hash.string(&service.request_operation_id.name);
-        hash.u16(service.request_operation_id.number);
-        hash.string(&service.response_operation_id.name);
-        hash.u16(service.response_operation_id.number);
-        hash.string(&service.response_status.name);
-        hash.u16(service.response_status.number);
-        match &service.status_domain {
-            RpcStatusDomain::Int32 => hash.u8(1),
-            RpcStatusDomain::Enum { name, id } => {
-                hash.u8(2);
-                hash.string(name);
-                hash.u16(*id);
+        if service.is_managed() {
+            hash.string("runtime-owned-rpc-header");
+            hash.u8(1);
+            hash.u16(12);
+        } else {
+            let request = service.request_operation_id.as_ref().unwrap();
+            let response = service.response_operation_id.as_ref().unwrap();
+            let status = service.response_status.as_ref().unwrap();
+            hash.string(&request.name);
+            hash.u16(request.number);
+            hash.string(&response.name);
+            hash.u16(response.number);
+            hash.string(&status.name);
+            hash.u16(status.number);
+            match service.status_domain.as_ref().unwrap() {
+                RpcStatusDomain::Int32 => hash.u8(1),
+                RpcStatusDomain::Enum { name, id } => {
+                    hash.u8(2);
+                    hash.string(name);
+                    hash.u16(*id);
+                }
             }
         }
         hash_delivery(&mut hash, service.request_delivery);

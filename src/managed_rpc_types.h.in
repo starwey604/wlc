@@ -1,0 +1,23 @@
+/* Copy the request token for deferred replies. Its private state is not
+ * application data; it authorizes only this runtime and execution lifetime. */
+typedef struct {
+  struct {
+    const void *owner;
+    uint64_t incarnation;
+    wl_rpc_server_request_t request;
+  } private_state;
+} @M@_@S@_request_token_t;
+
+/* Request fields are borrowed only for this callback. Nonzero return abandons
+ * execution locally; send a rejection explicitly to notify the caller. */
+typedef int32_t (*@M@_@S@_rpc_request_handler_fn)(void *user_data,
+    const @REQ@_t *request, const @M@_@S@_request_token_t *token,
+    wl_delivery_t delivery);
+typedef struct {
+  @REQ@_t *request_scratch;
+  @RES@_t *response_scratch;
+  @CODEC@_encode_scratch_t canonical_request_scratch;
+  @M@_@S@_rpc_request_handler_fn request_handler;
+  void *user_data;
+} @M@_@S@_rpc_t;
+
