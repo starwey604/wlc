@@ -553,7 +553,7 @@ fn emit_header(
     if !profile.rpc_services.is_empty() {
         write!(
             output,
-            "typedef struct {{\n  wl_codec_status_t codec_status;\n  wl_rpc_err_t rpc_result;\n  int32_t core_result;\n  int32_t application_result;\n  wl_rpc_server_disposition_t rpc_disposition;\n  uint32_t operation_id;\n  wl_tx_handle_t handle;\n  size_t payload_length;\n  union {{\n    wl_rpc_server_request_t server_request;\n    wl_rpc_server_response_t server_response;\n  }};\n}} {module}_runtime_rpc_detail_t;\n\n"
+            "typedef struct {{\n  wl_codec_status_t codec_status;\n  wl_rpc_err_t rpc_result;\n  int32_t core_result;\n  int32_t application_result;\n  wl_rpc_server_disposition_t rpc_disposition;\n  uint32_t operation_id;\n  wl_tx_handle_t handle;\n  uint8_t peer_changed;\n  size_t payload_length;\n  union {{\n    wl_rpc_server_request_t server_request;\n    wl_rpc_server_response_t server_response;\n  }};\n}} {module}_runtime_rpc_detail_t;\n\n"
         )
         .unwrap();
     }
@@ -610,7 +610,7 @@ fn emit_header(
     if !profile.rpc_services.is_empty() {
         writeln!(
             output,
-            "  wl_rpc_client_t *rpc_client;\n  wl_rpc_server_t *rpc_server;\n  {module}_runtime_rpc_encode_scratch_t *rpc_encode_scratch;"
+            "  wl_rpc_client_t *rpc_client;\n  wl_rpc_server_t *rpc_server;\n  wl_rpc_peer_t rpc_peer;\n  wl_rpc_peer_observation_t rpc_peer_observation;\n  {module}_runtime_rpc_encode_scratch_t *rpc_encode_scratch;"
         )
         .unwrap();
         for service in &profile.rpc_services {
@@ -647,9 +647,14 @@ fn emit_header(
         emit_retained_header_functions(&mut output, module, route);
     }
     if !profile.rpc_services.is_empty() {
+        writeln!(
+            output,
+            "/* Observe a nonzero point-to-point peer before non-RPC traffic is handled. */\nwl_rpc_err_t {module}_runtime_peer_observe(wl_ctx_t *ctx, {module}_runtime_t *runtime, uint64_t peer_session_id, wl_rpc_peer_observation_t *out_observation);"
+        )
+        .unwrap();
         write!(
             output,
-            "/* Advance configured RPC deadlines without performing I/O. At most one\n * expired server identity is returned per call and remains pending until the\n * application completes, rejects, or abandons it. */\nwl_rpc_err_t {module}_runtime_poll({module}_runtime_t *runtime, wl_time_ms_t now_ms, {module}_runtime_poll_result_t *out_result);\n/* Advance deadlines and submit at most one runtime-owned server response.\n * Link backpressure defers the same cached bytes for a later service call. */\nwl_rpc_err_t {module}_runtime_service(wl_ctx_t *ctx, {module}_runtime_t *runtime, wl_time_ms_t now_ms, {module}_runtime_service_result_t *out_result);\n/* Side-effect free. Zero is due; WL_RPC_NO_DEADLINE_MS means no deadline. */\nwl_rpc_err_t {module}_runtime_get_deadline_hint(const {module}_runtime_t *runtime, wl_time_ms_t now_ms, wl_rpc_deadline_hint_t *out_hint);\n\n"
+            "/* A reliable server request automatically observes its peer session before\n * dispatch. Take a changed observation to revoke product leases/non-RPC work. */\nwl_rpc_err_t {module}_runtime_peer_observation_take({module}_runtime_t *runtime, wl_rpc_peer_observation_t *out_observation);\n/* Advance configured RPC deadlines without performing I/O. At most one\n * expired server identity is returned per call and remains pending until the\n * application completes, rejects, or abandons it. */\nwl_rpc_err_t {module}_runtime_poll({module}_runtime_t *runtime, wl_time_ms_t now_ms, {module}_runtime_poll_result_t *out_result);\n/* Advance deadlines and submit at most one runtime-owned server response.\n * Link backpressure defers the same cached bytes for a later service call. */\nwl_rpc_err_t {module}_runtime_service(wl_ctx_t *ctx, {module}_runtime_t *runtime, wl_time_ms_t now_ms, {module}_runtime_service_result_t *out_result);\n/* Side-effect free. Zero is due; WL_RPC_NO_DEADLINE_MS means no deadline. */\nwl_rpc_err_t {module}_runtime_get_deadline_hint(const {module}_runtime_t *runtime, wl_time_ms_t now_ms, wl_rpc_deadline_hint_t *out_hint);\n\n"
         )
         .unwrap();
     }
@@ -961,7 +966,7 @@ fn emit_assembly_header(
     }
     writeln!(
         output,
-        "}} {module}_runtime_instance_t;\n\n/* Mechanical defaults use one FIFO/RPC slot, generation/operation ID one,\n * bounded encoded maxima, disabled roles, zero timeouts, and reject-new cache.\n * Override policy fields after this call. */\nwl_err_t {module}_runtime_config_defaults({module}_runtime_config_t *config);\n"
+        "}} {module}_runtime_instance_t;\n\ntypedef int32_t {module}_runtime_init_issue_t;\nenum {{\n  {prefix}_RUNTIME_INIT_OK = 0,\n  {prefix}_RUNTIME_INIT_NULL_ARGUMENT,\n  {prefix}_RUNTIME_INIT_ROLE_ENABLE,\n  {prefix}_RUNTIME_INIT_RETAINED_CAPACITY,\n  {prefix}_RUNTIME_INIT_RPC_CLIENT_CAPACITY,\n  {prefix}_RUNTIME_INIT_RPC_SERVER_CAPACITY,\n  {prefix}_RUNTIME_INIT_RPC_TIMEOUT,\n  {prefix}_RUNTIME_INIT_RPC_CACHE_POLICY,\n  {prefix}_RUNTIME_INIT_RPC_CANONICAL_CAPACITY,\n  {prefix}_RUNTIME_INIT_LAYOUT_OVERFLOW,\n  {prefix}_RUNTIME_INIT_STORAGE_TOO_SMALL,\n  {prefix}_RUNTIME_INIT_STORAGE_NULL,\n  {prefix}_RUNTIME_INIT_STORAGE_ALIGNMENT,\n  {prefix}_RUNTIME_INIT_STORAGE_OVERLAP,\n  {prefix}_RUNTIME_INIT_COMPONENT\n}};\n\ntypedef struct {{\n  {module}_runtime_init_issue_t issue;\n  const char *field;\n  size_t required;\n  size_t provided;\n}} {module}_runtime_init_diagnostic_t;\n\nconst char *{module}_runtime_init_issue_str({module}_runtime_init_issue_t issue);\n\n/* Mechanical defaults use one FIFO/RPC slot, generation/operation ID one,\n * bounded encoded maxima, disabled roles, zero timeouts, and reject-new cache.\n * Override policy fields after this call. */\nwl_err_t {module}_runtime_config_defaults({module}_runtime_config_t *config);\n"
     )
     .unwrap();
     if !profile.rpc_services.is_empty() {
@@ -980,7 +985,7 @@ fn emit_assembly_header(
     }
     write!(
         output,
-        "int {module}_runtime_requirements(const {module}_runtime_config_t *config, {module}_runtime_requirements_t *out_requirements);\nint {module}_runtime_init({module}_runtime_instance_t *instance, const {module}_runtime_config_t *config, const {module}_runtime_storage_t *storage);\n"
+        "int {module}_runtime_requirements(const {module}_runtime_config_t *config, {module}_runtime_requirements_t *out_requirements);\n/* Checked initialization reports the exact rejected field and capacity values. */\nint {module}_runtime_init_checked({module}_runtime_instance_t *instance, const {module}_runtime_config_t *config, const {module}_runtime_storage_t *storage, {module}_runtime_init_diagnostic_t *out_diagnostic);\nint {module}_runtime_init({module}_runtime_instance_t *instance, const {module}_runtime_config_t *config, const {module}_runtime_storage_t *storage);\n"
     )
     .unwrap();
 }
@@ -1093,6 +1098,12 @@ fn emit_assembly_source(
     module: &str,
 ) {
     emit_config_defaults(output, schema, profile, module);
+    let prefix = upper_snake(module);
+    write!(
+        output,
+        "const char *{module}_runtime_init_issue_str({module}_runtime_init_issue_t issue) {{\n  switch (issue) {{\n    case {prefix}_RUNTIME_INIT_OK: return \"ok\";\n    case {prefix}_RUNTIME_INIT_NULL_ARGUMENT: return \"null argument\";\n    case {prefix}_RUNTIME_INIT_ROLE_ENABLE: return \"role enable must be zero or one\";\n    case {prefix}_RUNTIME_INIT_RETAINED_CAPACITY: return \"retained capacity is zero\";\n    case {prefix}_RUNTIME_INIT_RPC_CLIENT_CAPACITY: return \"RPC client capacity is zero\";\n    case {prefix}_RUNTIME_INIT_RPC_SERVER_CAPACITY: return \"RPC server capacity is zero\";\n    case {prefix}_RUNTIME_INIT_RPC_TIMEOUT: return \"RPC timeout exceeds wrap-safe range\";\n    case {prefix}_RUNTIME_INIT_RPC_CACHE_POLICY: return \"unknown RPC cache policy\";\n    case {prefix}_RUNTIME_INIT_RPC_CANONICAL_CAPACITY: return \"canonical request capacity is zero\";\n    case {prefix}_RUNTIME_INIT_LAYOUT_OVERFLOW: return \"runtime layout size overflow\";\n    case {prefix}_RUNTIME_INIT_STORAGE_TOO_SMALL: return \"runtime storage is too small\";\n    case {prefix}_RUNTIME_INIT_STORAGE_NULL: return \"runtime storage data is null\";\n    case {prefix}_RUNTIME_INIT_STORAGE_ALIGNMENT: return \"runtime storage is misaligned\";\n    case {prefix}_RUNTIME_INIT_STORAGE_OVERLAP: return \"runtime storage overlaps the instance\";\n    case {prefix}_RUNTIME_INIT_COMPONENT: return \"runtime component initialization failed\";\n    default: return \"unknown runtime initialization issue\";\n  }}\n}}\n\nstatic int {module}_runtime_init_failure({module}_runtime_init_diagnostic_t *diagnostic, {module}_runtime_init_issue_t issue, const char *field, size_t required, size_t provided, int result) {{\n  if (diagnostic != NULL) {{\n    diagnostic->issue = issue;\n    diagnostic->field = field;\n    diagnostic->required = required;\n    diagnostic->provided = provided;\n  }}\n  return result;\n}}\n\n"
+    )
+    .unwrap();
     write!(
         output,
         "typedef struct {{\n  uint8_t *base;\n  size_t size;\n  size_t offset;\n}} {module}_runtime_storage_cursor_t;\n\ntypedef struct {{\n"
@@ -1165,7 +1176,38 @@ fn emit_assembly_source(
     }
     write!(
         output,
-        "  if (out_requirements != NULL) {{\n    out_requirements->storage_size = cursor.offset;\n    out_requirements->storage_alignment = alignment;\n  }}\n  return WL_OK;\n}}\n\nint {module}_runtime_requirements(const {module}_runtime_config_t *config, {module}_runtime_requirements_t *out_requirements) {{\n  {module}_runtime_config_t config_copy;\n  if (config == NULL || out_requirements == NULL) return WL_ERR_INVALID_ARG;\n  config_copy = *config;\n  *out_requirements = ({module}_runtime_requirements_t){{0}};\n  return {module}_runtime_layout(&config_copy, NULL, SIZE_MAX, NULL, out_requirements);\n}}\n\nint {module}_runtime_init({module}_runtime_instance_t *instance, const {module}_runtime_config_t *config, const {module}_runtime_storage_t *storage) {{\n  {module}_runtime_config_t config_copy;\n  {module}_runtime_storage_t storage_copy;\n  {module}_runtime_requirements_t requirements;\n  {module}_runtime_layout_t layout;\n  uintptr_t instance_address;\n  uintptr_t storage_address;\n  int result;\n  if (instance == NULL || config == NULL || storage == NULL) return WL_ERR_INVALID_ARG;\n  config_copy = *config;\n  storage_copy = *storage;\n  config = &config_copy;\n  storage = &storage_copy;\n  result = {module}_runtime_requirements(config, &requirements);\n  if (result != WL_OK) return result;\n  if (storage->size < requirements.storage_size) return WL_ERR_BUF_TOO_SMALL;\n  if (requirements.storage_size != 0U) {{\n    if (storage->data == NULL || ((uintptr_t)storage->data & (requirements.storage_alignment - 1U)) != 0U) return WL_ERR_INVALID_ARG;\n    instance_address = (uintptr_t)(void *)instance;\n    storage_address = (uintptr_t)storage->data;\n    if ((storage_address <= instance_address && instance_address - storage_address < requirements.storage_size) || (instance_address < storage_address && storage_address - instance_address < sizeof(*instance))) return WL_ERR_INVALID_ARG;\n  }}\n  result = {module}_runtime_layout(config, (uint8_t *)storage->data, storage->size, &layout, NULL);\n  if (result != WL_OK) return result;\n  memset(instance, 0, sizeof(*instance));\n"
+        "  if (out_requirements != NULL) {{\n    out_requirements->storage_size = cursor.offset;\n    out_requirements->storage_alignment = alignment;\n  }}\n  return WL_OK;\n}}\n\nint {module}_runtime_requirements(const {module}_runtime_config_t *config, {module}_runtime_requirements_t *out_requirements) {{\n  {module}_runtime_config_t config_copy;\n  if (config == NULL || out_requirements == NULL) return WL_ERR_INVALID_ARG;\n  config_copy = *config;\n  *out_requirements = ({module}_runtime_requirements_t){{0}};\n  return {module}_runtime_layout(&config_copy, NULL, SIZE_MAX, NULL, out_requirements);\n}}\n\nstatic int {module}_runtime_init_validate(const {module}_runtime_instance_t *instance, const {module}_runtime_config_t *config, const {module}_runtime_storage_t *storage, {module}_runtime_requirements_t *requirements, {module}_runtime_init_diagnostic_t *diagnostic) {{\n  uintptr_t instance_address;\n  uintptr_t storage_address;\n  int result;\n  if (diagnostic != NULL) memset(diagnostic, 0, sizeof(*diagnostic));\n  if (instance == NULL || config == NULL || storage == NULL || requirements == NULL || diagnostic == NULL)\n    return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_NULL_ARGUMENT, instance == NULL ? \"instance\" : config == NULL ? \"config\" : storage == NULL ? \"storage\" : requirements == NULL ? \"requirements\" : \"diagnostic\", 1U, 0U, WL_ERR_INVALID_ARG);\n"
+    )
+    .unwrap();
+
+    for route in &profile.retained_routes {
+        if route.kind == RetainedRouteKind::Fifo {
+            let message = type_name(&route.message_name);
+            writeln!(
+                output,
+                "  if (config->{message}_fifo_capacity == 0U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RETAINED_CAPACITY, \"{message}_fifo_capacity\", 1U, 0U, WL_ERR_INVALID_ARG);"
+            )
+            .unwrap();
+        }
+    }
+    if !profile.rpc_services.is_empty() {
+        write!(
+            output,
+            "  if (config->rpc_client_enabled > 1U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_ROLE_ENABLE, \"rpc_client_enabled\", 1U, config->rpc_client_enabled, WL_ERR_INVALID_ARG);\n  if (config->rpc_server_enabled > 1U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_ROLE_ENABLE, \"rpc_server_enabled\", 1U, config->rpc_server_enabled, WL_ERR_INVALID_ARG);\n  if (config->rpc_client_enabled != 0U && config->rpc_client_slot_count == 0U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_CLIENT_CAPACITY, \"rpc_client_slot_count\", 1U, 0U, WL_ERR_INVALID_ARG);\n  if (config->rpc_client_enabled != 0U && config->rpc_client_response_capacity == 0U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_CLIENT_CAPACITY, \"rpc_client_response_capacity\", 1U, 0U, WL_ERR_INVALID_ARG);\n  if (config->rpc_server_enabled != 0U && config->rpc_server_pending_slot_count == 0U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_SERVER_CAPACITY, \"rpc_server_pending_slot_count\", 1U, 0U, WL_ERR_INVALID_ARG);\n  if (config->rpc_server_enabled != 0U && config->rpc_server_cache_slot_count == 0U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_SERVER_CAPACITY, \"rpc_server_cache_slot_count\", 1U, 0U, WL_ERR_INVALID_ARG);\n  if (config->rpc_server_enabled != 0U && config->rpc_server_response_capacity == 0U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_SERVER_CAPACITY, \"rpc_server_response_capacity\", 1U, 0U, WL_ERR_INVALID_ARG);\n  if (config->rpc_server_enabled != 0U && config->rpc_server_pending_timeout_ms >= UINT32_C(0x80000000)) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_TIMEOUT, \"rpc_server_pending_timeout_ms\", UINT32_C(0x7fffffff), config->rpc_server_pending_timeout_ms, WL_ERR_INVALID_ARG);\n  if (config->rpc_server_enabled != 0U && config->rpc_server_cache_ttl_ms >= UINT32_C(0x80000000)) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_TIMEOUT, \"rpc_server_cache_ttl_ms\", UINT32_C(0x7fffffff), config->rpc_server_cache_ttl_ms, WL_ERR_INVALID_ARG);\n  if (config->rpc_server_enabled != 0U && config->rpc_server_cache_policy != WL_RPC_CACHE_REJECT_NEW && config->rpc_server_cache_policy != WL_RPC_CACHE_EVICT_OLDEST) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_CACHE_POLICY, \"rpc_server_cache_policy\", 0U, (size_t)config->rpc_server_cache_policy, WL_ERR_INVALID_ARG);\n"
+        )
+        .unwrap();
+        for service in &profile.rpc_services {
+            let service_name = c_identifier(&service.name);
+            writeln!(
+                output,
+                "  if (config->rpc_server_enabled != 0U && config->{service_name}_canonical_request_capacity == 0U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_CANONICAL_CAPACITY, \"{service_name}_canonical_request_capacity\", 1U, 0U, WL_ERR_INVALID_ARG);"
+            )
+            .unwrap();
+        }
+    }
+    write!(
+        output,
+        "  result = {module}_runtime_requirements(config, requirements);\n  if (result != WL_OK) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_LAYOUT_OVERFLOW, \"config\", 0U, 0U, result);\n  if (storage->size < requirements->storage_size) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_STORAGE_TOO_SMALL, \"storage.size\", requirements->storage_size, storage->size, WL_ERR_BUF_TOO_SMALL);\n  if (requirements->storage_size != 0U) {{\n    if (storage->data == NULL) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_STORAGE_NULL, \"storage.data\", requirements->storage_size, 0U, WL_ERR_INVALID_ARG);\n    if (((uintptr_t)storage->data & (requirements->storage_alignment - 1U)) != 0U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_STORAGE_ALIGNMENT, \"storage.data\", requirements->storage_alignment, (size_t)((uintptr_t)storage->data & (requirements->storage_alignment - 1U)), WL_ERR_INVALID_ARG);\n    instance_address = (uintptr_t)(const void *)instance;\n    storage_address = (uintptr_t)storage->data;\n    if ((storage_address <= instance_address && instance_address - storage_address < requirements->storage_size) || (instance_address < storage_address && storage_address - instance_address < sizeof(*instance))) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_STORAGE_OVERLAP, \"storage.data\", requirements->storage_size, storage->size, WL_ERR_INVALID_ARG);\n  }}\n  return WL_OK;\n}}\n\nint {module}_runtime_init({module}_runtime_instance_t *instance, const {module}_runtime_config_t *config, const {module}_runtime_storage_t *storage) {{\n  {module}_runtime_config_t config_copy;\n  {module}_runtime_storage_t storage_copy;\n  {module}_runtime_requirements_t requirements;\n  {module}_runtime_layout_t layout;\n  uintptr_t instance_address;\n  uintptr_t storage_address;\n  int result;\n  if (instance == NULL || config == NULL || storage == NULL) return WL_ERR_INVALID_ARG;\n  config_copy = *config;\n  storage_copy = *storage;\n  config = &config_copy;\n  storage = &storage_copy;\n  result = {module}_runtime_requirements(config, &requirements);\n  if (result != WL_OK) return result;\n  if (storage->size < requirements.storage_size) return WL_ERR_BUF_TOO_SMALL;\n  if (requirements.storage_size != 0U) {{\n    if (storage->data == NULL || ((uintptr_t)storage->data & (requirements.storage_alignment - 1U)) != 0U) return WL_ERR_INVALID_ARG;\n    instance_address = (uintptr_t)(void *)instance;\n    storage_address = (uintptr_t)storage->data;\n    if ((storage_address <= instance_address && instance_address - storage_address < requirements.storage_size) || (instance_address < storage_address && storage_address - instance_address < sizeof(*instance))) return WL_ERR_INVALID_ARG;\n  }}\n  result = {module}_runtime_layout(config, (uint8_t *)storage->data, storage->size, &layout, NULL);\n  if (result != WL_OK) return result;\n  memset(instance, 0, sizeof(*instance));\n"
     )
     .unwrap();
 
@@ -1214,9 +1256,13 @@ fn emit_assembly_source(
         "\n",
         "init_failed:\n",
         "  memset(instance, 0, sizeof(*instance));\n",
-        "  return result;\n",
-        "}\n\n",
+        "  return ",
     ));
+    write!(
+        output,
+        "result;\n}}\n\nint {module}_runtime_init_checked({module}_runtime_instance_t *instance, const {module}_runtime_config_t *config, const {module}_runtime_storage_t *storage, {module}_runtime_init_diagnostic_t *out_diagnostic) {{\n  {module}_runtime_requirements_t requirements;\n  int result = {module}_runtime_init_validate(instance, config, storage, &requirements, out_diagnostic);\n  if (result != WL_OK) return result;\n  result = {module}_runtime_init(instance, config, storage);\n  if (result != WL_OK) return {module}_runtime_init_failure(out_diagnostic, {prefix}_RUNTIME_INIT_COMPONENT, \"component\", 0U, 0U, result);\n  return WL_OK;\n}}\n\n"
+    )
+    .unwrap();
 }
 
 fn emit_source(
@@ -1233,7 +1279,7 @@ fn emit_source(
     if !profile.rpc_services.is_empty() {
         write!(
             output,
-            "static uint64_t {module}_rpc_request_fingerprint(const uint8_t *data, size_t length) {{\n  static const uint8_t domain[] = \"wlc.rpc.canonical-request.v1\";\n  uint64_t hash = UINT64_C(0xcbf29ce484222325);\n  size_t index;\n  for (index = 0U; index + 1U < sizeof(domain); ++index) {{\n    hash ^= (uint64_t)domain[index];\n    hash *= UINT64_C(0x00000100000001b3);\n  }}\n  hash ^= UINT64_C(0xff);\n  hash *= UINT64_C(0x00000100000001b3);\n  for (index = 0U; index < length; ++index) {{\n    hash ^= (uint64_t)data[index];\n    hash *= UINT64_C(0x00000100000001b3);\n  }}\n  return hash;\n}}\n\n"
+            "static uint64_t {module}_rpc_request_fingerprint(const uint8_t *data, size_t length) {{\n  static const uint8_t domain[] = \"wlc.rpc.canonical-request.v1\";\n  uint64_t hash = UINT64_C(0xcbf29ce484222325);\n  size_t index;\n  for (index = 0U; index + 1U < sizeof(domain); ++index) {{\n    hash ^= (uint64_t)domain[index];\n    hash *= UINT64_C(0x00000100000001b3);\n  }}\n  hash ^= UINT64_C(0xff);\n  hash *= UINT64_C(0x00000100000001b3);\n  for (index = 0U; index < length; ++index) {{\n    hash ^= (uint64_t)data[index];\n    hash *= UINT64_C(0x00000100000001b3);\n  }}\n  return hash;\n}}\n\nstatic void {module}_runtime_cancel_peer_tx(void *context, wl_tx_handle_t handle) {{\n  if (context != NULL) (void)wl_tx_cancel((wl_ctx_t *)context, handle);\n}}\n\n"
         )
         .unwrap();
     }
@@ -1337,6 +1383,16 @@ fn emit_rpc_runtime_progress_implementation(
 ) {
     write!(
         output,
+        "wl_rpc_err_t {module}_runtime_peer_observe(wl_ctx_t *ctx, {module}_runtime_t *runtime, uint64_t peer_session_id, wl_rpc_peer_observation_t *out_observation) {{\n  wl_rpc_err_t result;\n  if (out_observation != NULL) memset(out_observation, 0, sizeof(*out_observation));\n  if (ctx == NULL || runtime == NULL || runtime->rpc_server == NULL || peer_session_id == 0U || out_observation == NULL) return WL_RPC_ERR_INVALID_ARG;\n  result = wl_rpc_peer_observe(runtime->rpc_server, &runtime->rpc_peer, peer_session_id, {module}_runtime_cancel_peer_tx, ctx, out_observation);\n  if (result == WL_RPC_OK && out_observation->changed != 0U) runtime->rpc_peer_observation = *out_observation;\n  return result;\n}}\n\n"
+    )
+    .unwrap();
+    write!(
+        output,
+        "wl_rpc_err_t {module}_runtime_peer_observation_take({module}_runtime_t *runtime, wl_rpc_peer_observation_t *out_observation) {{\n  if (out_observation != NULL) memset(out_observation, 0, sizeof(*out_observation));\n  if (runtime == NULL || out_observation == NULL) return WL_RPC_ERR_INVALID_ARG;\n  if (runtime->rpc_peer_observation.changed == 0U) return WL_RPC_ERR_NOT_FOUND;\n  *out_observation = runtime->rpc_peer_observation;\n  memset(&runtime->rpc_peer_observation, 0, sizeof(runtime->rpc_peer_observation));\n  return WL_RPC_OK;\n}}\n\n"
+    )
+    .unwrap();
+    write!(
+        output,
         "wl_rpc_err_t {module}_runtime_poll({module}_runtime_t *runtime, wl_time_ms_t now_ms, {module}_runtime_poll_result_t *out_result) {{\n  wl_rpc_err_t result;\n  wl_rpc_server_expiry_t server_expiry = {{0}};\n  if (out_result != NULL) memset(out_result, 0, sizeof(*out_result));\n  if (runtime == NULL || out_result == NULL) return WL_RPC_ERR_INVALID_ARG;\n  if (runtime->rpc_client != NULL) {{\n    result = wl_rpc_client_poll(runtime->rpc_client, now_ms, &out_result->client_timed_out);\n    if (result != WL_RPC_OK) return result;\n  }}\n  if (runtime->rpc_server != NULL) {{\n    result = wl_rpc_server_expired_acquire(runtime->rpc_server, now_ms, &out_result->server_expired_request);\n    if (result == WL_RPC_OK) out_result->server_pending_expired = 1U;\n    else if (result != WL_RPC_ERR_NOT_FOUND) return result;\n    result = wl_rpc_server_poll(runtime->rpc_server, now_ms, &server_expiry);\n    if (result != WL_RPC_OK) return result;\n    out_result->server_cache_expired = server_expiry.cache_expired;\n  }}\n  return WL_RPC_OK;\n}}\n\nwl_rpc_err_t {module}_runtime_service(wl_ctx_t *ctx, {module}_runtime_t *runtime, wl_time_ms_t now_ms, {module}_runtime_service_result_t *out_result) {{\n  wl_rpc_server_response_t response = {{0}};\n  wl_rpc_err_t result;\n  uint8_t reliable_response = 0U;\n  if (out_result != NULL) memset(out_result, 0, sizeof(*out_result));\n  if (ctx == NULL || runtime == NULL || out_result == NULL) return WL_RPC_ERR_INVALID_ARG;\n  out_result->response = {module}_runtime_result(NULL);\n  result = {module}_runtime_poll(runtime, now_ms, &out_result->deadlines);\n  if (result != WL_RPC_OK) return result;\n  if (runtime->rpc_server == NULL) return WL_RPC_OK;\n  result = wl_rpc_server_response_acquire(runtime->rpc_server, &response);\n  if (result == WL_RPC_ERR_NOT_FOUND) return WL_RPC_OK;\n  if (result != WL_RPC_OK) return result;\n  out_result->response.message_id = response.identity.response_message_id;\n  out_result->response.detail_kind = {prefix}_RUNTIME_DETAIL_RPC;\n  out_result->response.detail.rpc.operation_id = response.identity.operation_id;\n  out_result->response.detail.rpc.application_result = response.application_status;\n  out_result->response.detail.rpc.payload_length = response.response_length;\n  out_result->response.detail.rpc.server_response = response;\n  switch (response.identity.response_message_id) {{\n"
     )
     .unwrap();
@@ -1413,6 +1469,17 @@ fn emit_rpc_request_case(output: &mut String, module: &str, prefix: &str, servic
         "    case {request_macro}_MESSAGE_ID: {{\n      wl_rpc_request_identity_t identity = {{0}};\n      wl_rpc_server_request_t server_request = {{0}};\n      wl_rpc_server_response_t replay = {{0}};\n      size_t canonical_length = 0U;\n      result.detail_kind = {prefix}_RUNTIME_DETAIL_RPC;\n      if (event->type != {expected_event}) {{\n        result.domain = {prefix}_RUNTIME_DELIVERY_MISMATCH;\n        break;\n      }}\n      if (runtime->rpc_server == NULL) {{\n        result.domain = {prefix}_RUNTIME_MISSING_ROUTE;\n        break;\n      }}\n      if (runtime->{service_name}.request_scratch == NULL || runtime->{service_name}.canonical_request_scratch.data == NULL) {{\n        result.domain = {prefix}_RUNTIME_MISSING_SCRATCH;\n        break;\n      }}\n      result.detail.rpc.codec_status = {request}_decode(event->payload, event->payload_len, runtime->{service_name}.request_scratch);\n      if (result.detail.rpc.codec_status != WL_CODEC_OK) {{\n        result.domain = {prefix}_RUNTIME_CODEC_ERROR;\n        break;\n      }}\n      if (!runtime->{service_name}.request_scratch->has_{operation_field} || runtime->{service_name}.request_scratch->{operation_field} == 0U) {{\n        result.detail.rpc.rpc_result = WL_RPC_ERR_INVALID_ARG;\n        result.domain = {prefix}_RUNTIME_RPC_ERROR;\n        break;\n      }}\n      result.detail.rpc.operation_id = runtime->{service_name}.request_scratch->{operation_field};\n      result.detail.rpc.codec_status = {request}_encode(runtime->{service_name}.request_scratch, runtime->{service_name}.canonical_request_scratch.data, runtime->{service_name}.canonical_request_scratch.capacity, &canonical_length);\n      if (result.detail.rpc.codec_status != WL_CODEC_OK) {{\n        result.domain = {prefix}_RUNTIME_CODEC_ERROR;\n        break;\n      }}\n      result.detail.rpc.payload_length = canonical_length;\n      identity.operation_id = result.detail.rpc.operation_id;\n      identity.request_message_id = {request_macro}_MESSAGE_ID;\n      identity.response_message_id = {response_macro}_MESSAGE_ID;\n      identity.request_fingerprint = {module}_rpc_request_fingerprint(runtime->{service_name}.canonical_request_scratch.data, canonical_length);\n      identity.peer_session_id = event->peer_session_id;\n      result.detail.rpc.rpc_result = wl_rpc_server_begin(runtime->rpc_server, &identity, {now_ms}, &result.detail.rpc.rpc_disposition, &server_request, &replay);\n      if (result.detail.rpc.rpc_result != WL_RPC_OK) {{\n        result.domain = {prefix}_RUNTIME_RPC_ERROR;\n        break;\n      }}\n      switch (result.detail.rpc.rpc_disposition) {{\n        case WL_RPC_SERVER_NEW:\n          result.detail.rpc.server_request = server_request;\n          if (runtime->{service_name}.request_handler == NULL) {{\n            result.detail.rpc.rpc_result = wl_rpc_server_abandon(runtime->rpc_server, &server_request);\n            result.domain = {prefix}_RUNTIME_MISSING_ROUTE;\n            break;\n          }}\n          result.detail.rpc.application_result = runtime->{service_name}.request_handler(runtime->{service_name}.user_data, runtime->{service_name}.request_scratch, &server_request, {delivery});\n          if (result.detail.rpc.application_result != 0) {{\n            result.detail.rpc.rpc_result = wl_rpc_server_abandon(runtime->rpc_server, &server_request);\n            result.domain = {prefix}_RUNTIME_APPLICATION_ERROR;\n          }} else {{\n            result.domain = {prefix}_RUNTIME_OK;\n          }}\n          break;\n        case WL_RPC_SERVER_PENDING_DUPLICATE:\n          result.domain = {prefix}_RUNTIME_OK;\n          break;\n        case WL_RPC_SERVER_REPLAY:\n          result.detail.rpc.server_response = replay;\n          result.detail.rpc.application_result = replay.application_status;\n          result.detail.rpc.payload_length = replay.response_length;\n          result.detail.rpc.core_result = WL_OK;\n          result.domain = {prefix}_RUNTIME_OK;\n          break;\n        case WL_RPC_SERVER_CONFLICT:\n          result.detail.rpc.rpc_result = WL_RPC_ERR_OPERATION_CONFLICT;\n          result.domain = {prefix}_RUNTIME_RPC_ERROR;\n          break;\n        default:\n          result.detail.rpc.rpc_result = WL_RPC_ERR_INVALID_STATE;\n          result.domain = {prefix}_RUNTIME_RPC_ERROR;\n          break;\n      }}\n      break;\n    }}\n"
     )
     .unwrap();
+    let peer_observe_marker = format!(
+        "      if (runtime->rpc_server == NULL) {{\n        result.domain = {prefix}_RUNTIME_MISSING_ROUTE;\n        break;\n      }}\n"
+    );
+    let peer_observe_offset = output
+        .rfind(&peer_observe_marker)
+        .expect("generated RPC request case has server guard")
+        + peer_observe_marker.len();
+    let peer_observe = format!(
+        "      if (event->peer_session_id != 0U) {{\n        wl_rpc_peer_observation_t observation = {{0}};\n        result.detail.rpc.rpc_result = {module}_runtime_peer_observe(ctx, runtime, event->peer_session_id, &observation);\n        if (result.detail.rpc.rpc_result != WL_RPC_OK) {{\n          result.domain = {prefix}_RUNTIME_RPC_ERROR;\n          break;\n        }}\n        if (observation.changed != 0U) result.detail.rpc.peer_changed = 1U;\n      }}\n"
+    );
+    output.insert_str(peer_observe_offset, &peer_observe);
 }
 
 fn emit_rpc_response_case(output: &mut String, module: &str, prefix: &str, service: &RpcService) {

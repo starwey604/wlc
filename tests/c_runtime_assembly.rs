@@ -133,6 +133,11 @@ int wl_tx_take(wl_ctx_t *ctx, wl_tx_handle_t handle,
   return WL_OK;
 }
 
+int wl_tx_cancel(wl_ctx_t *ctx, wl_tx_handle_t handle) {
+  (void)ctx;
+  return handle == 0U ? WL_ERR_INVALID_ARG : WL_OK;
+}
+
 static int32_t execute(void *user_data, const request_t *request,
                        const wl_rpc_server_request_t *server_request,
                        wl_delivery_t delivery) {

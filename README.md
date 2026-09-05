@@ -335,6 +335,11 @@ overflow, size, alignment and overlap with the instance, before modifying the
 instance or storage. The configuration and storage descriptors are copied and
 may be temporary; the instance and backing bytes must remain at stable
 addresses for their full runtime lifetime and must not be copied after init.
+For bring-up, `<module>_runtime_init_checked()` returns the same `wl_err_t` and
+also fills a diagnostic with the rejected field plus required/provided values.
+`<module>_runtime_init_issue_str()` supplies optional human-readable text;
+ordinary `runtime_init()` stays on the smaller firmware path, so checked-init
+diagnostics can be removed by function/data-section linker garbage collection.
 
 RPC client and server roles can be enabled independently. Sizing fields for a
 disabled role are ignored and its runtime pointer remains null. FIFO capacity,
@@ -352,7 +357,7 @@ TX handle; owner loops may apply their fallback action only while it is zero. In
 has no domain payload. A retained-only profile therefore does not carry the
 larger RPC result fields. Generated runtime headers likewise include only the
 LATEST, FIFO, and RPC public headers selected by that profile. The fixed
-`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `17` for this surface; regenerate
+`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `18` for this surface; regenerate
 all runtime sources and update field access together when that value changes.
 
 Every generated result exposes `*_runtime_result_ok()` for the common success
@@ -473,6 +478,14 @@ the copy to `server_complete` or `server_reject`. This makes equal operation
 IDs from different peer sessions independent while retaining conflict
 detection within one session. `server_response` remains populated only for a
 cached replay or an explicit completion/rejection result.
+
+Before dispatching a reliable RPC request, ABI 18 automatically observes its
+nonzero peer session. A transition discards the preceding session's pending
+and cached server work and asks the link to cancel any detached in-flight
+response. `result.detail.rpc.peer_changed` identifies that dispatch; call
+`<module>_runtime_peer_observation_take()` to obtain the transition and revoke
+product leases or other non-RPC authority. Unreliable requests have no peer
+session and do not trigger this point-to-point transition path.
 
 All generated `now_ms` arguments, `wl_poll()`, RPC poll functions, and deadline
 hints must use one monotonic millisecond clock and epoch. Generated dispatch
