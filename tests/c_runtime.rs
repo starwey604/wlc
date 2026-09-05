@@ -108,10 +108,14 @@ static int dispatch_latest(wl_ctx_t *ctx, typed_runtime_runtime_t *runtime,
   event.payload = payload;
   event.payload_len = length;
   result = typed_runtime_runtime_dispatch_event(ctx, &event, runtime, 0U);
-  if (result.domain == TYPED_RUNTIME_RUNTIME_OK &&
-      result.detail_kind == TYPED_RUNTIME_RUNTIME_DETAIL_RETAINED) return 0;
-  if (result.domain == TYPED_RUNTIME_RUNTIME_STORAGE_ERROR)
-    return result.detail.retained.storage_result;
+  if (typed_runtime_runtime_result_ok(&result) &&
+      typed_runtime_runtime_result_retained_detail(&result) != NULL &&
+      strcmp(typed_runtime_runtime_result_str(&result), "ok") == 0) return 0;
+  if (result.domain == TYPED_RUNTIME_RUNTIME_STORAGE_ERROR) {
+    const typed_runtime_runtime_retained_detail_t *detail =
+        typed_runtime_runtime_result_retained_detail(&result);
+    return detail != NULL ? detail->storage_result : 2;
+  }
   return 2;
 }
 
@@ -181,9 +185,13 @@ int main(void) {
   event.payload = malformed;
   event.payload_len = sizeof(malformed);
   result = typed_runtime_runtime_dispatch_event(&ctx, &event, &runtime, 0U);
-  if (result.domain != TYPED_RUNTIME_RUNTIME_CODEC_ERROR ||
-      result.detail.retained.codec_status != WL_CODEC_ERR_MALFORMED ||
-      result.detail.retained.abort_result != WL_OK || releases != 2U) return 6;
+  if (typed_runtime_runtime_result_ok(&result) ||
+      strcmp(typed_runtime_runtime_result_str(&result), "codec error") != 0 ||
+      typed_runtime_runtime_result_retained_detail(&result) == NULL ||
+      typed_runtime_runtime_result_retained_detail(&result)->codec_status !=
+          WL_CODEC_ERR_MALFORMED ||
+      typed_runtime_runtime_result_retained_detail(&result)->abort_result != WL_OK ||
+      releases != 2U) return 6;
   if (dispatch_latest(&ctx, &runtime, 8U) != 0 || releases != 3U) return 7;
 
   event.type = WL_EVT_RELIABLE_RX;
@@ -209,7 +217,10 @@ int main(void) {
   event.message_id = 999U;
   result = typed_runtime_runtime_dispatch_event(&ctx, &event, &runtime, 0U);
   if (result.domain != TYPED_RUNTIME_RUNTIME_UNKNOWN_MESSAGE ||
-      result.detail_kind != TYPED_RUNTIME_RUNTIME_DETAIL_NONE || releases != 8U)
+      result.detail_kind != TYPED_RUNTIME_RUNTIME_DETAIL_NONE ||
+      typed_runtime_runtime_result_retained_detail(&result) != NULL ||
+      strcmp(typed_runtime_runtime_result_str(&result), "unknown message") != 0 ||
+      releases != 8U)
     return 13;
   result = typed_runtime_runtime_dispatch_event(&ctx, &event, NULL, 0U);
   if (result.domain != TYPED_RUNTIME_RUNTIME_INVALID_ARGUMENT ||
@@ -217,6 +228,10 @@ int main(void) {
   event.type = WL_EVT_TX_SUCCESS;
   result = typed_runtime_runtime_dispatch_event(&ctx, &event, &runtime, 0U);
   if (result.domain != TYPED_RUNTIME_RUNTIME_NON_RX || releases != 9U) return 15;
+  if (typed_runtime_runtime_result_ok(NULL) ||
+      typed_runtime_runtime_result_retained_detail(NULL) != NULL ||
+      strcmp(typed_runtime_runtime_result_str(NULL), "null result") != 0)
+    return 20;
 
   {
     wl_latest_t undersized = {0};

@@ -52,7 +52,8 @@ rpc Execute {
 const HOT_PATH_TEXT_BUDGET: usize = 3328;
 const ASSEMBLY_TEXT_BUDGET: usize = 1200;
 const PUMP_BRIDGE_TEXT_BUDGET: usize = 320;
-const COMBINED_TEXT_BUDGET: usize = 4800;
+const OPTIONAL_DIAGNOSTIC_TEXT_BUDGET: usize = 288;
+const COMBINED_TEXT_BUDGET: usize = 5088;
 
 fn wirelink_root() -> std::path::PathBuf {
     fs::canonicalize(
@@ -118,7 +119,7 @@ fn combined_runtime_result_has_bounded_host_layout() {
     assert_host_layout(
         PROFILE,
         "runtime_size",
-        r#"_Static_assert(RUNTIME_SIZE_RUNTIME_CODEGEN_ABI_VERSION == 16U,
+        r#"_Static_assert(RUNTIME_SIZE_RUNTIME_CODEGEN_ABI_VERSION == 17U,
                "unexpected generated ABI");
 _Static_assert(sizeof(runtime_size_runtime_retained_detail_t) <= 12U,
                "retained detail regressed");
@@ -134,7 +135,7 @@ fn retained_only_result_elides_rpc_layout() {
     assert_host_layout(
         RETAINED_PROFILE,
         "retained_size",
-        r#"_Static_assert(RETAINED_SIZE_RUNTIME_CODEGEN_ABI_VERSION == 16U,
+        r#"_Static_assert(RETAINED_SIZE_RUNTIME_CODEGEN_ABI_VERSION == 17U,
                "unexpected generated ABI");
 _Static_assert(sizeof(retained_size_runtime_retained_detail_t) <= 12U,
                "retained detail regressed");
@@ -148,7 +149,7 @@ fn rpc_only_result_has_bounded_layout() {
     assert_host_layout(
         RPC_PROFILE,
         "rpc_size",
-        r#"_Static_assert(RPC_SIZE_RUNTIME_CODEGEN_ABI_VERSION == 16U,
+        r#"_Static_assert(RPC_SIZE_RUNTIME_CODEGEN_ABI_VERSION == 17U,
                "unexpected generated ABI");
 _Static_assert(sizeof(rpc_size_runtime_rpc_detail_t) <= 96U,
                "RPC detail regressed");
@@ -200,6 +201,13 @@ fn combined_runtime_cortex_m_text_stays_within_split_budgets_when_toolchain_exis
         .unwrap();
     assert!(size.status.success());
     let stdout = String::from_utf8(size.stdout).unwrap();
+    let sections = Command::new("arm-none-eabi-size")
+        .args(["-A"])
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(sections.status.success());
+    let sections = String::from_utf8(sections.stdout).unwrap();
     let symbols = Command::new("arm-none-eabi-nm")
         .args(["-S", "--size-sort"])
         .arg(&object)
@@ -241,8 +249,23 @@ fn combined_runtime_cortex_m_text_stays_within_split_budgets_when_toolchain_exis
                 .flatten()
         })
         .sum::<usize>();
+    /* GCC keeps the optional result strings in mergeable read-only sections.
+     * The generated runtime currently has no other string literals there. */
+    let diagnostic_text = sections
+        .lines()
+        .filter_map(|line| {
+            let columns = line.split_whitespace().collect::<Vec<_>>();
+            let name = *columns.first()?;
+            let is_diagnostic = name.contains("runtime_result_str")
+                || name == ".rodata.str1.1"
+                || name.starts_with(".rodata.CSWTCH");
+            is_diagnostic
+                .then(|| columns.get(1)?.parse::<usize>().ok())
+                .flatten()
+        })
+        .sum::<usize>();
     let hot_path_text = text_size
-        .checked_sub(assembly_text + pump_bridge_text)
+        .checked_sub(assembly_text + pump_bridge_text + diagnostic_text)
         .expect("classified symbols cannot exceed total text");
 
     assert!(
@@ -256,6 +279,10 @@ fn combined_runtime_cortex_m_text_stays_within_split_budgets_when_toolchain_exis
     assert!(
         pump_bridge_text <= PUMP_BRIDGE_TEXT_BUDGET,
         "generated pump bridge is {pump_bridge_text} bytes, budget is {PUMP_BRIDGE_TEXT_BUDGET}\n{stdout}\n{symbols}"
+    );
+    assert!(
+        diagnostic_text <= OPTIONAL_DIAGNOSTIC_TEXT_BUDGET,
+        "generated optional diagnostics are {diagnostic_text} bytes, budget is {OPTIONAL_DIAGNOSTIC_TEXT_BUDGET}\n{stdout}\n{sections}\n{symbols}"
     );
     assert!(
         text_size <= COMBINED_TEXT_BUDGET,

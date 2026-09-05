@@ -230,6 +230,23 @@ message State = 1 { optional uint32 sequence = 1; }
     );
     assert!(first.header.contains("result.event_consumed"));
     assert!(first.header.contains("uint8_t event_consumed;"));
+    assert!(first.header.contains("stable_api_runtime_result_ok("));
+    assert!(first.header.contains("stable_api_runtime_result_str("));
+    assert!(
+        first
+            .header
+            .contains("stable_api_runtime_result_retained_detail(")
+    );
+    assert!(
+        !first
+            .header
+            .contains("stable_api_runtime_result_rpc_detail(")
+    );
+    assert!(
+        first
+            .source
+            .contains("case STABLE_API_RUNTIME_STORAGE_ERROR: return \"storage error\";")
+    );
     assert!(first.source.contains("result.event_consumed = 1U;"));
     assert!(first.header.contains("stable_api_runtime_pump_hooks"));
     assert!(

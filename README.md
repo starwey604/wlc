@@ -348,8 +348,15 @@ TX handle; owner loops may apply their fallback action only while it is zero. In
 has no domain payload. A retained-only profile therefore does not carry the
 larger RPC result fields. Generated runtime headers likewise include only the
 LATEST, FIFO, and RPC public headers selected by that profile. The fixed
-`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `16` for this surface; regenerate
+`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `17` for this surface; regenerate
 all runtime sources and update field access together when that value changes.
+
+Every generated result exposes `*_runtime_result_ok()` for the common success
+check and `*_runtime_result_str()` for diagnostic text. Profiles emit checked
+`*_runtime_result_retained_detail()` and/or `*_runtime_result_rpc_detail()`
+accessors only when those detail variants exist. Accessors return null for a
+null result or a mismatched `detail_kind`; diagnostic strings are not a stable
+machine-readable error protocol.
 
 Generated runtimes also expose `<module>_runtime_pump_init()` and
 `<module>_runtime_pump_hooks()`. The returned hooks pass the pump's single
@@ -365,13 +372,14 @@ identity pointer in place of `operation_id`.
 
 `tests/runtime_size.rs` keeps deterministic size regression gates. On
 `arm-none-eabi-gcc 16.2.0` with Cortex-M4, Thumb, and `-Os`, its representative
-LATEST + FIFO + RPC runtime measures 2847 bytes for dispatch/RPC/consumer code,
-1100 bytes for static assembly helpers, and 3947 bytes combined. The gates are
-2944, 1200, and 4096 bytes respectively. Host layout gates cap a retained-only
-result at 24 bytes and an RPC/combined result at 104 bytes. These are generator
-regression fixtures, not whole-firmware estimates: generated functions use
-individual sections, so a normal `--gc-sections` link omits APIs that the
-application never references.
+LATEST + FIFO + RPC runtime measures 3328 bytes for dispatch/RPC/consumer code,
+1104 bytes for static assembly helpers, 282 bytes for the pump bridge, and 268
+bytes for optional diagnostic strings/code. The respective gates are 3328,
+1200, 320, and 288 bytes, with a 5088-byte full-object gate. Host layout gates
+cap a retained-only result at 24 bytes and an RPC/combined result at 112 bytes.
+These are generator regression fixtures, not whole-firmware estimates:
+generated functions use individual sections, so a normal `--gc-sections` link
+omits APIs and diagnostic strings that the application never references.
 
 `<module>_runtime_dispatch_event()` is the terminal owner of every RX event
 passed with non-null `ctx` and `event`. Every RX outcome—including an unknown

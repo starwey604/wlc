@@ -71,6 +71,18 @@ fn generated_rpc_runtime_executes_client_server_and_cache_lifecycles() {
     );
     assert!(runtime.header.contains("rpc_fixture_runtime_pump_t"));
     assert!(runtime.header.contains("rpc_fixture_runtime_pump_hooks"));
+    assert!(runtime.header.contains("rpc_fixture_runtime_result_ok("));
+    assert!(runtime.header.contains("rpc_fixture_runtime_result_str("));
+    assert!(
+        runtime
+            .header
+            .contains("rpc_fixture_runtime_result_rpc_detail(")
+    );
+    assert!(
+        !runtime
+            .header
+            .contains("rpc_fixture_runtime_result_retained_detail(")
+    );
     assert!(!runtime.header.contains("client_start_scratch"));
     assert!(!runtime.header.contains("client_start_direct"));
     assert!(
@@ -321,14 +333,18 @@ static int check_client(wl_ctx_t *ctx, rpc_fixture_runtime_t *runtime,
   result = rpc_fixture_compute_client_start(
       ctx, runtime, &read_only_request, 100U, 9U);
   runtime->rpc_encode_scratch = encode_scratch;
-  if (result.domain != RPC_FIXTURE_RUNTIME_MISSING_SCRATCH ||
-      result.detail.rpc.operation_id != 0U || send_calls != 0U)
+  if (rpc_fixture_runtime_result_ok(&result) ||
+      strcmp(rpc_fixture_runtime_result_str(&result), "missing scratch") != 0 ||
+      rpc_fixture_runtime_result_rpc_detail(&result) == NULL ||
+      rpc_fixture_runtime_result_rpc_detail(&result)->operation_id != 0U ||
+      send_calls != 0U)
     return 27;
   result = rpc_fixture_compute_client_start(
       ctx, runtime, &read_only_request, 100U, 10U);
-  if (result.domain != RPC_FIXTURE_RUNTIME_OK ||
-      result.detail_kind != RPC_FIXTURE_RUNTIME_DETAIL_RPC ||
-      result.detail.rpc.operation_id != 1U ||
+  if (!rpc_fixture_runtime_result_ok(&result) ||
+      strcmp(rpc_fixture_runtime_result_str(&result), "ok") != 0 ||
+      rpc_fixture_runtime_result_rpc_detail(&result) == NULL ||
+      rpc_fixture_runtime_result_rpc_detail(&result)->operation_id != 1U ||
       read_only_request.has_operation_id || read_only_request.operation_id != 0U ||
       reliable_sends != 1U || sent_message_id != COMPUTE_REQUEST_MESSAGE_ID)
     return 1;

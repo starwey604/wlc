@@ -81,6 +81,8 @@ fn validate_runtime_names(
     let mut runtime_names = BTreeSet::from([
         format!("{module}_runtime_domain_t"),
         format!("{module}_runtime_result_t"),
+        format!("{module}_runtime_result_ok"),
+        format!("{module}_runtime_result_str"),
         format!("{module}_runtime_detail_kind_t"),
         format!("{module}_runtime_detail_t"),
         format!("{module}_runtime_t"),
@@ -124,10 +126,12 @@ fn validate_runtime_names(
     ]);
     if !profile.retained_routes.is_empty() {
         runtime_names.insert(format!("{module}_runtime_retained_detail_t"));
+        runtime_names.insert(format!("{module}_runtime_result_retained_detail"));
     }
     if !profile.rpc_services.is_empty() {
         for symbol in [
             format!("{module}_runtime_rpc_detail_t"),
+            format!("{module}_runtime_result_rpc_detail"),
             format!("{module}_runtime_rpc_encode_scratch_t"),
             format!("{module}_runtime_poll_result_t"),
             format!("{module}_runtime_service_result_t"),
@@ -541,6 +545,7 @@ fn emit_header(schema: &SemanticModel, profile: &BindingProfileModel, module: &s
         "}} {module}_runtime_detail_t;\n\n/* Inspect detail only through the member selected by detail_kind. domain\n * classifies the outcome; zero-initialized unused detail fields retain their\n * corresponding success values. event_consumed is nonzero only when dispatch\n * released an RX event or reclaimed a terminal TX handle. */\ntypedef struct {{\n  {module}_runtime_domain_t domain;\n  wl_event_type_t event_type;\n  uint16_t message_id;\n  {module}_runtime_detail_kind_t detail_kind;\n  uint8_t event_consumed;\n  {module}_runtime_detail_t detail;\n}} {module}_runtime_result_t;\n\n"
     )
     .unwrap();
+    emit_result_helpers_header(&mut output, profile, module, &prefix);
     for route in &profile.retained_routes {
         emit_retained_header_type(&mut output, module, route);
     }
@@ -634,6 +639,33 @@ fn emit_header(schema: &SemanticModel, profile: &BindingProfileModel, module: &s
     }
     output.push_str("#ifdef __cplusplus\n}\n#endif\n\n#endif\n");
     output
+}
+
+fn emit_result_helpers_header(
+    output: &mut String,
+    profile: &BindingProfileModel,
+    module: &str,
+    prefix: &str,
+) {
+    write!(
+        output,
+        "/* Convenience helpers preserve the full diagnostic result. Detail accessors\n * return null unless detail_kind selects the requested member. Result strings\n * are diagnostic text and must not be parsed as a stable machine interface. */\nstatic inline bool {module}_runtime_result_ok(const {module}_runtime_result_t *result) {{\n  return result != NULL && result->domain == {prefix}_RUNTIME_OK;\n}}\n\nconst char *{module}_runtime_result_str(const {module}_runtime_result_t *result);\n\n"
+    )
+    .unwrap();
+    if !profile.retained_routes.is_empty() {
+        write!(
+            output,
+            "static inline const {module}_runtime_retained_detail_t *{module}_runtime_result_retained_detail(const {module}_runtime_result_t *result) {{\n  return result != NULL && result->detail_kind == {prefix}_RUNTIME_DETAIL_RETAINED ? &result->detail.retained : NULL;\n}}\n\n"
+        )
+        .unwrap();
+    }
+    if !profile.rpc_services.is_empty() {
+        write!(
+            output,
+            "static inline const {module}_runtime_rpc_detail_t *{module}_runtime_result_rpc_detail(const {module}_runtime_result_t *result) {{\n  return result != NULL && result->detail_kind == {prefix}_RUNTIME_DETAIL_RPC ? &result->detail.rpc : NULL;\n}}\n\n"
+        )
+        .unwrap();
+    }
 }
 
 fn emit_retained_header_type(output: &mut String, module: &str, route: &RetainedRoute) {
@@ -1163,6 +1195,7 @@ fn emit_source(schema: &SemanticModel, profile: &BindingProfileModel, module: &s
     let mut output = format!(
         "#include \"{module}_runtime.h\"\n\n#include <string.h>\n\nstatic {module}_runtime_result_t {module}_runtime_result(const wl_event_t *event) {{\n  {module}_runtime_result_t result = {{0}};\n  result.domain = {prefix}_RUNTIME_INVALID_ARGUMENT;\n  if (event != NULL) {{\n    result.message_id = event->message_id;\n    result.event_type = event->type;\n  }}\n  return result;\n}}\n\n"
     );
+    emit_result_str_implementation(&mut output, module, &prefix);
     if !profile.rpc_services.is_empty() {
         write!(
             output,
@@ -1217,6 +1250,14 @@ fn emit_source(schema: &SemanticModel, profile: &BindingProfileModel, module: &s
     output.push('\n');
     emit_pump_implementation(&mut output, profile, module);
     output
+}
+
+fn emit_result_str_implementation(output: &mut String, module: &str, prefix: &str) {
+    write!(
+        output,
+        "const char *{module}_runtime_result_str(const {module}_runtime_result_t *result) {{\n  if (result == NULL) return \"null result\";\n  switch (result->domain) {{\n    case {prefix}_RUNTIME_OK: return \"ok\";\n    case {prefix}_RUNTIME_NON_RX: return \"non-rx event\";\n    case {prefix}_RUNTIME_UNKNOWN_MESSAGE: return \"unknown message\";\n    case {prefix}_RUNTIME_MISSING_ROUTE: return \"missing route\";\n    case {prefix}_RUNTIME_MISSING_SCRATCH: return \"missing scratch\";\n    case {prefix}_RUNTIME_DELIVERY_MISMATCH: return \"delivery mismatch\";\n    case {prefix}_RUNTIME_CODEC_ERROR: return \"codec error\";\n    case {prefix}_RUNTIME_STORAGE_ERROR: return \"storage error\";\n    case {prefix}_RUNTIME_RPC_ERROR: return \"rpc error\";\n    case {prefix}_RUNTIME_CORE_ERROR: return \"core error\";\n    case {prefix}_RUNTIME_APPLICATION_ERROR: return \"application error\";\n    case {prefix}_RUNTIME_INVALID_ARGUMENT: return \"invalid argument\";\n    default: return \"unknown runtime result\";\n  }}\n}}\n\n"
+    )
+    .unwrap();
 }
 
 fn emit_pump_implementation(output: &mut String, profile: &BindingProfileModel, module: &str) {
