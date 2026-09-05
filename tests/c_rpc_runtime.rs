@@ -114,6 +114,11 @@ fn generated_rpc_runtime_executes_client_server_and_cache_lifecycles() {
             .source
             .contains("identity.peer_session_id = event->peer_session_id")
     );
+    assert!(
+        runtime
+            .source
+            .contains("runtime->rpc_peer.session_id != event->peer_session_id")
+    );
     assert!(runtime.header.contains("wl_rpc_server_request_t"));
     assert!(
         runtime

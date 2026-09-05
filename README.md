@@ -486,6 +486,8 @@ response. `result.detail.rpc.peer_changed` identifies that dispatch; call
 `<module>_runtime_peer_observation_take()` to obtain the transition and revoke
 product leases or other non-RPC authority. Unreliable requests have no peer
 session and do not trigger this point-to-point transition path.
+Steady-state requests compare the already observed session inline and skip the
+observer/cancellation path entirely.
 
 All generated `now_ms` arguments, `wl_poll()`, RPC poll functions, and deadline
 hints must use one monotonic millisecond clock and epoch. Generated dispatch

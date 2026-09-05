@@ -1477,7 +1477,7 @@ fn emit_rpc_request_case(output: &mut String, module: &str, prefix: &str, servic
         .expect("generated RPC request case has server guard")
         + peer_observe_marker.len();
     let peer_observe = format!(
-        "      if (event->peer_session_id != 0U) {{\n        wl_rpc_peer_observation_t observation = {{0}};\n        result.detail.rpc.rpc_result = {module}_runtime_peer_observe(ctx, runtime, event->peer_session_id, &observation);\n        if (result.detail.rpc.rpc_result != WL_RPC_OK) {{\n          result.domain = {prefix}_RUNTIME_RPC_ERROR;\n          break;\n        }}\n        if (observation.changed != 0U) result.detail.rpc.peer_changed = 1U;\n      }}\n"
+        "      if (event->peer_session_id != 0U && runtime->rpc_peer.session_id != event->peer_session_id) {{\n        wl_rpc_peer_observation_t observation = {{0}};\n        result.detail.rpc.rpc_result = {module}_runtime_peer_observe(ctx, runtime, event->peer_session_id, &observation);\n        if (result.detail.rpc.rpc_result != WL_RPC_OK) {{\n          result.domain = {prefix}_RUNTIME_RPC_ERROR;\n          break;\n        }}\n        if (observation.changed != 0U) result.detail.rpc.peer_changed = 1U;\n      }}\n"
     );
     output.insert_str(peer_observe_offset, &peer_observe);
 }
