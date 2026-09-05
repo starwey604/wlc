@@ -42,20 +42,39 @@ pub fn generate_runtime_c(
     profile: &BindingProfileModel,
     module_name: &str,
 ) -> Result<GeneratedRuntimeC, RuntimeCodegenError> {
+    generate_runtime_c_named(schema, profile, module_name, module_name)
+}
+
+/// Emit a runtime whose public symbols use `runtime_name` while codec and
+/// typed-send references continue to use `codec_module_name`. This lets one
+/// schema target back multiple asymmetric profile runtimes without duplicate
+/// codec symbols.
+pub fn generate_runtime_c_named(
+    schema: &SemanticModel,
+    profile: &BindingProfileModel,
+    codec_module_name: &str,
+    runtime_name: &str,
+) -> Result<GeneratedRuntimeC, RuntimeCodegenError> {
     /* Reuse the ordinary generator's complete C-name collision validation. */
-    generate_c(schema, module_name).map_err(|error| RuntimeCodegenError(error.0))?;
-    let module = c_identifier(module_name);
-    if module.is_empty() {
+    generate_c(schema, codec_module_name).map_err(|error| RuntimeCodegenError(error.0))?;
+    let codec_module = c_identifier(codec_module_name);
+    let runtime = c_identifier(runtime_name);
+    if codec_module.is_empty() {
         return Err(RuntimeCodegenError(
-            "module name has no C identifier characters".to_owned(),
+            "codec module name has no C identifier characters".to_owned(),
+        ));
+    }
+    if runtime.is_empty() {
+        return Err(RuntimeCodegenError(
+            "runtime name has no C identifier characters".to_owned(),
         ));
     }
     validate_profile_model(schema, profile)?;
-    validate_runtime_names(schema, profile, &module)?;
+    validate_runtime_names(schema, profile, &runtime)?;
 
     Ok(GeneratedRuntimeC {
-        header: emit_header(schema, profile, &module),
-        source: emit_source(schema, profile, &module),
+        header: emit_header(schema, profile, &codec_module, &runtime),
+        source: emit_source(schema, profile, &codec_module, &runtime),
     })
 }
 
@@ -449,11 +468,16 @@ fn retained_ownership_problem(
     None
 }
 
-fn emit_header(schema: &SemanticModel, profile: &BindingProfileModel, module: &str) -> String {
+fn emit_header(
+    schema: &SemanticModel,
+    profile: &BindingProfileModel,
+    codec_module: &str,
+    module: &str,
+) -> String {
     let prefix = upper_snake(module);
     let guard = format!("WIRELINK_GENERATED_{prefix}_RUNTIME_H");
     let mut output = format!(
-        "#ifndef {guard}\n#define {guard}\n\n#include \"{module}_bindings.h\"\n#include <wirelink/pump.h>\n"
+        "#ifndef {guard}\n#define {guard}\n\n#include \"{codec_module}_bindings.h\"\n#include <wirelink/pump.h>\n"
     );
     if profile
         .retained_routes
@@ -550,7 +574,7 @@ fn emit_header(schema: &SemanticModel, profile: &BindingProfileModel, module: &s
         emit_retained_header_type(&mut output, module, route);
     }
     for service in &profile.rpc_services {
-        emit_rpc_header_types(&mut output, module, service);
+        emit_rpc_header_types(&mut output, codec_module, module, service);
     }
     if !profile.rpc_services.is_empty() {
         output.push_str(
@@ -961,13 +985,18 @@ fn emit_assembly_header(
     .unwrap();
 }
 
-fn emit_rpc_header_types(output: &mut String, module: &str, service: &RpcService) {
+fn emit_rpc_header_types(
+    output: &mut String,
+    codec_module: &str,
+    module: &str,
+    service: &RpcService,
+) {
     let service_name = c_identifier(&service.name);
     let request = type_name(&service.request_name);
     let response = type_name(&service.response_name);
     write!(
         output,
-        "/* The decoded request and its borrowed fields are valid only for the\n * callback. Copy server_request for asynchronous completion. Its generation\n * prevents a late completion from targeting a reused request identity. A\n * nonzero return abandons this exact pending operation. */\ntypedef int32_t (*{module}_{service_name}_rpc_request_handler_fn)(void *user_data, const {request}_t *request, const wl_rpc_server_request_t *server_request, wl_delivery_t delivery);\ntypedef struct {{\n  {request}_t *request_scratch;\n  {response}_t *response_scratch;\n  {module}_encode_scratch_t canonical_request_scratch;\n  {module}_{service_name}_rpc_request_handler_fn request_handler;\n  void *user_data;\n}} {module}_{service_name}_rpc_t;\n\n"
+        "/* The decoded request and its borrowed fields are valid only for the\n * callback. Copy server_request for asynchronous completion. Its generation\n * prevents a late completion from targeting a reused request identity. A\n * nonzero return abandons this exact pending operation. */\ntypedef int32_t (*{module}_{service_name}_rpc_request_handler_fn)(void *user_data, const {request}_t *request, const wl_rpc_server_request_t *server_request, wl_delivery_t delivery);\ntypedef struct {{\n  {request}_t *request_scratch;\n  {response}_t *response_scratch;\n  {codec_module}_encode_scratch_t canonical_request_scratch;\n  {module}_{service_name}_rpc_request_handler_fn request_handler;\n  void *user_data;\n}} {module}_{service_name}_rpc_t;\n\n"
     )
     .unwrap();
 }
@@ -1190,7 +1219,12 @@ fn emit_assembly_source(
     ));
 }
 
-fn emit_source(schema: &SemanticModel, profile: &BindingProfileModel, module: &str) -> String {
+fn emit_source(
+    schema: &SemanticModel,
+    profile: &BindingProfileModel,
+    codec_module: &str,
+    module: &str,
+) -> String {
     let prefix = upper_snake(module);
     let mut output = format!(
         "#include \"{module}_runtime.h\"\n\n#include <string.h>\n\nstatic {module}_runtime_result_t {module}_runtime_result(const wl_event_t *event) {{\n  {module}_runtime_result_t result = {{0}};\n  result.domain = {prefix}_RUNTIME_INVALID_ARGUMENT;\n  if (event != NULL) {{\n    result.message_id = event->message_id;\n    result.event_type = event->type;\n  }}\n  return result;\n}}\n\n"
@@ -1245,7 +1279,14 @@ fn emit_source(schema: &SemanticModel, profile: &BindingProfileModel, module: &s
     }
     for service in &profile.rpc_services {
         output.push('\n');
-        emit_rpc_implementation(&mut output, module, &prefix, service);
+        emit_rpc_implementation(
+            &mut output,
+            module,
+            &prefix,
+            codec_module,
+            &upper_snake(codec_module),
+            service,
+        );
     }
     output.push('\n');
     emit_pump_implementation(&mut output, profile, module);
@@ -1389,8 +1430,15 @@ fn emit_rpc_response_case(output: &mut String, module: &str, prefix: &str, servi
     let _ = module;
 }
 
-fn emit_rpc_implementation(output: &mut String, module: &str, prefix: &str, service: &RpcService) {
-    emit_rpc_client_implementation(output, module, prefix, service);
+fn emit_rpc_implementation(
+    output: &mut String,
+    module: &str,
+    prefix: &str,
+    codec_module: &str,
+    codec_prefix: &str,
+    service: &RpcService,
+) {
+    emit_rpc_client_implementation(output, module, prefix, codec_module, codec_prefix, service);
     emit_rpc_server_implementation(output, module, prefix, service);
 }
 
@@ -1398,6 +1446,8 @@ fn emit_rpc_client_implementation(
     output: &mut String,
     module: &str,
     prefix: &str,
+    codec_module: &str,
+    codec_prefix: &str,
     service: &RpcService,
 ) {
     let service_name = c_identifier(&service.name);
@@ -1419,7 +1469,7 @@ fn emit_rpc_client_implementation(
     };
     write!(
         output,
-        "static {module}_runtime_result_t {module}_{service_name}_client_finish_start({module}_runtime_t *runtime, uint32_t operation_id, {module}_send_result_t sent) {{\n  {module}_runtime_result_t result = {module}_runtime_result(NULL);\n  result.message_id = {request_macro}_MESSAGE_ID;\n  result.detail_kind = {prefix}_RUNTIME_DETAIL_RPC;\n  result.detail.rpc.operation_id = operation_id;\n  result.detail.rpc.codec_status = sent.codec_status;\n  result.detail.rpc.core_result = sent.core_result;\n  result.detail.rpc.handle = sent.handle;\n  result.detail.rpc.payload_length = sent.payload_length;\n  if (sent.domain == {prefix}_SEND_CODEC_ERROR || sent.domain == {prefix}_SEND_CORE_ERROR) {{\n    const int32_t link_result = sent.domain == {prefix}_SEND_CODEC_ERROR ? WL_ERR_CORRUPT_PAYLOAD : sent.core_result;\n    result.detail.rpc.rpc_result = wl_rpc_client_link_failed(runtime->rpc_client, operation_id, link_result);\n    if (result.detail.rpc.rpc_result == WL_RPC_OK)\n      result.detail.rpc.rpc_result = wl_rpc_client_release(runtime->rpc_client, operation_id);\n    if (result.detail.rpc.rpc_result == WL_RPC_OK) result.detail.rpc.operation_id = 0U;\n    result.domain = sent.domain == {prefix}_SEND_CODEC_ERROR ? {prefix}_RUNTIME_CODEC_ERROR : {prefix}_RUNTIME_CORE_ERROR;\n    return result;\n  }}\n  result.detail.rpc.rpc_result = {transition};\n  result.domain = result.detail.rpc.rpc_result == WL_RPC_OK ? {prefix}_RUNTIME_OK : {prefix}_RUNTIME_RPC_ERROR;\n  return result;\n}}\n\n{module}_runtime_result_t {module}_{service_name}_client_start(wl_ctx_t *ctx, {module}_runtime_t *runtime, const {request}_t *request, uint32_t timeout_ms, wl_time_ms_t now_ms) {{\n  {module}_runtime_result_t result = {module}_runtime_result(NULL);\n  {module}_send_result_t sent;\n  {request}_t *encoded_request;\n  uint32_t operation_id = 0U;\n  result.message_id = {request_macro}_MESSAGE_ID;\n  result.detail_kind = {prefix}_RUNTIME_DETAIL_RPC;\n  if (ctx == NULL || runtime == NULL || runtime->rpc_client == NULL || request == NULL) return result;\n  if (runtime->rpc_encode_scratch == NULL) {{\n    result.domain = {prefix}_RUNTIME_MISSING_SCRATCH;\n    return result;\n  }}\n  encoded_request = &runtime->rpc_encode_scratch->{service_name}_request;\n  if ((const void *)request == (const void *)encoded_request) return result;\n  if (request->has_{operation_field} && request->{operation_field} != 0U) {{\n    operation_id = request->{operation_field};\n    result.detail.rpc.rpc_result = wl_rpc_client_begin_with_id(runtime->rpc_client, operation_id, {request_macro}_MESSAGE_ID, {response_macro}_MESSAGE_ID, timeout_ms, now_ms);\n  }} else {{\n    result.detail.rpc.rpc_result = wl_rpc_client_begin(runtime->rpc_client, {request_macro}_MESSAGE_ID, {response_macro}_MESSAGE_ID, timeout_ms, now_ms, &operation_id);\n  }}\n  result.detail.rpc.operation_id = operation_id;\n  if (result.detail.rpc.rpc_result != WL_RPC_OK) {{\n    result.domain = {prefix}_RUNTIME_RPC_ERROR;\n    return result;\n  }}\n  *encoded_request = *request;\n  encoded_request->has_{operation_field} = true;\n  encoded_request->{operation_field} = operation_id;\n  sent = {module}_{request}_send(ctx, encoded_request, {delivery});\n  return {module}_{service_name}_client_finish_start(runtime, operation_id, sent);\n}}\n\n"
+        "static {module}_runtime_result_t {module}_{service_name}_client_finish_start({module}_runtime_t *runtime, uint32_t operation_id, {codec_module}_send_result_t sent) {{\n  {module}_runtime_result_t result = {module}_runtime_result(NULL);\n  result.message_id = {request_macro}_MESSAGE_ID;\n  result.detail_kind = {prefix}_RUNTIME_DETAIL_RPC;\n  result.detail.rpc.operation_id = operation_id;\n  result.detail.rpc.codec_status = sent.codec_status;\n  result.detail.rpc.core_result = sent.core_result;\n  result.detail.rpc.handle = sent.handle;\n  result.detail.rpc.payload_length = sent.payload_length;\n  if (sent.domain == {codec_prefix}_SEND_CODEC_ERROR || sent.domain == {codec_prefix}_SEND_CORE_ERROR) {{\n    const int32_t link_result = sent.domain == {codec_prefix}_SEND_CODEC_ERROR ? WL_ERR_CORRUPT_PAYLOAD : sent.core_result;\n    result.detail.rpc.rpc_result = wl_rpc_client_link_failed(runtime->rpc_client, operation_id, link_result);\n    if (result.detail.rpc.rpc_result == WL_RPC_OK)\n      result.detail.rpc.rpc_result = wl_rpc_client_release(runtime->rpc_client, operation_id);\n    if (result.detail.rpc.rpc_result == WL_RPC_OK) result.detail.rpc.operation_id = 0U;\n    result.domain = sent.domain == {codec_prefix}_SEND_CODEC_ERROR ? {prefix}_RUNTIME_CODEC_ERROR : {prefix}_RUNTIME_CORE_ERROR;\n    return result;\n  }}\n  result.detail.rpc.rpc_result = {transition};\n  result.domain = result.detail.rpc.rpc_result == WL_RPC_OK ? {prefix}_RUNTIME_OK : {prefix}_RUNTIME_RPC_ERROR;\n  return result;\n}}\n\n{module}_runtime_result_t {module}_{service_name}_client_start(wl_ctx_t *ctx, {module}_runtime_t *runtime, const {request}_t *request, uint32_t timeout_ms, wl_time_ms_t now_ms) {{\n  {module}_runtime_result_t result = {module}_runtime_result(NULL);\n  {codec_module}_send_result_t sent;\n  {request}_t *encoded_request;\n  uint32_t operation_id = 0U;\n  result.message_id = {request_macro}_MESSAGE_ID;\n  result.detail_kind = {prefix}_RUNTIME_DETAIL_RPC;\n  if (ctx == NULL || runtime == NULL || runtime->rpc_client == NULL || request == NULL) return result;\n  if (runtime->rpc_encode_scratch == NULL) {{\n    result.domain = {prefix}_RUNTIME_MISSING_SCRATCH;\n    return result;\n  }}\n  encoded_request = &runtime->rpc_encode_scratch->{service_name}_request;\n  if ((const void *)request == (const void *)encoded_request) return result;\n  if (request->has_{operation_field} && request->{operation_field} != 0U) {{\n    operation_id = request->{operation_field};\n    result.detail.rpc.rpc_result = wl_rpc_client_begin_with_id(runtime->rpc_client, operation_id, {request_macro}_MESSAGE_ID, {response_macro}_MESSAGE_ID, timeout_ms, now_ms);\n  }} else {{\n    result.detail.rpc.rpc_result = wl_rpc_client_begin(runtime->rpc_client, {request_macro}_MESSAGE_ID, {response_macro}_MESSAGE_ID, timeout_ms, now_ms, &operation_id);\n  }}\n  result.detail.rpc.operation_id = operation_id;\n  if (result.detail.rpc.rpc_result != WL_RPC_OK) {{\n    result.domain = {prefix}_RUNTIME_RPC_ERROR;\n    return result;\n  }}\n  *encoded_request = *request;\n  encoded_request->has_{operation_field} = true;\n  encoded_request->{operation_field} = operation_id;\n  sent = {codec_module}_{request}_send(ctx, encoded_request, {delivery});\n  return {module}_{service_name}_client_finish_start(runtime, operation_id, sent);\n}}\n\n"
     )
     .unwrap();
     write!(

@@ -146,13 +146,14 @@ payload, not the Wirelink frame envelope; consumers targeting a narrower
 
 ## Generated typed bindings
 
-Compilation produces deterministic `<module>.h/.c`,
-`<module>_bindings.h/.c`, and `<module>_manifest.json` files. A profile adds
-`<module>_runtime.h/.c`. The codec files contain only the payload data model
-and codec and continue to depend solely on `wirelink/codec.h`. The binding
-files form a separate, optional translation unit which depends on the public
-`wirelink/link.h` API. A codec-only firmware therefore does not pull send,
-dispatch, or Wirelink core symbols into its link.
+Schema compilation produces deterministic `<module>.h/.c`,
+`<module>_bindings.h/.c`, and `<module>_manifest.json` files. A separate
+`compile-runtime` invocation produces only a named profile runtime and its
+manifest. The codec files contain only the payload data model and codec and
+continue to depend solely on `wirelink/codec.h`. The binding files form a
+separate translation unit which depends on the public `wirelink/link.h` API.
+A codec-only firmware therefore does not pull send, dispatch, or Wirelink core
+symbols into its link.
 
 The bindings header declares a module-prefixed router. Each message route has
 a strongly typed `int32_t` callback, caller-owned message scratch, and an
@@ -227,7 +228,7 @@ Adding, removing, increasing, or decreasing a string/bytes length bound is also
 incompatible. Existing reservations must remain reserved.
 
 The library API is `parse_schema()`, `analyze_schema()`,
-`check_compatibility()`, and `generate_c()`.
+`check_compatibility()`, `generate_c()`, and `generate_runtime_c_named()`.
 
 ## CLI usage
 
@@ -240,9 +241,10 @@ cargo run -- compile path/to/schema.wl \
   --previous path/to/previous.wl \
   --out-dir generated
 
-# Resolve an application policy sidecar and add the generated runtime files.
-cargo run -- compile path/to/schema.wl \
+# Resolve an application policy sidecar and generate only its runtime files.
+cargo run -- compile-runtime path/to/schema.wl \
   --profile path/to/device.bind.wl \
+  --runtime-name device_api \
   --out-dir generated
 
 # Print the exact schema/profile diagnostic identity pair.
@@ -284,10 +286,12 @@ rpc Home {
 }
 ```
 
-Use `--profile path/to/device.bind.wl` with `validate` or `compile`. Profiled
-compilation adds `<module>_runtime.h/.c` while leaving the four existing codec
-and binding artifacts byte-for-byte unchanged. Every compile also writes a
-deterministic `<module>_manifest.json`. The runtime header embeds the
+Use `--profile path/to/device.bind.wl` with `validate`, or use
+`compile-runtime` after compiling the schema. Runtime compilation writes only
+`<runtime-name>_runtime.h/.c` and its own manifest; `--runtime-name` gives
+asymmetric roles independent C namespaces while they include and call the
+schema-stem codec/binding artifacts. The legacy `compile --profile` composition
+remains available for one-runtime callers. The runtime header embeds the
 separate schema/profile diagnostic identities. Its generated dispatcher
 decodes a retained message directly into a `wl_latest_t` or `wl_fifo_t` write
 claim, publishes only after successful decode, aborts every failed claim, and

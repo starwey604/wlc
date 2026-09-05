@@ -34,6 +34,66 @@ fn compile_help_describes_profile_runtime_generation() {
 }
 
 #[test]
+fn compile_runtime_writes_only_named_profile_artifacts() {
+    let directory = tempdir().unwrap();
+    let schema = directory.path().join("control.wl");
+    let profile = directory.path().join("device.bind.wl");
+    let output = directory.path().join("generated");
+    fs::write(
+        &schema,
+        "version 1; message State = 1 { optional uint32 sequence = 1; }",
+    )
+    .unwrap();
+    fs::write(
+        &profile,
+        "profile version 1; latest State { delivery = unreliable; }",
+    )
+    .unwrap();
+
+    Command::cargo_bin("wlc")
+        .unwrap()
+        .args([
+            "compile",
+            schema.to_str().unwrap(),
+            "--out-dir",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let codec_manifest = fs::read(output.join("control_manifest.json")).unwrap();
+
+    Command::cargo_bin("wlc")
+        .unwrap()
+        .args([
+            "compile-runtime",
+            schema.to_str().unwrap(),
+            "--profile",
+            profile.to_str().unwrap(),
+            "--runtime-name",
+            "device_api",
+            "--out-dir",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert_eq!(
+        fs::read(output.join("control_manifest.json")).unwrap(),
+        codec_manifest
+    );
+    let header = fs::read_to_string(output.join("device_api_runtime.h")).unwrap();
+    let source = fs::read_to_string(output.join("device_api_runtime.c")).unwrap();
+    let manifest = fs::read_to_string(output.join("device_api_runtime_manifest.json")).unwrap();
+    assert!(header.contains("#include \"control_bindings.h\""));
+    assert!(header.contains("device_api_runtime_t"));
+    assert!(source.contains("device_api_runtime_dispatch_event"));
+    assert!(manifest.contains("\"module\": \"device_api\""));
+    assert!(manifest.contains("\"binding_profile\": \"0x"));
+    assert!(manifest.contains("\"path\": \"device_api_runtime.c\""));
+    assert_eq!(fs::read_dir(output).unwrap().count(), 8);
+}
+
+#[test]
 fn compile_writes_named_c_artifacts() {
     let directory = tempdir().expect("temporary directory");
     let schema = directory.path().join("motor_api.wl");

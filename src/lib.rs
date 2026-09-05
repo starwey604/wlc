@@ -20,5 +20,7 @@ pub use manifest::{
 pub use parser::{ParseError, parse_schema};
 pub use profile::{BindingProfile, ProfileParseError, parse_binding_profile};
 pub use profile_semantic::{BindingProfileModel, ProfileSemanticErrors, analyze_binding_profile};
-pub use runtime_codegen::{GeneratedRuntimeC, RuntimeCodegenError, generate_runtime_c};
+pub use runtime_codegen::{
+    GeneratedRuntimeC, RuntimeCodegenError, generate_runtime_c, generate_runtime_c_named,
+};
 pub use semantic::{SemanticErrors, SemanticModel, analyze_schema, check_compatibility};

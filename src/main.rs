@@ -38,6 +38,22 @@ enum Command {
         #[arg(long)]
         profile: Option<PathBuf>,
     },
+    /// Generate only one profile runtime against separately generated schema artifacts.
+    CompileRuntime {
+        schema: PathBuf,
+        /// Binding profile used to specialize the runtime.
+        #[arg(long)]
+        profile: PathBuf,
+        /// Destination directory for generated artifacts.
+        #[arg(long)]
+        out_dir: PathBuf,
+        /// Public C prefix and filename stem; defaults to the schema stem.
+        #[arg(long)]
+        runtime_name: Option<String>,
+        /// Check SCHEMA for compatibility with this predecessor.
+        #[arg(long)]
+        previous: Option<PathBuf>,
+    },
     /// Print exact diagnostic identities; not a compatibility or security check.
     Identity {
         schema: PathBuf,
@@ -50,7 +66,17 @@ enum Command {
 enum Operation {
     Validate,
     Compile(PathBuf),
+    CompileRuntime {
+        output: PathBuf,
+        runtime_name: Option<String>,
+    },
     Identity,
+}
+
+fn is_portable_c_identifier(value: &str) -> bool {
+    let mut characters = value.chars();
+    matches!(characters.next(), Some('_' | 'a'..='z' | 'A'..='Z'))
+        && characters.all(|character| character == '_' || character.is_ascii_alphanumeric())
 }
 
 fn main() -> Result<()> {
@@ -67,6 +93,21 @@ fn main() -> Result<()> {
             previous,
             profile,
         } => (schema, previous, profile, Operation::Compile(out_dir)),
+        Command::CompileRuntime {
+            schema,
+            profile,
+            out_dir,
+            runtime_name,
+            previous,
+        } => (
+            schema,
+            previous,
+            Some(profile),
+            Operation::CompileRuntime {
+                output: out_dir,
+                runtime_name,
+            },
+        ),
         Command::Identity { schema, profile } => (schema, None, profile, Operation::Identity),
     };
     let source = fs::read_to_string(&schema_path)
@@ -181,6 +222,60 @@ fn main() -> Result<()> {
                     output.display()
                 );
             }
+        }
+        Operation::CompileRuntime {
+            output,
+            runtime_name,
+        } => {
+            fs::create_dir_all(&output).into_diagnostic()?;
+            let codec_module = schema_path
+                .file_stem()
+                .and_then(|value| value.to_str())
+                .unwrap_or("wirelink_generated");
+            let runtime_name = runtime_name.as_deref().unwrap_or(codec_module);
+            if !is_portable_c_identifier(runtime_name) {
+                return Err(miette::miette!(
+                    "runtime name `{runtime_name}` must be a portable C identifier"
+                ));
+            }
+            let profile = profile_model
+                .as_ref()
+                .expect("compile-runtime always resolves a required profile");
+            let generated =
+                wlc::generate_runtime_c_named(&model, profile, codec_module, runtime_name)
+                    .map_err(miette::Report::new)?;
+            let artifacts = [
+                (format!("{runtime_name}_runtime.h"), generated.header),
+                (format!("{runtime_name}_runtime.c"), generated.source),
+            ];
+            let manifest_artifacts = artifacts
+                .iter()
+                .map(|(path, contents)| wlc::ManifestArtifact {
+                    path,
+                    contents: contents.as_bytes(),
+                })
+                .collect::<Vec<_>>();
+            let manifest = wlc::generate_codegen_manifest(
+                runtime_name,
+                &model,
+                Some(wlc::binding_profile_identity(profile)),
+                &manifest_artifacts,
+            );
+            for (path, contents) in artifacts {
+                fs::write(output.join(path), contents).into_diagnostic()?;
+            }
+            fs::write(
+                output.join(format!("{runtime_name}_runtime_manifest.json")),
+                manifest,
+            )
+            .into_diagnostic()?;
+            println!(
+                "generated {}_runtime.h/.c and {}_runtime_manifest.json against codec module {} in {}",
+                runtime_name,
+                runtime_name,
+                codec_module,
+                output.display()
+            );
         }
         Operation::Validate => println!(
             "validated {} (version {}, {} declaration(s))",

@@ -1,6 +1,6 @@
 use wlc::{
-    analyze_binding_profile, analyze_schema, generate_runtime_c, parse_binding_profile,
-    parse_schema,
+    analyze_binding_profile, analyze_schema, generate_runtime_c, generate_runtime_c_named,
+    parse_binding_profile, parse_schema,
 };
 
 fn schema(source: &str) -> wlc::SemanticModel {
@@ -276,6 +276,44 @@ message State = 1 { optional uint32 sequence = 1; }
             .source
             .contains("init_failed:\n  memset(instance, 0, sizeof(*instance));")
     );
+}
+
+#[test]
+fn named_runtime_keeps_codec_and_runtime_namespaces_separate() {
+    let schema = schema(
+        r#"version 1;
+enum Status = 1 { OK = 0; }
+message Request = 2 { optional uint32 operation_id = 1; }
+message Response = 3 {
+  optional uint32 operation_id = 1;
+  optional Status status = 2;
+}
+"#,
+    );
+    let profile = profile(
+        r#"profile version 1;
+rpc Execute {
+  request = Request;
+  response = Response;
+  request_operation_id = operation_id;
+  response_operation_id = operation_id;
+  response_status = status;
+  request_delivery = reliable;
+  response_delivery = reliable;
+}
+"#,
+        &schema,
+    );
+    let runtime = generate_runtime_c_named(&schema, &profile, "codec_api", "device_api").unwrap();
+
+    assert!(runtime.header.contains("#include \"codec_api_bindings.h\""));
+    assert!(runtime.header.contains("device_api_runtime_t"));
+    assert!(runtime.header.contains("DEVICE_API_RUNTIME_OK"));
+    assert!(runtime.header.contains("codec_api_encode_scratch_t"));
+    assert!(runtime.source.contains("codec_api_send_result_t sent"));
+    assert!(runtime.source.contains("codec_api_request_send("));
+    assert!(runtime.source.contains("CODEC_API_SEND_CODEC_ERROR"));
+    assert!(!runtime.source.contains("device_api_request_send("));
 }
 
 #[test]
