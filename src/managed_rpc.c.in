@@ -39,7 +39,7 @@
   }
   result.detail.rpc.payload_length = encoded_length + 12U;
   result.detail.rpc.core_result = wl_tx_payload_commit(ctx, &claim,
-      encoded_length + 12U, &result.detail.rpc.handle);
+      encoded_length + 12U, now_ms, &result.detail.rpc.handle);
   if (result.detail.rpc.core_result != WL_OK) {
     result.domain = @P@_RUNTIME_CORE_ERROR;
     goto start_failed;

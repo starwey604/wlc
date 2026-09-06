@@ -91,7 +91,8 @@ int wl_send_unreliable(wl_ctx_t *ctx, uint16_t message_id,
 
 int wl_send_reliable(wl_ctx_t *ctx, uint16_t message_id,
                      const uint8_t *payload, size_t payload_len,
-                     wl_tx_handle_t *out_handle) {
+                     wl_time_ms_t now_ms, wl_tx_handle_t *out_handle) {
+  (void)now_ms;
   (void)ctx;
   (void)message_id;
   (void)payload;
@@ -111,7 +112,8 @@ int wl_tx_payload_claim(wl_ctx_t *ctx, uint16_t message_id,
 }
 
 int wl_tx_payload_commit(wl_ctx_t *ctx, const wl_tx_payload_claim_t *claim,
-                         size_t payload_len, wl_tx_handle_t *out_handle) {
+                         size_t payload_len, wl_time_ms_t now_ms, wl_tx_handle_t *out_handle) {
+  (void)now_ms;
   (void)ctx;
   (void)claim;
   (void)payload_len;

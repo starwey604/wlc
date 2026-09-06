@@ -173,7 +173,7 @@ fn managed_rpc_runs_real_core_and_shared_codec_for_all_deliveries() {
                 ("demo_runtime.h", runtime.header), ("demo_runtime.c", runtime.source),
                 ("peer_runtime.h", peer.header), ("peer_runtime.c", peer.source),
                 ("test.c", include_str!("fixtures/managed_rpc.c").to_owned()),
-                ("headers.cpp", "#include \"demo_runtime.h\"\n#include \"peer_runtime.h\"\nstatic demo_endpoint_t a;\nstatic peer_endpoint_t b;\nint main() { return demo_endpoint_init(&a, 1) + peer_endpoint_init(&b, 2); }\n".to_owned()),
+                ("headers.cpp", "#include \"demo_runtime.h\"\n#include \"peer_runtime.h\"\nstatic demo_endpoint_t a;\nstatic peer_endpoint_t b;\nint main() { return demo_endpoint_init(&a, 1, wl_clock_t{}) + peer_endpoint_init(&b, 2, wl_clock_t{}); }\n".to_owned()),
             ] { fs::write(temp.path().join(name), text).unwrap(); }
             let mut cc = Command::new("cc");
             cc.args(["-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Werror"])

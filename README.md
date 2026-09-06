@@ -20,7 +20,7 @@ records `compiler.codegen_abi`. Build integrations should pin both rather than
 following a branch or the newest release.
 
 `wlc codegen-abi` prints this revision without requiring a schema. Current
-development generates ABI 20. It provides default endpoint assembly for each bounded
+development generates ABI 21. It provides default endpoint assembly for each bounded
 profile's runtime header: `*_endpoint_t`, `init`/`init_config`, `step`/`close`,
 profile-selected `endpoint_send_*` and copying `endpoint_read_*` operations,
 plus managed RPC call handles and typed inspect/release/cancel/complete/reject.
@@ -221,7 +221,7 @@ handler status. Per-domain router counters saturate at `UINT32_MAX` rather
 than wrapping.
 
 Every message has one module-prefixed `<module>_<message>_send()` function. It
-takes an explicit `wl_delivery_t`, claims the final core TX payload span,
+takes `(ctx, message, wl_delivery_t delivery, wl_time_ms_t now_ms)`, claims the final core TX payload span,
 encodes directly into that span, and commits without an intermediate copy.
 The returned struct preserves codec status, raw core result, encoded length,
 and a reliable handle. A claim error such as `WL_ERR_NOT_SUPPORTED` is returned
@@ -312,8 +312,8 @@ Attributes belong to bindings, not schema messages. Explicit reliable attributes
 omitted defaults and legacy `request_delivery`/`response_delivery` properties
 generate identical code, manifests and identities. Declaring the same direction's
 policy twice is an error, even when values agree. LATEST/FIFO delivery remains
-explicit. This syntax extension preserves codegen ABI 20 and existing wire bytes;
-use the matching development compiler, since earlier ABI 20 builds lack the parser.
+explicit. These attributes were introduced without an ABI bump during ABI 20;
+the clock API now requires ABI 21. The syntax itself still does not change wire bytes.
 
 Omitting all three operation/status mappings selects managed RPC: the `.wl`
 messages contain only business fields. The runtime owns a versioned 12-byte
@@ -542,10 +542,17 @@ session and do not trigger this point-to-point transition path.
 Steady-state requests compare the already observed session inline and skip the
 observer/cancellation path entirely.
 
-All generated `now_ms` arguments, `wl_poll()`, RPC poll functions, and deadline
+Default endpoints accept `wl_clock_t` at initialization and no longer expose
+`now_ms` on step/call/complete/reject. A pass samples once; inline replies reuse
+its time, and an outside reliable call samples once for link and RPC deadlines.
+Unreliable endpoint sends do not read the clock. Descriptor context lives through
+close; the core never selects an OS clock.
+
+All advanced generated `now_ms` arguments, `wl_poll()`, RPC poll functions, and deadline
 hints must use one monotonic millisecond clock and epoch. Generated dispatch
-passes time into server duplicate tracking but does not advance client/server
-expiry. RPC profiles emit a runtime poll wrapper that advances each enabled
+passes time into server duplicate tracking and reclaims expired delivered cache
+entries during admission; it does not advance client or pending-server expiry.
+RPC profiles emit a runtime poll wrapper that advances each enabled
 role and reports per-call client timeout, server pending-expiry, and cache-expiry
 counts. A side-effect-free deadline-hint wrapper returns the nearest enabled
 role deadline (`0` means due and `WL_RPC_NO_DEADLINE_MS` means none), allowing a

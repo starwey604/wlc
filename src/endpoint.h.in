@@ -10,6 +10,7 @@
 
 typedef struct {
   wl_config_t link;
+  wl_clock_t clock;
   @M@_runtime_config_t runtime;
   size_t event_budget;
   @M@_runtime_result_fn on_result;
@@ -87,6 +88,7 @@ static inline wl_err_t @M@_endpoint_init_config(
     return WL_ERR_INVALID_ARG;
   if (wl_endpoint_link(@M@_endpoint_handle(endpoint)) != NULL)
     return WL_ERR_INVALID_STATE;
+  if (config->clock.now_ms == NULL) return WL_ERR_INVALID_ARG;
 @RPC_BEGIN_INIT@
   memset(&link_storage, 0, sizeof(link_storage));
   link_storage.tx_payload = endpoint->private_state.tx_payload;
@@ -108,7 +110,7 @@ static inline wl_err_t @M@_endpoint_init_config(
   if (result != WL_OK) return result;
   hooks = @M@_runtime_pump_hooks(&endpoint->private_state.pump);
   result = wl_endpoint_init(&endpoint->private_state.owner, &config->link,
-                            &link_storage, &hooks);
+                            &link_storage, &config->clock, &hooks);
   if (result != WL_OK) return result;
   endpoint->private_state.on_result = config->on_result;
   endpoint->private_state.user_data = config->user_data;
@@ -117,21 +119,23 @@ static inline wl_err_t @M@_endpoint_init_config(
   return WL_OK;
 }
 
-static inline wl_err_t @M@_endpoint_init(@M@_endpoint_t *endpoint, uint64_t session_id) {
+static inline wl_err_t @M@_endpoint_init(@M@_endpoint_t *endpoint, uint64_t session_id,
+                                        wl_clock_t clock) {
   @M@_endpoint_config_t config;
   int result = @M@_endpoint_config_defaults(&config, session_id);
+  config.clock = clock;
   return result == WL_OK ? @M@_endpoint_init_config(endpoint, &config) : result;
 }
 
 /* One bounded owner pass: service transport, dispatch and release events,
  * advance RPC work. NO_DATA/backpressure during transport service is normal.
  * Inspect endpoint_result/last_step for details when this returns an error. */
-static inline wl_err_t @M@_endpoint_step(@M@_endpoint_t *endpoint, wl_time_ms_t now_ms) {
+static inline wl_err_t @M@_endpoint_step(@M@_endpoint_t *endpoint) {
   int result;
   if (endpoint == NULL) return WL_ERR_INVALID_ARG;
   memset(&endpoint->private_state.result, 0, sizeof(endpoint->private_state.result));
 @RPC_STEP_BEGIN@
-  result = wl_endpoint_step(&endpoint->private_state.owner, now_ms,
+  result = wl_endpoint_step(&endpoint->private_state.owner,
                              endpoint->private_state.event_budget);
 @RPC_STEP_END@
   if (result != WL_OK) return result;

@@ -7,7 +7,9 @@
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "%d: %s\n", __LINE__, #x); return 1; } } while (0)
 static demo_endpoint_t a, b;
 static wl_loopback_t cable;
-static wl_time_ms_t now;
+static wl_time_ms_t now = 60000U;
+static unsigned clock_reads;
+static wl_time_ms_t read_clock(void *user) { (void)user; ++clock_reads; return now; }
 static demo_execute_request_token_t tokens[8];
 static unsigned calls;
 static int32_t inputs[8];
@@ -25,7 +27,7 @@ static uint8_t cached_responses[4][18];
 static void observe(void *context, const demo_runtime_result_t *result) {
   if (reply_on_unknown && result->domain == DEMO_RUNTIME_UNKNOWN_MESSAGE) {
     reply_on_unknown = false;
-    observer_reply = demo_endpoint_execute_reject(context, &observer_token, 7, now);
+    observer_reply = demo_endpoint_execute_reject(context, &observer_token, 7);
   }
 }
 
@@ -41,8 +43,10 @@ static int32_t execute(void *user, const request_t *request,
 
 static int drain(void) {
   for (unsigned i = 0U; i < 8U; ++i, ++now) {
-    CHECK(demo_endpoint_step(&a, now) == WL_OK);
-    CHECK(demo_endpoint_step(&b, now) == WL_OK);
+    const unsigned before = clock_reads;
+    CHECK(demo_endpoint_step(&a) == WL_OK);
+    CHECK(demo_endpoint_step(&b) == WL_OK);
+    CHECK(clock_reads == before + 2U); /* Includes nested observer replies. */
   }
   return 0;
 }
@@ -62,6 +66,7 @@ static int init(void) {
   cb.runtime.execute_request_handler = execute;
   cb.on_result = observe;
   cb.user_data = &b;
+  ca.clock = cb.clock = (wl_clock_t){read_clock, NULL};
   CHECK(demo_endpoint_init_config(&a, &ca) == WL_OK);
   CHECK(demo_endpoint_init_config(&b, &cb) == WL_OK);
   // Advanced test storage permits two concurrent calls, beyond the one-slot default.
@@ -79,7 +84,9 @@ static int call(int32_t value, uint32_t timeout, demo_execute_call_t *out) {
   request_clear(&request);
   request.has_input = true;
   request.input = value;
-  CHECK(demo_endpoint_execute_call(&a, &request, timeout, now, out) == WL_RPC_OK);
+  const unsigned before = clock_reads;
+  CHECK(demo_endpoint_execute_call(&a, &request, timeout, out) == WL_RPC_OK);
+  CHECK(clock_reads == before + 1U);
   CHECK(request.input == value && request.has_input);
   return drain();
 }
@@ -89,7 +96,9 @@ static int complete(unsigned index, int32_t value) {
   response_clear(&response);
   response.has_output = true;
   response.output = value;
-  CHECK(demo_endpoint_execute_complete(&b, &tokens[index], &response, now) == WL_RPC_OK);
+  const unsigned before = clock_reads;
+  CHECK(demo_endpoint_execute_complete(&b, &tokens[index], &response) == WL_RPC_OK);
+  CHECK(clock_reads == before + 1U);
   return drain();
 }
 
@@ -117,7 +126,8 @@ static int inject(demo_endpoint_t *endpoint, uint16_t id, const uint8_t *data,
   packet.payload_len = length;
   CHECK(wl_frame_encode(&packet, WL_ENVELOPE_NATIVE_PACKET, wire, sizeof(wire), &written) == WL_OK);
   CHECK(wl_feed_unit(wl_endpoint_link(demo_endpoint_handle(endpoint)), wire, written) == WL_OK);
-  CHECK(demo_endpoint_step(endpoint, now++) == expected);
+  CHECK(demo_endpoint_step(endpoint) == expected);
+  ++now;
   return 0;
 }
 
@@ -197,7 +207,7 @@ int main(void) {
   CHECK(drain() == 0);
   CHECK(call(-1, 1000U, &first) == 0);
   CHECK(demo_endpoint_execute_inspect(&a, &saved, &result) == WL_RPC_ERR_NOT_FOUND);
-  completed = demo_endpoint_execute_reject(&b, &tokens[2], INT32_MIN, now);
+  completed = demo_endpoint_execute_reject(&b, &tokens[2], INT32_MIN);
   CHECK(completed == WL_RPC_OK && demo_endpoint_result(&b)->detail.rpc.payload_length == 12U);
   CHECK(drain() == 0);
   CHECK(demo_endpoint_execute_inspect(&a, &first, &result) == WL_RPC_OK);
@@ -215,7 +225,7 @@ int main(void) {
   CHECK(demo_endpoint_execute_inspect(&a, &first, &result) == WL_RPC_OK && !result.response_valid);
   CHECK(demo_endpoint_execute_release(&a, &first) == WL_RPC_OK);
   request_clear(&missing);
-  CHECK(demo_endpoint_execute_call(&a, &missing, 10U, now, &second) != WL_RPC_OK);
+  CHECK(demo_endpoint_execute_call(&a, &missing, 10U, &second) != WL_RPC_OK);
   CHECK(demo_endpoint_result(&a)->domain == DEMO_RUNTIME_CODEC_ERROR);
   CHECK(call(4, 1000U, &first) == 0); /* Failed encode did not leak a slot/claim. */
   saved = first;
@@ -228,9 +238,9 @@ int main(void) {
   response_clear(&response);
   response.has_output = true;
   response.output = 6;
-  completed = demo_endpoint_execute_complete(&b, &old_token, &response, now);
+  completed = demo_endpoint_execute_complete(&b, &old_token, &response);
   CHECK(completed != WL_RPC_OK);
-  completed = demo_endpoint_execute_complete(&a, &tokens[0], &response, now);
+  completed = demo_endpoint_execute_complete(&a, &tokens[0], &response);
   CHECK(completed != WL_RPC_OK);
   CHECK(complete(0U, 6) == 0);
   CHECK(demo_endpoint_execute_release(&a, &first) == WL_RPC_OK);
@@ -247,7 +257,7 @@ int main(void) {
   CHECK(demo_endpoint_execute_release(&a, &first) == WL_RPC_OK);
   // Empty business messages are valid and carry only managed metadata.
   auxiliary_request_clear(&auxiliary);
-  CHECK(demo_endpoint_auxiliary_call(&a, &auxiliary, 10U, now, &wrong_service) == WL_RPC_OK);
+  CHECK(demo_endpoint_auxiliary_call(&a, &auxiliary, 10U, &wrong_service) == WL_RPC_OK);
   CHECK(demo_endpoint_auxiliary_cancel(&a, &wrong_service) == WL_RPC_OK);
   CHECK(demo_endpoint_auxiliary_release(&a, &wrong_service) == WL_RPC_OK);
   demo_endpoint_close(&a);

@@ -51,7 +51,7 @@ fn default_endpoints_compile_and_run_with_real_core() {
         ("demo_runtime.h", generated.header), ("demo_runtime.c", generated.source),
         ("peer_runtime.h", alternate.header), ("peer_runtime.c", alternate.source),
         ("test.c", include_str!("fixtures/default_endpoint.c").to_owned()),
-        ("headers.cpp", "#include \"demo_runtime.h\"\n#include \"peer_runtime.h\"\nstatic demo_endpoint_t a;\nstatic peer_endpoint_t b;\nint main() { return demo_endpoint_init(&a, 1) + peer_endpoint_init(&b, 2); }\n".to_owned()),
+        ("headers.cpp", "#include \"demo_runtime.h\"\n#include \"peer_runtime.h\"\nstatic demo_endpoint_t a;\nstatic peer_endpoint_t b;\nint main() { return demo_endpoint_init(&a, 1, wl_clock_t{}) + peer_endpoint_init(&b, 2, wl_clock_t{}); }\n".to_owned()),
     ] { fs::write(temp.path().join(name), contents).unwrap(); }
     let root = std::env::var_os("WIRELINK_SOURCE_DIR")
         .map(PathBuf::from)

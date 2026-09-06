@@ -14,6 +14,8 @@ compiler version 与 generated-code ABI 是两个兼容轴。`wlc --version` 报
 manifest 的 `compiler.codegen_abi` 记录生成 ABI；build 必须同时 pin 两者，不能跟随 branch
 或自动使用最新版。
 
+当前 `wlc codegen-abi` 输出 21；核心和所有生成消费者必须配套重建。
+
 ## Schema Grammar
 
 完整 grammar 和 wire 约束见 [Wirelink schema 文档](https://github.com/starwey604/wirelink/blob/dev/wirelink-p0-hardening/docs/schema-v1-cn.md)。所有
@@ -149,7 +151,8 @@ RPC 请求、响应各自默认 `reliable`。有特殊需要才覆盖一个方�
 `request = HomeRequest @delivery(unreliable);`。属性属于绑定，不属于 schema 消息。
 省略默认值、显式可靠属性、旧 `request_delivery`／`response_delivery` 属性生成相同的
 代码、manifest 和标识。同一方向重复声明一律报错，即使值相同。LATEST／FIFO 仍显式指定策略。
-这是语法扩展，不改变生成 ABI 20 或既有字节；较早的 ABI 20 编译器没有新解析器，仍需使用配套提交。
+这些属性在 ABI 20 期间作为语法扩展加入；当前时钟 API 要求 ABI 21。
+属性语法本身仍不改变编码字节，需使用配套提交。
 
 三个编号／状态映射全部省略，即选择托管 RPC，`.wl` 只定义业务参数。
 runtime 管理 12 字节前缀：零区分字节、版本、请求／响应类型、保留零、
@@ -252,7 +255,13 @@ re-encode 后计算 domain-tagged fingerprint，按 NEW/PENDING_DUPLICATE/REPLAY
 
 异步 completion 必须复制包含 peer session 的 identity。ABI 18 在可靠 request 前自动观察
 session；切换清理旧工作并请求取消 detached response，`peer_changed` 和 take API 通知产品。
-所有 `now_ms`/poll/hint 使用同一 monotonic ms clock。link ARQ、client deadline、server
+ABI 21 默认端点在初始化时接收 `wl_clock_t`（简便 init 的第三参数或 `config.clock`），
+step/call/complete/reject 不再传 `now_ms`。每轮取一次时间，立即回复复用它；
+step 外可靠提交取一次供链路/RPC 共用，unreliable 端点发送不取时钟。
+描述符复制，上下文借用到 close；核心不选择操作系统时钟。
+codec binding 的 `*_send` 在 `delivery` 后新增 `now_ms`，unreliable 时忽略该值。
+
+高级路径所有 `now_ms`/poll/hint 使用同一 monotonic ms clock。link ARQ、client deadline、server
 replay cache 是独立机制；runtime 不自动端到端重试。
 
 ## Identity 与 Manifest

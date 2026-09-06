@@ -32,14 +32,16 @@ typedef struct {
 /* On success out_call identifies this invocation. On failure it is cleared;
  * endpoint_result retains detailed codec/link diagnostics. */
 static inline wl_rpc_err_t @M@_endpoint_@S@_call(@M@_endpoint_t *endpoint,
-    const @REQ@_t *request, uint32_t timeout_ms, wl_time_ms_t now_ms,
+    const @REQ@_t *request, uint32_t timeout_ms,
     @M@_@S@_call_t *out_call) {
   @M@_runtime_t *runtime = @M@_endpoint_runtime(endpoint);
   @M@_runtime_result_t result;
   wl_rpc_err_t error;
+  wl_time_ms_t now_ms;
   if (out_call == NULL) return WL_RPC_ERR_INVALID_ARG;
   memset(out_call, 0, sizeof(*out_call));
   if (runtime == NULL) return WL_RPC_ERR_NOT_INITIALIZED;
+  (void)wl_endpoint_now(@M@_endpoint_handle(endpoint), &now_ms);
   result = @M@_@S@_client_start(wl_endpoint_link(@M@_endpoint_handle(endpoint)),
       runtime, request, timeout_ms, now_ms);
   error = @M@_endpoint_@S@_record_result(endpoint, &result);
@@ -114,20 +116,22 @@ static inline wl_rpc_err_t @M@_endpoint_@S@_cancel(@M@_endpoint_t *endpoint,
 
 /* Reply submission returns an RPC error code, not a generic runtime result. */
 static inline wl_rpc_err_t @M@_endpoint_@S@_complete(@M@_endpoint_t *endpoint,
-    const @M@_@S@_request_token_t *token, const @RES@_t *response,
-    wl_time_ms_t now_ms) {
+    const @M@_@S@_request_token_t *token, const @RES@_t *response) {
   @M@_runtime_t *runtime = @M@_endpoint_runtime(endpoint);
   @M@_runtime_result_t result;
+  wl_time_ms_t now_ms;
   if (runtime == NULL) return WL_RPC_ERR_NOT_INITIALIZED;
+  (void)wl_endpoint_now(@M@_endpoint_handle(endpoint), &now_ms);
   result = @M@_@S@_server_complete(runtime, token, response, now_ms);
   return @M@_endpoint_@S@_record_result(endpoint, &result);
 }
 static inline wl_rpc_err_t @M@_endpoint_@S@_reject(@M@_endpoint_t *endpoint,
-    const @M@_@S@_request_token_t *token, int32_t application_status,
-    wl_time_ms_t now_ms) {
+    const @M@_@S@_request_token_t *token, int32_t application_status) {
   @M@_runtime_t *runtime = @M@_endpoint_runtime(endpoint);
   @M@_runtime_result_t result;
+  wl_time_ms_t now_ms;
   if (runtime == NULL) return WL_RPC_ERR_NOT_INITIALIZED;
+  (void)wl_endpoint_now(@M@_endpoint_handle(endpoint), &now_ms);
   result = @M@_@S@_server_reject(runtime, token, application_status, now_ms);
   return @M@_endpoint_@S@_record_result(endpoint, &result);
 }
