@@ -303,10 +303,17 @@ fifo AlarmEvent {
 rpc Home {
   request = HomeRequest;
   response = HomeResponse;
-  request_delivery = reliable;
-  response_delivery = reliable;
 }
 ```
+
+RPC request and response delivery each default to `reliable`. Override only the
+direction that needs it: `request = HomeRequest @delivery(unreliable);`.
+Attributes belong to bindings, not schema messages. Explicit reliable attributes,
+omitted defaults and legacy `request_delivery`/`response_delivery` properties
+generate identical code, manifests and identities. Declaring the same direction's
+policy twice is an error, even when values agree. LATEST/FIFO delivery remains
+explicit. This syntax extension preserves codegen ABI 20 and existing wire bytes;
+use the matching development compiler, since earlier ABI 20 builds lack the parser.
 
 Omitting all three operation/status mappings selects managed RPC: the `.wl`
 messages contain only business fields. The runtime owns a versioned 12-byte

@@ -165,15 +165,9 @@ fn profile_parser_reports_unknown_duplicate_and_missing_rpc_properties() {
             .contains("duplicate RPC property `request`")
     );
 
-    let missing = parse_binding_profile(
-        "profile version 1; rpc Bad { request = StartRequest; response = StartResponse; }",
-    )
-    .unwrap_err();
-    assert!(
-        missing
-            .message
-            .contains("missing RPC property `request_delivery`")
-    );
+    let missing = parse_binding_profile("profile version 1; rpc Bad { request = StartRequest; }")
+        .unwrap_err();
+    assert!(missing.message.contains("missing RPC property `response`"));
 }
 
 #[test]

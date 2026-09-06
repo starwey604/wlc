@@ -76,6 +76,9 @@ enum TokenKind {
     Semicolon,
     LeftBrace,
     RightBrace,
+    At,
+    LeftParen,
+    RightParen,
     End,
 }
 
@@ -136,6 +139,18 @@ impl Lexer<'_> {
             '}' => {
                 self.advance();
                 TokenKind::RightBrace
+            }
+            '@' => {
+                self.advance();
+                TokenKind::At
+            }
+            '(' => {
+                self.advance();
+                TokenKind::LeftParen
+            }
+            ')' => {
+                self.advance();
+                TokenKind::RightParen
             }
             '0'..='9' => self.read_number(span)?,
             '_' | 'a'..='z' | 'A'..='Z' => self.read_identifier(),
@@ -287,6 +302,28 @@ impl Parser {
             let property = self.word("RPC property name")?;
             self.expect_symbol(TokenKind::Equal, "`=` after RPC property")?;
             let value = self.word("RPC property value")?;
+            if self.current().kind == TokenKind::At {
+                let delivery = match property.value.as_str() {
+                    "request" => &mut request_delivery,
+                    "response" => &mut response_delivery,
+                    _ => {
+                        return Err(self.error_current(
+                            "@delivery is only allowed on RPC request and response bindings",
+                        ));
+                    }
+                };
+                if delivery.is_some() {
+                    return Err(self.error_current("duplicate RPC delivery policy"));
+                }
+                self.advance();
+                self.expect_word("delivery")?;
+                self.expect_symbol(TokenKind::LeftParen, "`(` after `@delivery`")?;
+                *delivery = Some(self.word("delivery value")?);
+                self.expect_symbol(TokenKind::RightParen, "`)` after delivery value")?;
+                if self.current().kind == TokenKind::At {
+                    return Err(self.error_current("duplicate RPC delivery annotation"));
+                }
+            }
             self.expect_symbol(TokenKind::Semicolon, "`;` after RPC property")?;
             let target = match property.value.as_str() {
                 "request" => &mut request,
@@ -320,16 +357,14 @@ impl Parser {
             request_operation_id,
             response_operation_id,
             response_status,
-            request_delivery: required_property(
-                request_delivery,
-                "request_delivery",
-                closing_span,
-            )?,
-            response_delivery: required_property(
-                response_delivery,
-                "response_delivery",
-                closing_span,
-            )?,
+            request_delivery: request_delivery.unwrap_or_else(|| Spanned {
+                value: "reliable".to_owned(),
+                span: closing_span,
+            }),
+            response_delivery: response_delivery.unwrap_or_else(|| Spanned {
+                value: "reliable".to_owned(),
+                span: closing_span,
+            }),
         })
     }
 

@@ -142,10 +142,14 @@ fifo AlarmEvent { delivery = reliable; }
 rpc Home {
   request = HomeRequest;
   response = HomeResponse;
-  request_delivery = reliable;
-  response_delivery = reliable;
 }
 ```
+
+RPC 请求、响应各自默认 `reliable`。有特殊需要才覆盖一个方向，例如
+`request = HomeRequest @delivery(unreliable);`。属性属于绑定，不属于 schema 消息。
+省略默认值、显式可靠属性、旧 `request_delivery`／`response_delivery` 属性生成相同的
+代码、manifest 和标识。同一方向重复声明一律报错，即使值相同。LATEST／FIFO 仍显式指定策略。
+这是语法扩展，不改变生成 ABI 20 或既有字节；较早的 ABI 20 编译器没有新解析器，仍需使用配套提交。
 
 三个编号／状态映射全部省略，即选择托管 RPC，`.wl` 只定义业务参数。
 runtime 管理 12 字节前缀：零区分字节、版本、请求／响应类型、保留零、
