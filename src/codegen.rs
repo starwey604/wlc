@@ -13,6 +13,8 @@ use crate::semantic::{
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GeneratedC {
     pub header: String,
+    /// Standalone, pointer-free business types and codec entry points.
+    pub values_header: String,
     pub source: String,
     /// Optional Wirelink-core bindings, kept in a separate translation unit so
     /// codec-only users do not acquire link-core symbol dependencies.
@@ -58,6 +60,10 @@ pub fn generate_c(model: &SemanticModel, module_name: &str) -> Result<GeneratedC
         header.push_str("#endif\n");
     }
     header.push_str("\n#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n");
+    let mut values_header = header.replace(&guard, &format!("{guard}_VALUES"));
+    header = format!(
+        "#ifndef {guard}\n#define {guard}\n\n/* Advanced borrowed codec and explicit value/view conversions. */\n#include \"{module}_values.h\"\n\n#ifdef __cplusplus\nextern \"C\" {{\n#endif\n\n"
+    );
     let messages = ordered_messages(model)?;
     for message in &messages {
         let name = type_name(&message.name);
@@ -70,33 +76,34 @@ pub fn generate_c(model: &SemanticModel, module_name: &str) -> Result<GeneratedC
     for symbol in &model.declarations {
         if let Symbol::Enum(enumeration) = symbol {
             let name = type_name(&enumeration.name);
-            header.push_str(&format!("typedef int32_t {name}_t;\n"));
+            values_header.push_str(&format!("typedef int32_t {name}_t;\n"));
             for value in &enumeration.values {
-                header.push_str(&format!(
+                values_header.push_str(&format!(
                     "#define {} INT32_C({})\n",
                     upper_snake(&value.name),
                     value.number
                 ));
             }
-            header.push('\n');
+            values_header.push('\n');
         }
     }
     for message in &messages {
         emit_message_definition(&mut header, message);
         header.push('\n');
     }
+    crate::value_codegen::header(&mut values_header, &messages, &static_max_encoded_sizes);
     for message in &messages {
         let name = type_name(&message.name);
         let macro_name = upper_snake(&message.name);
-        header.push_str(&format!(
+        values_header.push_str(&format!(
             "#define {macro_name}_MESSAGE_ID {}U\n",
             message.id,
         ));
         match static_max_encoded_sizes.get(&message.id).copied().flatten() {
-            Some(maximum) => header.push_str(&format!(
+            Some(maximum) => values_header.push_str(&format!(
                 "#define {macro_name}_HAS_MAX_ENCODED_SIZE 1\n#define {macro_name}_MAX_ENCODED_SIZE UINT64_C({maximum})\n"
             )),
-            None => header.push_str(&format!(
+            None => values_header.push_str(&format!(
                 "#define {macro_name}_HAS_MAX_ENCODED_SIZE 0\n"
             )),
         }
@@ -106,13 +113,24 @@ pub fn generate_c(model: &SemanticModel, module_name: &str) -> Result<GeneratedC
         ));
         header.push_str(&format!("wl_codec_status_t {name}_encode(const {name}_t *value, uint8_t *out, size_t out_capacity, size_t *out_length);\n"));
         header.push_str(&format!("wl_codec_status_t {name}_decode(const uint8_t *input, size_t input_length, {name}_t *out);\n\n"));
+        if static_max_encoded_sizes
+            .get(&message.id)
+            .copied()
+            .flatten()
+            .is_some()
+        {
+            header.push_str(&format!("/* Advanced conversions: views borrow value/input storage. Inputs and outputs\n * must not overlap; failures leave output unchanged. */\nwl_codec_status_t {name}_value_from_view(const {name}_t *view, {name}_value_t *out);\nwl_codec_status_t {name}_value_to_view(const {name}_value_t *value, {name}_t *out);\n\n"));
+        }
     }
     header.push_str("#ifdef __cplusplus\n}\n#endif\n\n#endif\n");
-    let source = emit_source(&module, &messages);
+    values_header.push_str("#ifdef __cplusplus\n}\n#endif\n\n#endif\n");
+    let mut source = emit_source(&module, &messages);
+    crate::value_codegen::source(&mut source, &messages, &static_max_encoded_sizes);
     let bindings_header = emit_bindings_header(&module, &guard, &messages);
     let bindings_source = emit_bindings_source(&module, &messages);
     Ok(GeneratedC {
         header,
+        values_header,
         source,
         bindings_header,
         bindings_source,
@@ -1054,7 +1072,7 @@ fn c_string(value: &str) -> String {
         .collect()
 }
 
-fn c_type(ty: &ResolvedType) -> String {
+pub(crate) fn c_type(ty: &ResolvedType) -> String {
     match ty {
         ResolvedType::Bool => "bool".to_owned(),
         ResolvedType::Bytes => "wl_codec_bytes_t".to_owned(),
@@ -1157,9 +1175,17 @@ fn validate_names(model: &SemanticModel) -> Result<(), CodegenError> {
                 let mut generated = vec![
                     format!("{prefix}_MESSAGE_ID"),
                     format!("{prefix}_HAS_MAX_ENCODED_SIZE"),
+                    format!("{prefix}_HAS_VALUE"),
                 ];
                 if maxima.get(&message.id).copied().flatten().is_some() {
                     generated.push(format!("{prefix}_MAX_ENCODED_SIZE"));
+                    generated.push(format!("{prefix}_VALUE_SIZE"));
+                    let name = format!("{}_value", type_name(&message.name));
+                    if names.contains(&name) {
+                        return Err(CodegenError(format!(
+                            "declaration collides with generated value `{name}_t`"
+                        )));
+                    }
                 }
                 for name in generated {
                     if !macros.insert(name.clone()) {

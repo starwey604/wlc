@@ -14,7 +14,24 @@ compiler version 与 generated-code ABI 是两个兼容轴。`wlc --version` 报
 manifest 的 `compiler.codegen_abi` 记录生成 ABI；build 必须同时 pin 两者，不能跟随 branch
 或自动使用最新版。
 
-当前 `wlc codegen-abi` 输出 21；核心和所有生成消费者必须配套重建。
+当前开发版 `wlc codegen-abi` 输出 22（未发布）；核心和所有生成消费者必须配套重建。
+
+## 自持业务值与高级视图
+
+普通业务包含 `<module>_values.h`，使用 `<message>_value_t`。有界 string/bytes
+内嵌 `length` 与 `data[]`，嵌套消息递归拥有数据；结构体赋值就是独立副本，
+不要求用户准备 backing buffer、分配或释放。只有现有类型能推导有限上限时才生成值；
+无界 repeated/string/bytes（包括嵌套）标记 `*_HAS_VALUE=0`，不擅自指定容量。
+
+`*_value_clear/encode/decode/encoded_size` 复用原 codec 的线上语义。
+长度按 UTF-8 字节计算，允许嵌入 NUL；clear/decode 附加的末尾 NUL 不编码。
+required、presence 与默认值不变，解码失败不修改输出。
+`*_VALUE_SIZE` 是目标 C 平台的 sizeof，不是最大编码长度。
+
+需要借用时才包含 `<module>.h`，使用原 `<message>_t`，或者显式
+`*_value_from_view/to_view`。转换失败不修改输出；输入输出存储不能重叠。
+得到的视图仍借用原值，不能比原值活得更久。普通 RPC 将直接消费自持值，
+不需要业务手工做这些转换。
 
 ## Schema Grammar
 
@@ -33,8 +50,8 @@ message JointControl @id(16) {
 
 内建类型包括 bool、bytes、string、8/16/32/64-bit signed/unsigned integer、fixed32/64、
 float32/64。窄整数生成精确宽度 C storage；float 要求 IEEE-754 4/8-byte，使用 `memcpy`
-搬运 bits。`string<MAX>`/`bytes<MAX>` 仍是借用 view，MAX 按编码字节计算，不引入 copy、
-heap、lock 或隐藏 ownership。
+搬运 bits。`string<MAX>`/`bytes<MAX>` 的 MAX 按编码字节计算：高级 codec 使用借用
+view，普通自持值使用内嵌数组；两者都没有 heap/lock，也不改变线上字节。
 
 optional default 必须匹配类型和范围。required 不能带 default/repeated；固定向量使用
 `required packed`。float 暂无显式 default，缺失时为正零；bytes/repeated/packed 无 default。

@@ -12,6 +12,7 @@ pub mod profile;
 pub mod profile_semantic;
 pub mod runtime_codegen;
 pub mod semantic;
+mod value_codegen;
 
 pub use codegen::{GeneratedC, generate_c};
 pub use identity::{IDENTITY_ALGORITHM, binding_profile_identity, schema_identity};

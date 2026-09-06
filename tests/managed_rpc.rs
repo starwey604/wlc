@@ -169,6 +169,7 @@ fn managed_rpc_runs_real_core_and_shared_codec_for_all_deliveries() {
             let temp = tempdir().unwrap();
             for (name, text) in [
                 ("demo.h", codec.header), ("demo.c", codec.source),
+                ("demo_values.h", codec.values_header),
                 ("demo_bindings.h", codec.bindings_header), ("demo_bindings.c", codec.bindings_source),
                 ("demo_runtime.h", runtime.header), ("demo_runtime.c", runtime.source),
                 ("peer_runtime.h", peer.header), ("peer_runtime.c", peer.source),
@@ -273,6 +274,7 @@ fn managed_and_mapped_services_share_one_runtime_without_encoding_scratch_leakag
     let temp = tempdir().unwrap();
     for (name, text) in [
         ("demo.h", codec.header),
+        ("demo_values.h", codec.values_header),
         ("demo.c", codec.source),
         ("demo_bindings.h", codec.bindings_header),
         ("demo_bindings.c", codec.bindings_source),

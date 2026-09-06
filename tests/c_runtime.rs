@@ -57,6 +57,11 @@ fn generated_latest_and_fifo_runtime_compiles_and_releases_every_rx_once() {
     assert!(runtime.source.contains("wl_fifo_write_claim"));
 
     fs::write(directory.path().join("typed_runtime.h"), codec.header).unwrap();
+    fs::write(
+        directory.path().join("typed_runtime_values.h"),
+        codec.values_header,
+    )
+    .unwrap();
     fs::write(directory.path().join("typed_runtime.c"), codec.source).unwrap();
     fs::write(
         directory.path().join("typed_runtime_bindings.h"),

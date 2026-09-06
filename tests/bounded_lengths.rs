@@ -48,6 +48,11 @@ message Nested = 3 {
 
     let directory = tempdir().unwrap();
     fs::write(directory.path().join("bounded_lengths.h"), generated.header).unwrap();
+    fs::write(
+        directory.path().join("bounded_lengths_values.h"),
+        generated.values_header,
+    )
+    .unwrap();
     fs::write(directory.path().join("bounded_lengths.c"), generated.source).unwrap();
     fs::write(
         directory.path().join("main.c"),

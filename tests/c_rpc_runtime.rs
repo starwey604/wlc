@@ -127,6 +127,11 @@ fn generated_rpc_runtime_executes_client_server_and_cache_lifecycles() {
     );
 
     fs::write(directory.path().join("rpc_fixture.h"), codec.header).unwrap();
+    fs::write(
+        directory.path().join("rpc_fixture_values.h"),
+        codec.values_header,
+    )
+    .unwrap();
     fs::write(directory.path().join("rpc_fixture.c"), codec.source).unwrap();
     fs::write(
         directory.path().join("rpc_fixture_bindings.h"),

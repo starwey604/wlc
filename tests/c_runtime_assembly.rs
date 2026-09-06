@@ -60,6 +60,7 @@ fn generated_runtime_assembly_validates_and_initializes_exact_storage() {
 
     for (name, contents) in [
         ("assembly.h", codec.header),
+        ("assembly_values.h", codec.values_header),
         ("assembly.c", codec.source),
         ("assembly_bindings.h", codec.bindings_header),
         ("assembly_bindings.c", codec.bindings_source),
@@ -388,6 +389,11 @@ fn generated_runtime_assembly_clears_instance_after_component_init_failure() {
     let runtime = generate_runtime_c(&schema, &profile, "rollback").unwrap();
 
     fs::write(directory.path().join("rollback.h"), codec.header).unwrap();
+    fs::write(
+        directory.path().join("rollback_values.h"),
+        codec.values_header,
+    )
+    .unwrap();
     fs::write(directory.path().join("rollback.c"), codec.source).unwrap();
     fs::write(
         directory.path().join("rollback_bindings.h"),

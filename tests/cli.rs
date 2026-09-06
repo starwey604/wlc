@@ -100,7 +100,7 @@ fn compile_runtime_writes_only_named_profile_artifacts() {
     assert!(manifest.contains("\"module\": \"device_api\""));
     assert!(manifest.contains("\"binding_profile\": \"0x"));
     assert!(manifest.contains("\"path\": \"device_api_runtime.c\""));
-    assert_eq!(fs::read_dir(output).unwrap().count(), 8);
+    assert_eq!(fs::read_dir(output).unwrap().count(), 9);
 }
 
 #[test]
@@ -133,7 +133,10 @@ fn compile_writes_named_c_artifacts() {
         fs::read_to_string(output.join("motor_api_bindings.c")).expect("generated bindings source");
     let manifest =
         fs::read_to_string(output.join("motor_api_manifest.json")).expect("generated manifest");
-    assert!(header.contains("STATUS_MESSAGE_ID 1U"));
+    assert!(header.contains("#include \"motor_api_values.h\""));
+    let values = fs::read_to_string(output.join("motor_api_values.h")).unwrap();
+    assert!(values.contains("STATUS_MESSAGE_ID 1U"));
+    assert!(values.contains("status_value_t"));
     assert!(source.contains("#include \"motor_api.h\""));
     assert!(bindings_header.contains("motor_api_dispatch_event"));
     assert!(bindings_header.contains("motor_api_status_send("));
@@ -181,7 +184,7 @@ fn compile_records_bounds_and_validate_rejects_bound_changes() {
         .assert()
         .success();
     let manifest = fs::read_to_string(output.join("metadata_manifest.json")).unwrap();
-    let header = fs::read_to_string(output.join("metadata.h")).unwrap();
+    let header = fs::read_to_string(output.join("metadata_values.h")).unwrap();
     assert!(manifest.contains("\"field\": \"name\""));
     assert!(manifest.contains("\"kind\": \"string\", \"max_length\": 31"));
     assert!(manifest.contains("\"kind\": \"bytes\", \"max_length\": 8"));
@@ -327,6 +330,7 @@ rpc Start {
 
     for artifact in [
         "control.h",
+        "control_values.h",
         "control.c",
         "control_bindings.h",
         "control_bindings.c",
@@ -349,8 +353,8 @@ rpc Start {
     assert!(profiled_manifest.contains("\"binding_profile\": \"0x"));
     assert!(profiled_manifest.contains("\"path\": \"control_runtime.c\""));
     assert_ne!(plain_manifest, profiled_manifest);
-    assert_eq!(fs::read_dir(&plain_output).unwrap().count(), 5);
-    assert_eq!(fs::read_dir(&profiled_output).unwrap().count(), 7);
+    assert_eq!(fs::read_dir(&plain_output).unwrap().count(), 6);
+    assert_eq!(fs::read_dir(&profiled_output).unwrap().count(), 8);
 }
 
 #[test]

@@ -320,6 +320,20 @@ fn validate_runtime_names(
                 schema_names.insert(format!("{name}_encoded_size"));
                 schema_names.insert(format!("{name}_encode"));
                 schema_names.insert(format!("{name}_decode"));
+                // Value symbols share the codec namespace, not a runtime prefix.
+                // Reserving even an unavailable value also keeps names stable
+                // when a schema later adds finite bounds.
+                schema_names.insert(format!("{name}_value_t"));
+                for verb in [
+                    "clear",
+                    "encoded_size",
+                    "encode",
+                    "decode",
+                    "from_view",
+                    "to_view",
+                ] {
+                    schema_names.insert(format!("{name}_value_{verb}"));
+                }
                 schema_names.insert(format!("{}_MESSAGE_ID", upper_snake(&message.name)));
             }
             Symbol::Enum(enumeration) => {

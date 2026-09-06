@@ -37,6 +37,11 @@ fn generated_c_compiles_and_round_trips_scalars_repeated_and_nested_messages() {
     let generated = generate_c(&model, "sample").unwrap();
     let directory = tempdir().unwrap();
     fs::write(directory.path().join("sample.h"), generated.header).unwrap();
+    fs::write(
+        directory.path().join("sample_values.h"),
+        generated.values_header,
+    )
+    .unwrap();
     fs::write(directory.path().join("sample.c"), generated.source).unwrap();
     fs::write(
         directory.path().join("main.c"),
@@ -130,6 +135,11 @@ fn generated_c_preserves_dense_numeric_golden_bits_and_validates_packed_lengths(
     let generated = generate_c(&model, "dense_numeric").unwrap();
     let directory = tempdir().unwrap();
     fs::write(directory.path().join("dense_numeric.h"), generated.header).unwrap();
+    fs::write(
+        directory.path().join("dense_numeric_values.h"),
+        generated.values_header,
+    )
+    .unwrap();
     fs::write(directory.path().join("dense_numeric.c"), generated.source).unwrap();
     fs::write(
         directory.path().join("main.c"),
@@ -300,6 +310,11 @@ fn generated_c_compiles_an_empty_message() {
     let generated = generate_c(&model, "empty").unwrap();
     let directory = tempdir().unwrap();
     fs::write(directory.path().join("empty.h"), generated.header).unwrap();
+    fs::write(
+        directory.path().join("empty_values.h"),
+        generated.values_header,
+    )
+    .unwrap();
     fs::write(directory.path().join("empty.c"), generated.source).unwrap();
     let include = wirelink_include();
     let status = Command::new("cc")

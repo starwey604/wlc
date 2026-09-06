@@ -20,7 +20,9 @@ records `compiler.codegen_abi`. Build integrations should pin both rather than
 following a branch or the newest release.
 
 `wlc codegen-abi` prints this revision without requiring a schema. Current
-development generates ABI 21. It provides default endpoint assembly for each bounded
+development generates ABI 22 (unreleased). It adds independent self-owning values
+in `<module>_values.h`; regenerate the codec and all runtime consumers together.
+It provides default endpoint assembly for each bounded
 profile's runtime header: `*_endpoint_t`, `init`/`init_config`, `step`/`close`,
 profile-selected `endpoint_send_*` and copying `endpoint_read_*` operations,
 plus managed RPC call handles and typed inspect/release/cancel/complete/reject.
@@ -171,7 +173,7 @@ payload, not the Wirelink frame envelope; consumers targeting a narrower
 
 ## Generated typed bindings
 
-Schema compilation produces deterministic `<module>.h/.c`,
+Schema compilation produces deterministic `<module>.h/.c`, `<module>_values.h`,
 `<module>_bindings.h/.c`, and `<module>_manifest.json` files. A separate
 `compile-runtime` invocation produces only a named profile runtime and its
 manifest. The codec files contain only the payload data model and codec and
@@ -179,6 +181,26 @@ continue to depend solely on `wirelink/codec.h`. The binding files form a
 separate translation unit which depends on the public `wirelink/link.h` API.
 A codec-only firmware therefore does not pull send, dispatch, or Wirelink core
 symbols into its link.
+
+### Self-owning business values
+
+Include `<module>_values.h` for bounded `<message>_value_t` objects and their
+`*_value_clear`, `*_value_encode`, `*_value_decode`, and `*_value_encoded_size`
+functions. String/bytes fields contain `length` and inline `data[]`; nested
+messages recursively own their data. Assignment copies the complete value.
+No backing buffers, allocation, or destroy function are needed.
+
+Lengths count bytes, not characters or `strlen`. Strings accept embedded NUL;
+clear/decode append a convenience terminator outside the encoded length. Required
+fields, UTF-8 checks, defaults and presence retain their existing wire semantics.
+Decode failure leaves the output unchanged. `*_VALUE_SIZE` is a C `sizeof`
+expression; it is not the same as `*_MAX_ENCODED_SIZE`.
+
+Unbounded strings/bytes or repeated fields (including nested ones) emit
+`*_HAS_VALUE=0`: WLC does not invent a capacity. Explicit borrowed codec users
+include `<module>.h` for `<message>_t` and `*_value_from_view/to_view` conversions.
+Conversions leave output unchanged on failure and require disjoint input/output
+storage; a returned view borrows the value and must not outlive it.
 
 The bindings header declares a module-prefixed router. Each message route has
 a strongly typed `int32_t` callback, caller-owned message scratch, and an
@@ -409,7 +431,7 @@ TX handle; owner loops may apply their fallback action only while it is zero. In
 has no domain payload. A retained-only profile therefore does not carry the
 larger RPC result fields. Generated runtime headers likewise include only the
 LATEST, FIFO, and RPC public headers selected by that profile. The fixed
-`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `20` for this surface; regenerate
+`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `22` for this surface; regenerate
 all runtime sources and update field access together when that value changes.
 
 Every generated result exposes `*_runtime_result_ok()` for the common success

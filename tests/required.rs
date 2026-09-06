@@ -41,6 +41,11 @@ message Envelope = 2 {
 
     let directory = tempdir().unwrap();
     fs::write(directory.path().join("required_fields.h"), generated.header).unwrap();
+    fs::write(
+        directory.path().join("required_fields_values.h"),
+        generated.values_header,
+    )
+    .unwrap();
     fs::write(directory.path().join("required_fields.c"), generated.source).unwrap();
     fs::write(
         directory.path().join("main.c"),

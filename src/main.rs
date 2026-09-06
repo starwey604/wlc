@@ -185,6 +185,7 @@ fn main() -> Result<()> {
             let has_runtime = generated_runtime.is_some();
             let mut artifacts = vec![
                 (format!("{stem}.h"), generated.header),
+                (format!("{stem}_values.h"), generated.values_header),
                 (format!("{stem}.c"), generated.source),
                 (format!("{stem}_bindings.h"), generated.bindings_header),
                 (format!("{stem}_bindings.c"), generated.bindings_source),
@@ -212,7 +213,8 @@ fn main() -> Result<()> {
             fs::write(output.join(format!("{stem}_manifest.json")), manifest).into_diagnostic()?;
             if has_runtime {
                 println!(
-                    "generated {}.h/.c, {}_bindings.h/.c, {}_runtime.h/.c, and {}_manifest.json in {}",
+                    "generated {}.h/.c, {}_values.h, {}_bindings.h/.c, {}_runtime.h/.c, and {}_manifest.json in {}",
+                    stem,
                     stem,
                     stem,
                     stem,
@@ -221,7 +223,8 @@ fn main() -> Result<()> {
                 );
             } else {
                 println!(
-                    "generated {}.h/.c, {}_bindings.h/.c, and {}_manifest.json in {}",
+                    "generated {}.h/.c, {}_values.h, {}_bindings.h/.c, and {}_manifest.json in {}",
+                    stem,
                     stem,
                     stem,
                     stem,

@@ -19,6 +19,11 @@ fn write_generated(directory: &Path) {
     let model = analyze_schema(&parse_schema(BINDINGS_SCHEMA).unwrap()).unwrap();
     let generated = generate_c(&model, "typed_api").unwrap();
     fs::write(directory.join("typed_api.h"), generated.header).unwrap();
+    fs::write(
+        directory.join("typed_api_values.h"),
+        generated.values_header,
+    )
+    .unwrap();
     fs::write(directory.join("typed_api.c"), generated.source).unwrap();
     fs::write(
         directory.join("typed_api_bindings.h"),
@@ -478,6 +483,11 @@ message Bool = 2 {
     assert!(generated.header.contains("uint32_t template_;"));
     assert!(generated.header.contains("struct bool_"));
     fs::write(directory.path().join("keyword_api.h"), generated.header).unwrap();
+    fs::write(
+        directory.path().join("keyword_api_values.h"),
+        generated.values_header,
+    )
+    .unwrap();
     fs::write(directory.path().join("keyword_api.c"), generated.source).unwrap();
     fs::write(
         directory.path().join("keyword_api_bindings.h"),

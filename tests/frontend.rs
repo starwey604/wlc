@@ -686,7 +686,7 @@ fn compatibility_rejects_required_field_addition_removal_and_cardinality_changes
 fn generates_deterministic_c_data_model_and_api() {
     let model = analyze_schema(&parse_schema(VALID_SCHEMA).unwrap()).unwrap();
     let generated = generate_c(&model, "motor_api").unwrap();
-    assert!(generated.header.contains("typedef int32_t state_t;"));
+    assert!(generated.values_header.contains("typedef int32_t state_t;"));
     assert!(generated.header.contains("struct status {"));
     assert!(generated.header.contains("bool has_state;"));
     assert!(generated.header.contains("uint32_t *samples;"));
@@ -741,7 +741,7 @@ fn generator_normalizes_acronyms_and_c_keywords() {
     let generated = generate_c(&model, "HTTP API").unwrap();
     assert!(generated.header.contains("struct http_status"));
     assert!(generated.header.contains("uint32_t switch_;"));
-    assert!(generated.header.contains("HTTP_STATUS_MESSAGE_ID"));
+    assert!(generated.values_header.contains("HTTP_STATUS_MESSAGE_ID"));
     assert!(generated.source.contains("#include \"http_api.h\""));
 }
 
@@ -759,8 +759,8 @@ fn generator_emits_ieee_scalars_and_inline_packed_arrays() {
     assert!(generated.header.contains("double time;"));
     assert!(generated.header.contains("float joints[6];"));
     assert!(generated.header.contains("uint64_t ticks[2];"));
-    assert!(generated.header.contains("IEEE-754 binary32"));
-    assert!(generated.header.contains("IEEE-754 binary64"));
+    assert!(generated.values_header.contains("IEEE-754 binary32"));
+    assert!(generated.values_header.contains("IEEE-754 binary64"));
     assert!(generated.source.contains("WLC_PACKED"));
     assert!(generated.source.contains("memcpy(&bits32, value"));
 }

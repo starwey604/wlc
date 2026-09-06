@@ -68,6 +68,7 @@ fn default_endpoints_compile_and_run_with_real_core() {
     let temp = tempdir().unwrap();
     for (name, contents) in [
         ("demo.h", codec.header), ("demo.c", codec.source),
+        ("demo_values.h", codec.values_header),
         ("demo_bindings.h", codec.bindings_header), ("demo_bindings.c", codec.bindings_source),
         ("demo_runtime.h", generated.header), ("demo_runtime.c", generated.source),
         ("peer_runtime.h", alternate.header), ("peer_runtime.c", alternate.source),

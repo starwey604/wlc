@@ -123,6 +123,10 @@ fn attributes_and_legacy_syntax_have_identical_generated_artifacts_and_identitie
                     contents: codec.header.as_bytes(),
                 },
                 ManifestArtifact {
+                    path: "id_syntax_values.h",
+                    contents: codec.values_header.as_bytes(),
+                },
+                ManifestArtifact {
                     path: "id_syntax.c",
                     contents: codec.source.as_bytes(),
                 },

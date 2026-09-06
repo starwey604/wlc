@@ -55,6 +55,11 @@ message NarrowList = 3 {
 
     let directory = tempdir().unwrap();
     fs::write(directory.path().join("narrow_integer.h"), generated.header).unwrap();
+    fs::write(
+        directory.path().join("narrow_integer_values.h"),
+        generated.values_header,
+    )
+    .unwrap();
     fs::write(directory.path().join("narrow_integer.c"), generated.source).unwrap();
     fs::write(
         directory.path().join("main.c"),
