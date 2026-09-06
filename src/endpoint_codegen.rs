@@ -81,7 +81,13 @@ pub(crate) fn emit(
             DeliveryPolicy::Unreliable => "WL_DELIVERY_UNRELIABLE",
             DeliveryPolicy::Reliable => "WL_DELIVERY_RELIABLE",
         };
-        writeln!(output, "/* Delivery follows this binding. Use codec sends to override explicitly. */\nstatic inline {codec}_send_result_t {module}_endpoint_send_{message}({module}_endpoint_t *endpoint, const {message}_t *message) {{\n  wl_time_ms_t now_ms = 0U;\n  if ({delivery} == WL_DELIVERY_RELIABLE)\n    (void)wl_endpoint_now({module}_endpoint_handle(endpoint), &now_ms);\n  return {codec}_{message}_send(wl_endpoint_link({module}_endpoint_handle(endpoint)), message, {delivery}, now_ms);\n}}\n\n/* Copy an owned value and release its lease internally. NO_DATA leaves out unchanged. */\nstatic inline wl_err_t {module}_endpoint_read_{message}({module}_endpoint_t *endpoint, {message}_t *out) {{\n  {module}_{message}_{kind}_view_t view;\n  {module}_runtime_t *runtime = {module}_endpoint_runtime(endpoint);\n  int result;\n  if (out == NULL) return WL_ERR_INVALID_ARG;\n  if (runtime == NULL) return WL_ERR_NOT_INITIALIZED;\n  result = {module}_{message}_{kind}_acquire(runtime, &view);\n  if (result != WL_OK) return result;\n  *out = *view.value;\n  return {module}_{message}_{kind}_release(runtime, &view);\n}}\n").unwrap();
+        let clock_sample = match route.delivery {
+            DeliveryPolicy::Unreliable => String::new(),
+            DeliveryPolicy::Reliable => {
+                format!("  (void)wl_endpoint_now({module}_endpoint_handle(endpoint), &now_ms);\n")
+            }
+        };
+        writeln!(output, "/* Delivery follows this binding. Use codec sends to override explicitly. */\nstatic inline {codec}_send_result_t {module}_endpoint_send_{message}({module}_endpoint_t *endpoint, const {message}_t *message) {{\n  wl_time_ms_t now_ms = 0U;\n{clock_sample}  return {codec}_{message}_send(wl_endpoint_link({module}_endpoint_handle(endpoint)), message, {delivery}, now_ms);\n}}\n\n/* Copy an owned value and release its lease internally. NO_DATA leaves out unchanged. */\nstatic inline wl_err_t {module}_endpoint_read_{message}({module}_endpoint_t *endpoint, {message}_t *out) {{\n  {module}_{message}_{kind}_view_t view;\n  {module}_runtime_t *runtime = {module}_endpoint_runtime(endpoint);\n  int result;\n  if (out == NULL) return WL_ERR_INVALID_ARG;\n  if (runtime == NULL) return WL_ERR_NOT_INITIALIZED;\n  result = {module}_{message}_{kind}_acquire(runtime, &view);\n  if (result != WL_OK) return result;\n  *out = *view.value;\n  return {module}_{message}_{kind}_release(runtime, &view);\n}}\n").unwrap();
     }
     for service in &profile.rpc_services {
         if service.is_managed() {

@@ -33,6 +33,27 @@ fn default_endpoints_compile_and_run_with_real_core() {
     let profile =
         analyze_binding_profile(&parse_binding_profile(PROFILE).unwrap(), &schema).unwrap();
     let generated = generate_runtime_c(&schema, &profile, "demo").unwrap();
+    // Delivery is a generator decision, not a constant C self-comparison (which
+    // Apple Clang rejects under -Werror). Unreliable sends omit clock reads.
+    assert!(!generated.header.contains("if (WL_DELIVERY_"));
+    let state_send = generated
+        .header
+        .split("demo_endpoint_send_state(")
+        .nth(1)
+        .unwrap()
+        .split("\n}")
+        .next()
+        .unwrap();
+    assert!(!state_send.contains("wl_endpoint_now"));
+    let alarm_send = generated
+        .header
+        .split("demo_endpoint_send_alarm(")
+        .nth(1)
+        .unwrap()
+        .split("\n}")
+        .next()
+        .unwrap();
+    assert_eq!(alarm_send.matches("wl_endpoint_now").count(), 1);
     assert!(
         generated
             .header
