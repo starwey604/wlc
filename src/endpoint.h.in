@@ -7,11 +7,14 @@
 #define @P@_ENDPOINT_RAW_CAPACITY (@P@_ENDPOINT_MAX_PAYLOAD + WL_FRAME_HEADER_SIZE + WL_FRAME_MAX_CRC)
 #define @P@_ENDPOINT_UNIT_CAPACITY (@P@_ENDPOINT_RAW_CAPACITY + @P@_ENDPOINT_RAW_CAPACITY / 254U + 2U)
 #define @P@_ENDPOINT_CONTROL_CAPACITY (WL_FRAME_HEADER_SIZE + WL_FRAME_MAX_CRC + 2U)
+@RPC_CAPACITY@
 
 typedef struct {
   wl_config_t link;
   wl_clock_t clock;
-  @M@_runtime_config_t runtime;
+  /* Expert policy/storage overrides; ordinary applications use defaults. */
+  @M@_runtime_config_t advanced;
+@RPC_HANDLERS@
   size_t event_budget;
   @M@_runtime_result_fn on_result;
   void *user_data;
@@ -21,7 +24,10 @@ typedef struct {
   struct {
     wl_endpoint_t owner;
     @M@_runtime_instance_t instance;
-    @M@_runtime_default_storage_t arena;
+    union {
+      @M@_runtime_default_storage_alignment_t alignment;
+      uint8_t bytes[@P@_ENDPOINT_RUNTIME_CAPACITY];
+    } arena;
     @M@_runtime_pump_t pump;
     @M@_runtime_result_t result;
     @M@_runtime_result_fn on_result;
@@ -37,17 +43,23 @@ typedef struct {
 } @M@_endpoint_t;
 
 /* Config descriptors can be temporary; callbacks/user_data must outlive use.
- * No retry/expiry policy is invented. RPC roles remain explicitly selected. */
+ * Ordinary client capability and registered server handlers are assembled by init. */
 static inline wl_err_t @M@_endpoint_config_defaults(
     @M@_endpoint_config_t *config, uint64_t session_id) {
+  int result;
   if (config == NULL || session_id == 0U) return WL_ERR_INVALID_ARG;
   memset(config, 0, sizeof(*config));
   config->link.max_payload_len = @P@_ENDPOINT_MAX_PAYLOAD;
   config->link.envelope = WL_ENVELOPE_NATIVE_PACKET;
   config->link.integrity = WL_INTEGRITY_CRC32C;
   config->link.session_id = session_id;
+  config->link.ack_timeout_ms = 100U;
+  config->link.max_retries = 4U;
   config->event_budget = 16U;
-  return @M@_runtime_config_defaults(&config->runtime);
+  result = @M@_runtime_config_defaults(&config->advanced);
+  if (result != WL_OK) return result;
+@RPC_DEFAULTS@
+  return WL_OK;
 }
 
 static inline wl_endpoint_t *@M@_endpoint_handle(@M@_endpoint_t *endpoint) {
@@ -71,6 +83,15 @@ static inline void @M@_endpoint_record(void *context,
     terminal.domain = @P@_RUNTIME_CORE_ERROR;
     result = &terminal;
   }
+#if @P@_RUNTIME_HAS_MANAGED_RPC
+  /* Cached replies retain their reservation and retry ordinary link pressure.
+   * Per-call failure/deadline remains observable through completion. */
+  if (result->domain == @P@_RUNTIME_CORE_ERROR && result->detail_kind == @P@_RUNTIME_DETAIL_RPC &&
+      (result->detail.rpc.core_result == WL_ERR_BUSY ||
+       result->detail.rpc.core_result == WL_ERR_WOULD_BLOCK ||
+       result->detail.rpc.core_result == WL_ERR_QUEUE_FULL ||
+       result->detail.rpc.core_result == WL_ERR_NO_SPACE)) return;
+#endif
   /* Retain the first failure even if later events in the same pass succeed. */
   if (@M@_runtime_result_ok(&endpoint->private_state.result))
     endpoint->private_state.result = *result;
@@ -83,12 +104,15 @@ static inline wl_err_t @M@_endpoint_init_config(
   wl_storage_t link_storage;
   @M@_runtime_storage_t storage;
   wl_pump_hooks_t hooks;
+  @M@_runtime_config_t runtime_config;
   int result;
   if (endpoint == NULL || config == NULL || config->event_budget == 0U)
     return WL_ERR_INVALID_ARG;
   if (wl_endpoint_link(@M@_endpoint_handle(endpoint)) != NULL)
     return WL_ERR_INVALID_STATE;
   if (config->clock.now_ms == NULL) return WL_ERR_INVALID_ARG;
+  runtime_config = config->advanced;
+@RPC_CONFIG_INIT@
 @RPC_BEGIN_INIT@
   memset(&link_storage, 0, sizeof(link_storage));
   link_storage.tx_payload = endpoint->private_state.tx_payload;
@@ -101,10 +125,12 @@ static inline wl_err_t @M@_endpoint_init_config(
   link_storage.rx_fallback_size = sizeof(endpoint->private_state.rx_fallback);
   link_storage.rx_fifo = endpoint->private_state.rx_fifo;
   link_storage.rx_fifo_size = sizeof(endpoint->private_state.rx_fifo);
-  storage = @M@_runtime_default_storage_descriptor(&endpoint->private_state.arena);
-  result = @M@_runtime_init(&endpoint->private_state.instance, &config->runtime, &storage);
+  storage.data = endpoint->private_state.arena.bytes;
+  storage.size = sizeof(endpoint->private_state.arena.bytes);
+  result = @M@_runtime_init(&endpoint->private_state.instance, &runtime_config, &storage);
   if (result != WL_OK) return result;
 @RPC_INCARNATION@
+@RPC_BIND_VALUES@
   result = @M@_runtime_pump_init(&endpoint->private_state.pump,
       &endpoint->private_state.instance.runtime, @M@_endpoint_record, endpoint);
   if (result != WL_OK) return result;
@@ -112,6 +138,7 @@ static inline wl_err_t @M@_endpoint_init_config(
   result = wl_endpoint_init(&endpoint->private_state.owner, &config->link,
                             &link_storage, &config->clock, &hooks);
   if (result != WL_OK) return result;
+@RPC_ASYNC_INIT@
   endpoint->private_state.on_result = config->on_result;
   endpoint->private_state.user_data = config->user_data;
   endpoint->private_state.event_budget = config->event_budget;
@@ -133,8 +160,8 @@ static inline wl_err_t @M@_endpoint_init(@M@_endpoint_t *endpoint, uint64_t sess
 static inline wl_err_t @M@_endpoint_step(@M@_endpoint_t *endpoint) {
   int result;
   if (endpoint == NULL) return WL_ERR_INVALID_ARG;
-  memset(&endpoint->private_state.result, 0, sizeof(endpoint->private_state.result));
 @RPC_STEP_BEGIN@
+  memset(&endpoint->private_state.result, 0, sizeof(endpoint->private_state.result));
   result = wl_endpoint_step(&endpoint->private_state.owner,
                              endpoint->private_state.event_budget);
 @RPC_STEP_END@
@@ -148,6 +175,10 @@ static inline const @M@_runtime_result_t *@M@_endpoint_result(const @M@_endpoint
   return endpoint != NULL ? &endpoint->private_state.result : NULL;
 }
 
-static inline void @M@_endpoint_close(@M@_endpoint_t *endpoint) {
+static inline wl_err_t @M@_endpoint_close(@M@_endpoint_t *endpoint) {
+  if (endpoint == NULL) return WL_ERR_INVALID_ARG;
+@RPC_CLOSE_BEGIN@
   wl_endpoint_close(@M@_endpoint_handle(endpoint));
+@RPC_CLOSE_END@
+  return WL_OK;
 }

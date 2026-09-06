@@ -18,6 +18,12 @@
         result.domain = @P@_RUNTIME_RPC_ERROR;
         break;
       }
+      if (runtime->rpc_async != NULL) {
+        uint16_t expired;
+        /* A reply received at/after the acceptance deadline cannot resurrect
+         * that call, even though event dispatch precedes owner progress. */
+        (void)wl_rpc_client_poll(runtime->rpc_client, now_ms, &expired);
+      }
       result.detail.rpc.rpc_result = wl_rpc_client_get(runtime->rpc_client,
           result.detail.rpc.operation_id, &client);
       if (result.detail.rpc.rpc_result == WL_RPC_ERR_NOT_FOUND) {

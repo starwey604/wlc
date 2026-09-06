@@ -65,15 +65,43 @@
       switch (result.detail.rpc.rpc_disposition) {
         case WL_RPC_SERVER_NEW:
           result.detail.rpc.server_request = server_request;
+          memset(&token, 0, sizeof(token));
+          token.private_state.owner = runtime;
+          token.private_state.incarnation = runtime->rpc_incarnation;
+          token.private_state.request = server_request;
+#if @REQ_P@_HAS_VALUE && @RES_P@_HAS_VALUE
+          if (runtime->@S@.value_handler != NULL) {
+            @M@_runtime_result_t completed;
+            if (runtime->@S@.request_value == NULL || runtime->@S@.response_value == NULL) {
+              (void)wl_rpc_server_abandon(runtime->rpc_server, &server_request);
+              result.domain = @P@_RUNTIME_MISSING_SCRATCH;
+              break;
+            }
+            result.detail.rpc.codec_status = @REQ@_value_from_view(
+                runtime->@S@.request_scratch, runtime->@S@.request_value);
+            if (result.detail.rpc.codec_status != WL_CODEC_OK) {
+              (void)wl_rpc_server_abandon(runtime->rpc_server, &server_request);
+              result.domain = @P@_RUNTIME_CODEC_ERROR;
+              break;
+            }
+            @RES@_value_clear(runtime->@S@.response_value);
+            status = runtime->@S@.value_handler(runtime->@S@.value_user_data,
+                runtime->@S@.request_value, runtime->@S@.response_value);
+            completed = status == 0
+                ? @M@_@S@_server_complete_value(runtime, &token, runtime->@S@.response_value, now_ms)
+                : @M@_@S@_server_reject(runtime, &token, status, now_ms);
+            result.domain = completed.domain;
+            result.detail.rpc = completed.detail.rpc;
+            if (!@M@_runtime_result_ok(&completed))
+              (void)wl_rpc_server_abandon(runtime->rpc_server, &server_request);
+            break;
+          }
+#endif
           if (runtime->@S@.request_handler == NULL) {
             result.detail.rpc.rpc_result = wl_rpc_server_abandon(runtime->rpc_server, &server_request);
             result.domain = @P@_RUNTIME_MISSING_ROUTE;
             break;
           }
-          memset(&token, 0, sizeof(token));
-          token.private_state.owner = runtime;
-          token.private_state.incarnation = runtime->rpc_incarnation;
-          token.private_state.request = server_request;
           result.detail.rpc.application_result = runtime->@S@.request_handler(
               runtime->@S@.user_data, runtime->@S@.request_scratch, &token, @REQ_DELIVERY@);
           if (result.detail.rpc.application_result != 0) {

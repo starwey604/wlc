@@ -100,7 +100,9 @@ fn compile_runtime_writes_only_named_profile_artifacts() {
     assert!(manifest.contains("\"module\": \"device_api\""));
     assert!(manifest.contains("\"binding_profile\": \"0x"));
     assert!(manifest.contains("\"path\": \"device_api_runtime.c\""));
-    assert_eq!(fs::read_dir(output).unwrap().count(), 9);
+    assert!(output.join("device_api_endpoint.h").is_file());
+    assert!(output.join("device_api_advanced.h").is_file());
+    assert_eq!(fs::read_dir(output).unwrap().count(), 11);
 }
 
 #[test]
@@ -354,7 +356,8 @@ rpc Start {
     assert!(profiled_manifest.contains("\"path\": \"control_runtime.c\""));
     assert_ne!(plain_manifest, profiled_manifest);
     assert_eq!(fs::read_dir(&plain_output).unwrap().count(), 6);
-    assert_eq!(fs::read_dir(&profiled_output).unwrap().count(), 8);
+    assert_eq!(fs::read_dir(&profiled_output).unwrap().count(), 10);
+    assert!(profiled_output.join("control_endpoint.h").is_file());
 }
 
 #[test]

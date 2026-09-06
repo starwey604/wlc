@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-#include "demo_runtime.h"
-#include "peer_runtime.h"
+#include "demo_advanced.h"
+#include "peer_advanced.h"
 #include "wirelink/loopback.h"
 #include <stdio.h>
 
@@ -60,10 +60,10 @@ static int init(void) {
       sizeof(cached_responses), 18U, 1000U, 1000U, WL_RPC_CACHE_EVICT_OLDEST};
   CHECK(demo_endpoint_config_defaults(&ca, 101U) == WL_OK);
   CHECK(demo_endpoint_config_defaults(&cb, 202U) == WL_OK);
-  CHECK(demo_runtime_config_enable_client(&ca.runtime) == WL_OK);
-  CHECK(demo_runtime_config_enable_server(&cb.runtime) == WL_OK);
+  CHECK(demo_runtime_config_enable_client(&ca.advanced) == WL_OK);
+  CHECK(demo_runtime_config_enable_server(&cb.advanced) == WL_OK);
   ca.link.ack_timeout_ms = cb.link.ack_timeout_ms = 10U;
-  cb.runtime.execute_request_handler = execute;
+  cb.advanced.execute_request_handler = execute;
   cb.on_result = observe;
   cb.user_data = &b;
   ca.clock = cb.clock = (wl_clock_t){read_clock, NULL};

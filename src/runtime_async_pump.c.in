@@ -1,0 +1,31 @@
+static uint8_t @M@_runtime_pump_progress(void *user_data, wl_ctx_t *ctx,
+    wl_time_ms_t now_ms) {
+  @M@_runtime_pump_t *pump = (@M@_runtime_pump_t *)user_data;
+  uint8_t progress = 0U;
+  if (pump == NULL || pump->runtime == NULL) return 0U;
+  pump->last_service_result = @M@_runtime_service(ctx, pump->runtime, now_ms, &pump->last_service);
+  if (pump->last_service_result == WL_RPC_OK) {
+    if (pump->last_service.response.message_id != 0U && pump->on_result != NULL)
+      pump->on_result(pump->user_data, &pump->last_service.response);
+    progress = pump->last_service.responses_submitted != 0U ? 1U : 0U;
+  }
+  if (pump->runtime->rpc_async != NULL) {
+    uint16_t notified = 0U;
+    if (wl_rpc_async_service(pump->runtime->rpc_async, now_ms, &notified) != WL_OK)
+      pump->last_service_result = WL_RPC_ERR_INVALID_STATE;
+    if (notified != 0U) progress = 1U;
+  }
+  return progress;
+}
+
+static uint32_t @M@_runtime_pump_deadline(const void *user_data, wl_time_ms_t now_ms) {
+  const @M@_runtime_pump_t *pump = (const @M@_runtime_pump_t *)user_data;
+  wl_rpc_deadline_hint_t hint = {0};
+  if (pump == NULL || pump->runtime == NULL ||
+      @M@_runtime_get_deadline_hint(pump->runtime, now_ms, &hint) != WL_RPC_OK)
+    return WL_POLL_NO_DEADLINE_MS;
+  if (pump->runtime->rpc_async != NULL &&
+      wl_rpc_async_notification_deadline(pump->runtime->rpc_async) == 0U) return 0U;
+  return hint.next_deadline_ms;
+}
+

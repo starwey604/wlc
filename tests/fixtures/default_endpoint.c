@@ -47,14 +47,14 @@ static int exercise(void) {
   CHECK(demo_endpoint_init(&a, 0, (wl_clock_t){read_clock, NULL}) == WL_ERR_INVALID_ARG);
   CHECK(configure(&client_config, 1) == WL_OK);
   CHECK(configure(&server_config, 2) == WL_OK);
-  CHECK(demo_runtime_config_enable_client(&client_config.runtime) == WL_OK);
-  CHECK(demo_runtime_config_enable_server(&server_config.runtime) == WL_OK);
+  CHECK(demo_runtime_config_enable_client(&client_config.advanced) == WL_OK);
+  CHECK(demo_runtime_config_enable_server(&server_config.advanced) == WL_OK);
   client_config.link.ack_timeout_ms = 5;
   server_config.link.ack_timeout_ms = 5;
-  server_config.runtime.execute_request_handler = execute;
-  server_config.runtime.execute_user_data = &b;
-  server_config.runtime.rpc_server_pending_timeout_ms = 100;
-  server_config.runtime.rpc_server_cache_ttl_ms = 1000;
+  server_config.advanced.execute_request_handler = execute;
+  server_config.advanced.execute_user_data = &b;
+  server_config.advanced.rpc_server_pending_timeout_ms = 100;
+  server_config.advanced.rpc_server_cache_ttl_ms = 1000;
   CHECK(demo_endpoint_init_config(&a, &client_config) == WL_OK);
   CHECK(demo_endpoint_init_config(&b, &server_config) == WL_OK);
   CHECK(demo_endpoint_init(&a, 7, (wl_clock_t){read_clock, NULL}) == WL_ERR_INVALID_STATE);
@@ -148,6 +148,7 @@ static int failures(void) {
 
   CHECK(configure(&config, 8) == WL_OK);
   config.link.ack_timeout_ms = 5;
+  config.link.max_retries = 0; /* This case tests first-ACK timeout, not defaults. */
   CHECK(demo_endpoint_init_config(&a, &config) == WL_OK);
   test_now = 0;
   CHECK(wl_set_sink(wl_endpoint_link(demo_endpoint_handle(&a)), blackhole, NULL) == WL_OK);

@@ -191,6 +191,14 @@ fn main() -> Result<()> {
                 (format!("{stem}_bindings.c"), generated.bindings_source),
             ];
             if let Some(generated_runtime) = generated_runtime {
+                artifacts.push((
+                    format!("{stem}_advanced.h"),
+                    generated_runtime.advanced_header,
+                ));
+                artifacts.push((
+                    format!("{stem}_endpoint.h"),
+                    generated_runtime.endpoint_header,
+                ));
                 artifacts.push((format!("{stem}_runtime.h"), generated_runtime.header));
                 artifacts.push((format!("{stem}_runtime.c"), generated_runtime.source));
             }
@@ -213,7 +221,7 @@ fn main() -> Result<()> {
             fs::write(output.join(format!("{stem}_manifest.json")), manifest).into_diagnostic()?;
             if has_runtime {
                 println!(
-                    "generated {}.h/.c, {}_values.h, {}_bindings.h/.c, {}_runtime.h/.c, and {}_manifest.json in {}",
+                    "generated {}.h/.c, {}_values.h, {}_bindings.h/.c, {}_runtime.h/.c, {stem}_endpoint.h, {stem}_advanced.h, and {}_manifest.json in {}",
                     stem,
                     stem,
                     stem,
@@ -254,6 +262,14 @@ fn main() -> Result<()> {
                 wlc::generate_runtime_c_named(&model, profile, codec_module, runtime_name)
                     .map_err(miette::Report::new)?;
             let artifacts = [
+                (
+                    format!("{runtime_name}_advanced.h"),
+                    generated.advanced_header,
+                ),
+                (
+                    format!("{runtime_name}_endpoint.h"),
+                    generated.endpoint_header,
+                ),
                 (format!("{runtime_name}_runtime.h"), generated.header),
                 (format!("{runtime_name}_runtime.c"), generated.source),
             ];
@@ -279,7 +295,7 @@ fn main() -> Result<()> {
             )
             .into_diagnostic()?;
             println!(
-                "generated {}_runtime.h/.c and {}_runtime_manifest.json against codec module {} in {}",
+                "generated {}_runtime.h/.c, {runtime_name}_endpoint.h, {runtime_name}_advanced.h and {}_runtime_manifest.json against codec module {} in {}",
                 runtime_name,
                 runtime_name,
                 codec_module,

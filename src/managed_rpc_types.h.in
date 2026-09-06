@@ -13,11 +13,27 @@ typedef struct {
 typedef int32_t (*@M@_@S@_rpc_request_handler_fn)(void *user_data,
     const @REQ@_t *request, const @M@_@S@_request_token_t *token,
     wl_delivery_t delivery);
+
+#if @REQ_P@_HAS_VALUE && @RES_P@_HAS_VALUE
+/* Ordinary immediate business handler: zero succeeds, nonzero rejects with
+ * that application code. response is initialized before the callback. */
+typedef int32_t (*@M@_@S@_handler_fn)(void *user_data,
+    const @REQ@_value_t *request, @RES@_value_t *response);
+/* A response exists only on SUCCESS and lives through this callback. Assign
+ * *response to save an independent value. No call-slot release is required. */
+typedef void (*@M@_@S@_completion_fn)(void *user_data,
+    const wl_rpc_completion_t *result, const @RES@_value_t *response);
+#endif
 typedef struct {
   @REQ@_t *request_scratch;
   @RES@_t *response_scratch;
   @CODEC@_encode_scratch_t canonical_request_scratch;
   @M@_@S@_rpc_request_handler_fn request_handler;
   void *user_data;
+#if @REQ_P@_HAS_VALUE && @RES_P@_HAS_VALUE
+  @M@_@S@_handler_fn value_handler;
+  void *value_user_data;
+  @REQ@_value_t *request_value;
+  @RES@_value_t *response_value;
+#endif
 } @M@_@S@_rpc_t;
-

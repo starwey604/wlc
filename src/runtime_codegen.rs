@@ -26,6 +26,8 @@ const RPC_FINGERPRINT_ALGORITHM: &str = "fnv1a64-canonical-request-v1";
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GeneratedRuntimeC {
     pub header: String,
+    pub endpoint_header: String,
+    pub advanced_header: String,
     pub source: String,
 }
 
@@ -74,7 +76,12 @@ pub fn generate_runtime_c_named(
 
     Ok(GeneratedRuntimeC {
         header: emit_header(schema, profile, &codec_module, &runtime),
+        endpoint_header: format!(
+            "/* SPDX-License-Identifier: Apache-2.0 */\n/* Ordinary application entry: owned business values and default endpoint.\n * runtime.h is a transitive layout dependency, not the ordinary API contract.\n * private_state, token/call/inspect/release and runtime assembly are advanced. */\n#ifndef {0}_ENDPOINT_H\n#define {0}_ENDPOINT_H\n#include \"{codec_module}_values.h\"\n#include \"{runtime}_runtime.h\"\n#endif\n",
+            upper_snake(&runtime)
+        ),
         source: emit_source(schema, profile, &codec_module, &runtime),
+        advanced_header: crate::endpoint_codegen::advanced(profile, &runtime),
     })
 }
 
@@ -92,6 +99,7 @@ fn validate_runtime_names(
     ]);
     if profile.rpc_services.iter().any(RpcService::is_managed) {
         member_names.insert("rpc_incarnation".to_owned());
+        member_names.insert("rpc_async".to_owned());
     }
     for route in &profile.retained_routes {
         let kind = match route.kind {
@@ -136,6 +144,8 @@ fn validate_runtime_names(
         format!("{module}_runtime_pump_deadline"),
         format!("{module}_runtime_result"),
         format!("WIRELINK_GENERATED_{prefix}_RUNTIME_H"),
+        format!("{prefix}_ENDPOINT_H"),
+        format!("{prefix}_ADVANCED_H"),
         format!("{prefix}_SCHEMA_IDENTITY"),
         format!("{prefix}_BINDING_PROFILE_IDENTITY"),
         format!("{prefix}_BINDING_PROFILE_VERSION"),
@@ -248,7 +258,20 @@ fn validate_runtime_names(
         .filter(|service| service.is_managed())
     {
         let name = c_identifier(&service.name);
-        for suffix in ["request_token_t", "call_t", "result_t"] {
+        if name == "result" {
+            return Err(RuntimeCodegenError(
+                "endpoint handler field `on_result` is reserved for diagnostics".into(),
+            ));
+        }
+        for suffix in [
+            "request_token_t",
+            "call_t",
+            "result_t",
+            "handler_fn",
+            "completion_fn",
+            "server_complete_value",
+            "encode_submission",
+        ] {
             let symbol = format!("{module}_{name}_{suffix}");
             if !runtime_names.insert(symbol.clone()) {
                 return Err(RuntimeCodegenError(format!(
@@ -268,6 +291,7 @@ fn validate_runtime_names(
         "step",
         "result",
         "close",
+        "cancel",
     ] {
         runtime_names.insert(format!("{module}_endpoint_{suffix}"));
     }
@@ -276,6 +300,9 @@ fn validate_runtime_names(
         "RAW_CAPACITY",
         "UNIT_CAPACITY",
         "CONTROL_CAPACITY",
+        "RPC_CAPACITY",
+        "REQUEST_CAPACITY",
+        "RUNTIME_CAPACITY",
     ] {
         runtime_names.insert(format!("{prefix}_ENDPOINT_{suffix}"));
     }
@@ -298,6 +325,9 @@ fn validate_runtime_names(
                 "cancel",
                 "complete",
                 "reject",
+                "async",
+                "prepare",
+                "notify",
             ]
         } else {
             &["start", "inspect", "release", "complete"]
@@ -602,6 +632,9 @@ fn emit_header(
     if !profile.rpc_services.is_empty() {
         output.push_str("#include <wirelink/rpc.h>\n");
     }
+    if profile.rpc_services.iter().any(RpcService::is_managed) {
+        output.push_str("#include <wirelink/rpc_async.h>\n");
+    }
     output.push_str("\n#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n");
     writeln!(
         output,
@@ -676,6 +709,12 @@ fn emit_header(
     )
     .unwrap();
     emit_result_helpers_header(&mut output, profile, module, &prefix);
+    writeln!(
+        output,
+        "#define {prefix}_RUNTIME_HAS_MANAGED_RPC {}",
+        u8::from(profile.rpc_services.iter().any(RpcService::is_managed))
+    )
+    .unwrap();
     for route in &profile.retained_routes {
         emit_retained_header_type(&mut output, module, route);
     }
@@ -730,7 +769,7 @@ fn emit_header(
         )
         .unwrap();
         if profile.rpc_services.iter().any(RpcService::is_managed) {
-            output.push_str("  uint64_t rpc_incarnation;\n");
+            output.push_str("  uint64_t rpc_incarnation;\n  wl_rpc_async_t *rpc_async;\n");
         }
         if profile
             .rpc_services
@@ -1468,7 +1507,7 @@ fn emit_source(
     } else {
         write!(
             output,
-            "  if (event->type == WL_EVT_TX_SUCCESS || event->type == WL_EVT_TX_TIMEOUT || event->type == WL_EVT_TX_FAILED) {{\n    wl_tx_result_t tx_result = {{0}};\n    if (runtime == NULL || ctx == NULL) {{\n      result.domain = {prefix}_RUNTIME_NON_RX;\n      return result;\n    }}\n    result.detail_kind = {prefix}_RUNTIME_DETAIL_RPC;\n    result.detail.rpc.handle = event->handle;\n    if (runtime->rpc_server != NULL) {{\n      result.detail.rpc.rpc_result = wl_rpc_server_on_tx_event(runtime->rpc_server, event);\n      if (result.detail.rpc.rpc_result == WL_RPC_OK) {{\n        result.detail.rpc.core_result = wl_tx_take(ctx, event->handle, &tx_result);\n        result.event_consumed = result.detail.rpc.core_result == WL_OK ? 1U : 0U;\n        result.domain = result.detail.rpc.core_result == WL_OK ? {prefix}_RUNTIME_OK : {prefix}_RUNTIME_CORE_ERROR;\n        return result;\n      }}\n      if (result.detail.rpc.rpc_result != WL_RPC_ERR_NOT_FOUND) {{\n        result.domain = {prefix}_RUNTIME_RPC_ERROR;\n        return result;\n      }}\n    }}\n    if (runtime->rpc_client != NULL) {{\n      result.detail.rpc.rpc_result = wl_rpc_client_on_tx_event(runtime->rpc_client, event);\n      if (result.detail.rpc.rpc_result == WL_RPC_OK) {{\n        result.detail.rpc.core_result = wl_tx_take(ctx, event->handle, &tx_result);\n        result.event_consumed = result.detail.rpc.core_result == WL_OK ? 1U : 0U;\n        result.domain = result.detail.rpc.core_result == WL_OK ? {prefix}_RUNTIME_OK : {prefix}_RUNTIME_CORE_ERROR;\n      }} else if (result.detail.rpc.rpc_result == WL_RPC_ERR_NOT_FOUND) result.domain = {prefix}_RUNTIME_NON_RX;\n      else result.domain = {prefix}_RUNTIME_RPC_ERROR;\n    }} else {{\n      result.domain = {prefix}_RUNTIME_NON_RX;\n    }}\n    return result;\n  }}\n  if (event->type != WL_EVT_UNRELIABLE_RX && event->type != WL_EVT_RELIABLE_RX) {{\n    result.domain = {prefix}_RUNTIME_NON_RX;\n    return result;\n  }}\n"
+            "  if (event->type == WL_EVT_TX_SUCCESS || event->type == WL_EVT_TX_TIMEOUT || event->type == WL_EVT_TX_FAILED) {{\n    wl_tx_result_t tx_result = {{0}};\n    if (runtime == NULL || ctx == NULL) {{\n      result.domain = {prefix}_RUNTIME_NON_RX;\n      return result;\n    }}\n    result.detail_kind = {prefix}_RUNTIME_DETAIL_RPC;\n    result.detail.rpc.handle = event->handle;\n#if {prefix}_RUNTIME_HAS_MANAGED_RPC\n    if (runtime->rpc_async != NULL && wl_rpc_async_retire_tx(runtime->rpc_async, event->handle)) {{\n      result.detail.rpc.core_result = wl_tx_take(ctx, event->handle, &tx_result);\n      result.event_consumed = result.detail.rpc.core_result == WL_OK ? 1U : 0U;\n      result.domain = result.detail.rpc.core_result == WL_OK ? {prefix}_RUNTIME_OK : {prefix}_RUNTIME_CORE_ERROR;\n      return result;\n    }}\n#endif\n    if (runtime->rpc_server != NULL) {{\n      result.detail.rpc.rpc_result = wl_rpc_server_on_tx_event(runtime->rpc_server, event);\n      if (result.detail.rpc.rpc_result == WL_RPC_OK) {{\n        result.detail.rpc.core_result = wl_tx_take(ctx, event->handle, &tx_result);\n        result.event_consumed = result.detail.rpc.core_result == WL_OK ? 1U : 0U;\n        result.domain = result.detail.rpc.core_result == WL_OK ? {prefix}_RUNTIME_OK : {prefix}_RUNTIME_CORE_ERROR;\n        return result;\n      }}\n      if (result.detail.rpc.rpc_result != WL_RPC_ERR_NOT_FOUND) {{\n        result.domain = {prefix}_RUNTIME_RPC_ERROR;\n        return result;\n      }}\n    }}\n    if (runtime->rpc_client != NULL) {{\n      result.detail.rpc.rpc_result = wl_rpc_client_on_tx_event(runtime->rpc_client, event);\n      if (result.detail.rpc.rpc_result == WL_RPC_OK) {{\n        result.detail.rpc.core_result = wl_tx_take(ctx, event->handle, &tx_result);\n        result.event_consumed = result.detail.rpc.core_result == WL_OK ? 1U : 0U;\n        result.domain = result.detail.rpc.core_result == WL_OK ? {prefix}_RUNTIME_OK : {prefix}_RUNTIME_CORE_ERROR;\n      }} else if (result.detail.rpc.rpc_result == WL_RPC_ERR_NOT_FOUND) result.domain = {prefix}_RUNTIME_NON_RX;\n      else result.domain = {prefix}_RUNTIME_RPC_ERROR;\n    }} else {{\n      result.domain = {prefix}_RUNTIME_NON_RX;\n    }}\n    return result;\n  }}\n  if (event->type != WL_EVT_UNRELIABLE_RX && event->type != WL_EVT_RELIABLE_RX) {{\n    result.domain = {prefix}_RUNTIME_NON_RX;\n    return result;\n  }}\n"
         )
         .unwrap();
     }
@@ -1519,7 +1558,9 @@ fn emit_pump_implementation(output: &mut String, profile: &BindingProfileModel, 
         "static wl_pump_event_disposition_t {module}_runtime_pump_event(void *user_data, wl_ctx_t *ctx, const wl_event_t *event, wl_time_ms_t now_ms) {{\n  {module}_runtime_pump_t *pump = ({module}_runtime_pump_t *)user_data;\n  {module}_runtime_result_t result;\n  if (pump == NULL || pump->runtime == NULL) return WL_PUMP_EVENT_UNHANDLED;\n  result = {module}_runtime_dispatch_event(ctx, event, pump->runtime, now_ms);\n  if (pump->on_result != NULL) pump->on_result(pump->user_data, &result);\n  return result.event_consumed != 0U ? WL_PUMP_EVENT_CONSUMED : WL_PUMP_EVENT_UNHANDLED;\n}}\n\n"
     )
     .unwrap();
-    if !profile.rpc_services.is_empty() {
+    if profile.rpc_services.iter().any(RpcService::is_managed) {
+        output.push_str(&include_str!("runtime_async_pump.c.in").replace("@M@", module));
+    } else if !profile.rpc_services.is_empty() {
         write!(
             output,
             "static uint8_t {module}_runtime_pump_progress(void *user_data, wl_ctx_t *ctx, wl_time_ms_t now_ms) {{\n  {module}_runtime_pump_t *pump = ({module}_runtime_pump_t *)user_data;\n  if (pump == NULL || pump->runtime == NULL) return 0U;\n  pump->last_service_result = {module}_runtime_service(ctx, pump->runtime, now_ms, &pump->last_service);\n  if (pump->last_service_result != WL_RPC_OK) return 0U;\n  if (pump->last_service.response.message_id != 0U && pump->on_result != NULL)\n    pump->on_result(pump->user_data, &pump->last_service.response);\n  return pump->last_service.responses_submitted != 0U ? 1U : 0U;\n}}\n\nstatic uint32_t {module}_runtime_pump_deadline(const void *user_data, wl_time_ms_t now_ms) {{\n  const {module}_runtime_pump_t *pump = (const {module}_runtime_pump_t *)user_data;\n  wl_rpc_deadline_hint_t hint = {{0}};\n  if (pump == NULL || pump->runtime == NULL || {module}_runtime_get_deadline_hint(pump->runtime, now_ms, &hint) != WL_RPC_OK)\n    return WL_POLL_NO_DEADLINE_MS;\n  return hint.next_deadline_ms;\n}}\n\n"

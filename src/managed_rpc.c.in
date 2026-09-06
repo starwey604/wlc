@@ -112,7 +112,7 @@ wl_rpc_err_t @M@_@S@_client_release(@M@_runtime_t *runtime, uint32_t operation_i
 
 static @M@_runtime_result_t @M@_@S@_server_finish(@M@_runtime_t *runtime,
     const @M@_@S@_request_token_t *token, int32_t application_status,
-    const @RES@_t *response, wl_time_ms_t now_ms) {
+    const void *response, wl_time_ms_t now_ms, bool owned) {
   @M@_runtime_result_t result = @M@_runtime_result(NULL);
   wl_rpc_server_response_buffer_t buffer = {0};
   wl_rpc_server_response_t cached = {0};
@@ -141,8 +141,18 @@ static @M@_runtime_result_t @M@_@S@_server_finish(@M@_runtime_t *runtime,
   }
   @M@_rpc_header_write(buffer.data, 2U, request->identity.operation_id, application_status);
   if (application_status == 0) {
+#if @REQ_P@_HAS_VALUE && @RES_P@_HAS_VALUE
+    if (owned) {
+      result.detail.rpc.codec_status = @RES@_value_encode(response, buffer.data + 12U,
+          buffer.capacity - 12U, &encoded_length);
+    } else
+#else
+    (void)owned;
+#endif
+    {
     result.detail.rpc.codec_status = @RES@_encode(response, buffer.data + 12U,
         buffer.capacity - 12U, &encoded_length);
+    }
     if (result.detail.rpc.codec_status != WL_CODEC_OK) {
       result.domain = @P@_RUNTIME_CODEC_ERROR;
       return result;
@@ -162,9 +172,29 @@ static @M@_runtime_result_t @M@_@S@_server_finish(@M@_runtime_t *runtime,
 
 @M@_runtime_result_t @M@_@S@_server_complete(@M@_runtime_t *runtime,
     const @M@_@S@_request_token_t *token, const @RES@_t *response, wl_time_ms_t now_ms) {
-  return @M@_@S@_server_finish(runtime, token, 0, response, now_ms);
+  return @M@_@S@_server_finish(runtime, token, 0, response, now_ms, false);
 }
 @M@_runtime_result_t @M@_@S@_server_reject(@M@_runtime_t *runtime,
     const @M@_@S@_request_token_t *token, int32_t application_status, wl_time_ms_t now_ms) {
-  return @M@_@S@_server_finish(runtime, token, application_status, NULL, now_ms);
+  return @M@_@S@_server_finish(runtime, token, application_status, NULL, now_ms, false);
 }
+
+#if @REQ_P@_HAS_VALUE && @RES_P@_HAS_VALUE
+@M@_runtime_result_t @M@_@S@_server_complete_value(@M@_runtime_t *runtime,
+    const @M@_@S@_request_token_t *token, const @RES@_value_t *response,
+    wl_time_ms_t now_ms) {
+  return @M@_@S@_server_finish(runtime, token, 0, response, now_ms, true);
+}
+
+wl_err_t @M@_@S@_encode_submission(const void *request, uint32_t operation_id,
+    uint8_t *out, size_t capacity, size_t *length) {
+  wl_codec_status_t status;
+  size_t size = 0U;
+  if (capacity < 12U) return WL_ERR_BUF_TOO_SMALL;
+  @M@_rpc_header_write(out, 1U, operation_id, 0);
+  status = @REQ@_value_encode(request, out + 12U, capacity - 12U, &size);
+  if (status != WL_CODEC_OK) return WL_ERR_CORRUPT_PAYLOAD;
+  *length = size + 12U;
+  return WL_OK;
+}
+#endif

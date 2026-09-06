@@ -14,7 +14,7 @@ compiler version 与 generated-code ABI 是两个兼容轴。`wlc --version` 报
 manifest 的 `compiler.codegen_abi` 记录生成 ABI；build 必须同时 pin 两者，不能跟随 branch
 或自动使用最新版。
 
-当前开发版 `wlc codegen-abi` 输出 22（未发布）；核心和所有生成消费者必须配套重建。
+当前开发版 `wlc codegen-abi` 输出 23（未发布）；核心和所有生成消费者必须配套重建。
 
 ## 自持业务值与高级视图
 
@@ -30,8 +30,30 @@ required、presence 与默认值不变，解码失败不修改输出。
 
 需要借用时才包含 `<module>.h`，使用原 `<message>_t`，或者显式
 `*_value_from_view/to_view`。转换失败不修改输出；输入输出存储不能重叠。
-得到的视图仍借用原值，不能比原值活得更久。普通 RPC 将直接消费自持值，
+得到的视图仍借用原值，不能比原值活得更久。普通 RPC 直接消费自持值，
 不需要业务手工做这些转换。
+
+## 默认 RPC 端点（ABI 23）
+
+`<runtime>_endpoint.h` 是普通入口；因静态布局传递包含 runtime 头，
+不承诺所有高级声明都不可见。使用 `endpoint_<service>_async()` 提交自持请求，
+完成 callback 取得自持响应，调用槽自动回收。需要取消才保存 `wl_rpc_call_t`；
+普通路径没有 inspect/release。失败提交不回调，已接受调用在持续推进或有序关闭时通知一次。
+回调指针只在回调内有效，复制 `*response` 则独立于端点。
+
+服务端用 `config.on_<service>` 注册即时 handler，返回 0 表示成功，
+非零仅表示业务拒绝。可选业务上下文为 `config.<service>_user_data`。
+client 初始化就绪，注册 handler 自动提供 server 能力。
+默认四槽有界提交及最近结果缓存，保护未送达结果，只淘汰最旧已送达结果。
+TTL 是最长保留而非保留窗口承诺。统一构建定义 `<PREFIX>_ENDPOINT_RPC_CAPACITY`
+可缩小静态容量，运行时 count 不得更大。
+
+`config.advanced` 保留手动角色、容量和缓存策略；原 call/token 是高级路径。
+需要手动 endpoint call/inspect/release、complete/reject 助手时显式包含
+`<runtime>_advanced.h`；普通端点入口不包含这些助手。
+回调可提交或取消其他调用，不可递归 step、同步 close/reinit 本端点。
+从 owner 安全点使用生成的 close，然后才释放 adapter；不能只关闭通用 handle。
+M3 同步等待、M4 分配器不包含在 ABI 23 本轮。
 
 ## Schema Grammar
 

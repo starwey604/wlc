@@ -1,0 +1,48 @@
+/* Generator internals: all services reuse one bounded completion scratch. */
+static inline void @M@_endpoint_@S@_prepare(void *context,
+    const wl_rpc_client_result_t *client) {
+  @M@_endpoint_t *endpoint = (@M@_endpoint_t *)context;
+  wl_rpc_completion_t *result = &endpoint->private_state.completion;
+  wl_rpc_async_completion(client, result);
+  if (result->status == WL_RPC_SUCCESS) {
+    if (client->response_length < 12U) {
+      result->status = WL_RPC_FAILED;
+      result->runtime_error = WL_RPC_ERR_MALFORMED_METADATA;
+      return;
+    }
+    result->codec_error = @RES@_value_decode(client->response_data + 12U,
+        client->response_length - 12U, &endpoint->private_state.values.@S@.response);
+    if (result->codec_error != WL_CODEC_OK) result->status = WL_RPC_FAILED;
+  }
+}
+static inline void @M@_endpoint_@S@_notify(void *context,
+    wl_rpc_callback_t callback, void *user_data) {
+  @M@_endpoint_t *endpoint = (@M@_endpoint_t *)context;
+  ((@M@_@S@_completion_fn)callback)(user_data, &endpoint->private_state.completion,
+      endpoint->private_state.completion.status == WL_RPC_SUCCESS
+          ? &endpoint->private_state.values.@S@.response : NULL);
+}
+
+/* Snapshot and accept a call; callback is delivered by step or orderly close.
+ * out_call is optional cancellation authority. Successful completion owns its
+ * fields; copy *response during the callback to save it. Never release a slot.
+ * No callback on failed admission; BUSY means local bounded capacity is full. */
+static inline wl_err_t @M@_endpoint_@S@_async(@M@_endpoint_t *endpoint,
+    const @REQ@_value_t *request, uint32_t timeout_ms,
+    @M@_@S@_completion_fn callback, void *user_data, wl_rpc_call_t *out_call) {
+  wl_time_ms_t now_ms;
+  int error;
+  wl_rpc_async_observer_t observer;
+  if (endpoint == NULL || request == NULL || callback == NULL) return WL_ERR_INVALID_ARG;
+  if (endpoint->private_state.closing) return WL_ERR_NOT_INITIALIZED;
+  error = wl_endpoint_now(@M@_endpoint_handle(endpoint), &now_ms);
+  if (error != WL_OK) return error;
+  observer.prepare = @M@_endpoint_@S@_prepare;
+  observer.notify = @M@_endpoint_@S@_notify;
+  observer.context = endpoint;
+  observer.callback = (wl_rpc_callback_t)callback;
+  observer.user_data = user_data;
+  return wl_rpc_async_submit(&endpoint->private_state.async, @REQ_ID@, @RES_ID@,
+      @REQ_DELIVERY@, timeout_ms, now_ms, @M@_@S@_encode_submission, request,
+      &observer, out_call);
+}

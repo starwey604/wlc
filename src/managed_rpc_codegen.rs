@@ -11,6 +11,8 @@ fn expand(template: &str, module: &str, service: &RpcService) -> String {
         .replace("@S@", &c_identifier(&service.name))
         .replace("@REQ@", &type_name(&service.request_name))
         .replace("@RES@", &type_name(&service.response_name))
+        .replace("@REQ_P@", &upper_snake(&service.request_name))
+        .replace("@RES_P@", &upper_snake(&service.response_name))
         .replace("@REQ_ID@", &format!("{}U", service.request_id))
         .replace("@RES_ID@", &format!("{}U", service.response_id))
         .replace("@REQ_EVENT@", event(service.request_delivery))
@@ -55,4 +57,7 @@ pub(crate) fn implementation(module: &str, service: &RpcService) -> String {
 }
 pub(crate) fn endpoint(module: &str, service: &RpcService) -> String {
     expand(include_str!("managed_rpc_endpoint.h.in"), module, service)
+}
+pub(crate) fn async_endpoint(module: &str, service: &RpcService) -> String {
+    expand(include_str!("rpc_async_endpoint.h.in"), module, service)
 }

@@ -16,4 +16,11 @@ wl_rpc_err_t @M@_@S@_client_release(@M@_runtime_t *runtime, uint32_t operation_i
 @M@_runtime_result_t @M@_@S@_server_reject(@M@_runtime_t *runtime,
     const @M@_@S@_request_token_t *token, int32_t application_status,
     wl_time_ms_t now_ms);
-
+#if @REQ_P@_HAS_VALUE && @RES_P@_HAS_VALUE
+/* Generator-owned snapshot/response helpers. Prefer endpoint operations. */
+wl_err_t @M@_@S@_encode_submission(const void *request, uint32_t operation_id,
+    uint8_t *out, size_t capacity, size_t *length);
+@M@_runtime_result_t @M@_@S@_server_complete_value(@M@_runtime_t *runtime,
+    const @M@_@S@_request_token_t *token, const @RES@_value_t *response,
+    wl_time_ms_t now_ms);
+#endif

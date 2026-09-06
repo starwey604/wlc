@@ -20,22 +20,37 @@ records `compiler.codegen_abi`. Build integrations should pin both rather than
 following a branch or the newest release.
 
 `wlc codegen-abi` prints this revision without requiring a schema. Current
-development generates ABI 22 (unreleased). It adds independent self-owning values
-in `<module>_values.h`; regenerate the codec and all runtime consumers together.
-It provides default endpoint assembly for each bounded
-profile's runtime header: `*_endpoint_t`, `init`/`init_config`, `step`/`close`,
-profile-selected `endpoint_send_*` and copying `endpoint_read_*` operations,
-plus managed RPC call handles and typed inspect/release/cancel/complete/reject.
+development generates ABI 23 (unreleased). Regenerate all codec/runtime artifacts
+and use the matching Wirelink core. `<module>_values.h` supplies bounded self-owning
+business values. `<runtime>_endpoint.h` is the ordinary endpoint entry; it
+transitively includes runtime declarations for static layout, not an opaque ABI.
 
-The endpoint owns its static link buffers, runtime arena, and pump glue. It
-creates no thread or heap allocation. Zero-initialize it before first init;
-its private members are not supported API. `endpoint_handle()` connects an
-adapter, while `endpoint_runtime()` preserves advanced borrowed access. Sizing
-uses only profile-selected messages; `*_HAS_DEFAULT_ENDPOINT=0` advertises that
-an unbounded or oversized selected message needs custom storage. Default link
-settings are native packets and CRC32C; RPC roles and expiry policy remain explicit.
-These development artifacts require the matching Wirelink endpoint API and
-must not be mixed with older core installations.
+Zero-initialize a stable `*_endpoint_t`, supply a session and clock, attach an
+adapter, and drive `step`. Ordinary `endpoint_<service>_async()` snapshots its
+owned request before acceptance and automatically recycles the call before its
+completion callback. Failed admission never notifies. Accepted calls notify once
+under continued driving or orderly close. Copy callback `*response` to retain an
+independent value; the pointer itself is callback-scoped. Optional `wl_rpc_call_t`
+supports cancellation; inspect/release is an advanced opt-in.
+
+Register `config.on_<service>` for immediate handlers: zero means success,
+nonzero means business rejection, never a framework error. Business context is
+`config.<service>_user_data`. Client capability is ready at init and handlers
+enable server capability. Defaults provide four bounded client/pending/cache
+slots and a recent-result cache which evicts only the oldest delivered response.
+TTL is a maximum age, not a retention guarantee. Set
+`<PREFIX>_ENDPOINT_RPC_CAPACITY` consistently across all consuming TUs to reduce
+static capacity; runtime counts must fit.
+
+`config.advanced` retains expert policies and manual deferred handlers. Explicitly
+include `<runtime>_advanced.h` for manual endpoint call/inspect/release and
+complete/reject helpers; the ordinary entry does not include these helpers.
+Callbacks may submit/cancel but cannot recursively step, synchronously close or
+reinitialize their own endpoint. Use generated close from an owner safe point
+before freeing the adapter; generic handle close skips generated notifications.
+No heap/thread is created and private members are unsupported. Oversized or
+unbounded selected messages set HAS_DEFAULT_ENDPOINT=0. Synchronous waiting
+(M3) and allocator creation (M4) are not part of this stage.
 
 ## Schema grammar
 
@@ -377,8 +392,8 @@ The manifest's `bounded_fields` array records each bounded field's message and
 field names/IDs, kind, and exact maximum byte length. Bounds also contribute to
 the schema identity; unbounded legacy types retain their existing identity tags.
 
-For a bounded profile, the generated header provides a no-heap default assembly
-path with one retained/RPC slot:
+For advanced manual assembly (not the ordinary endpoint defaults above), a bounded
+profile provides a one-slot no-heap runtime recipe:
 
 ```c
 control_runtime_config_t config;
@@ -431,7 +446,7 @@ TX handle; owner loops may apply their fallback action only while it is zero. In
 has no domain payload. A retained-only profile therefore does not carry the
 larger RPC result fields. Generated runtime headers likewise include only the
 LATEST, FIFO, and RPC public headers selected by that profile. The fixed
-`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `22` for this surface; regenerate
+`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `23` for this surface; regenerate
 all runtime sources and update field access together when that value changes.
 
 Every generated result exposes `*_runtime_result_ok()` for the common success

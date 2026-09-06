@@ -40,7 +40,14 @@ fn managed_rpc_profiles_have_no_business_metadata_or_partial_mapping() {
     assert!(!codec.header.contains("operation_id"));
     assert!(!codec.header.contains("application_status"));
     let runtime = generate_runtime_c(&schema, &profile, "demo").unwrap();
-    assert!(runtime.header.contains("demo_execute_call_t"));
+    assert!(!runtime.header.contains("demo_execute_call_t"));
+    assert!(runtime.advanced_header.contains("demo_execute_call_t"));
+    assert!(!runtime.header.contains("demo_endpoint_execute_inspect("));
+    assert!(
+        runtime
+            .advanced_header
+            .contains("demo_endpoint_execute_inspect(")
+    );
     assert!(!runtime.header.contains("rpc_encode_scratch"));
     assert!(
         runtime
@@ -172,7 +179,9 @@ fn managed_rpc_runs_real_core_and_shared_codec_for_all_deliveries() {
                 ("demo_values.h", codec.values_header),
                 ("demo_bindings.h", codec.bindings_header), ("demo_bindings.c", codec.bindings_source),
                 ("demo_runtime.h", runtime.header), ("demo_runtime.c", runtime.source),
+                ("demo_advanced.h", runtime.advanced_header),
                 ("peer_runtime.h", peer.header), ("peer_runtime.c", peer.source),
+                ("peer_advanced.h", peer.advanced_header),
                 ("test.c", include_str!("fixtures/managed_rpc.c").to_owned()),
                 ("headers.cpp", "#include \"demo_runtime.h\"\n#include \"peer_runtime.h\"\nstatic demo_endpoint_t a;\nstatic peer_endpoint_t b;\nint main() { return demo_endpoint_init(&a, 1, wl_clock_t{}) + peer_endpoint_init(&b, 2, wl_clock_t{}); }\n".to_owned()),
             ] { fs::write(temp.path().join(name), text).unwrap(); }

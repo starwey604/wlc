@@ -59,15 +59,15 @@ pub(crate) fn emit(
         .any(|service| service.is_managed());
     let mut output = include_str!("endpoint.h.in")
         .replace("@RPC_CHECK@", &rpc_check)
-        .replace("@RPC_STATE@", if managed { "    uint64_t incarnation;\n    bool stepping;" } else { "" })
-        .replace("@RPC_STEP_BEGIN@", if managed { "  endpoint->private_state.stepping = true;" } else { "" })
+        .replace("@RPC_STEP_BEGIN@", if managed { "  if (endpoint->private_state.stepping || endpoint->private_state.closing) return WL_ERR_REENTRANT;\n  endpoint->private_state.stepping = true;" } else { "" })
         .replace("@RPC_STEP_END@", if managed { "  endpoint->private_state.stepping = false;" } else { "" })
         .replace("@RPC_BEGIN_INIT@", if managed {
             "  if (endpoint->private_state.incarnation == UINT64_MAX) return WL_ERR_INVALID_STATE;\n  ++endpoint->private_state.incarnation;"
         } else { "" })
         .replace("@RPC_INCARNATION@", if !managed { "" } else {
             "  endpoint->private_state.instance.runtime.rpc_incarnation = endpoint->private_state.incarnation;"
-        })
+        });
+    output = crate::rpc_endpoint_codegen::assemble(output, profile, &maxima, module)
         .replace("@M@", module)
         .replace("@P@", &prefix)
         .replace("@MAX@", &maximum.to_string());
@@ -91,7 +91,7 @@ pub(crate) fn emit(
     }
     for service in &profile.rpc_services {
         if service.is_managed() {
-            output.push_str(&crate::managed_rpc_codegen::endpoint(module, service));
+            output.push_str(&crate::managed_rpc_codegen::async_endpoint(module, service));
             continue;
         }
         let name = c_identifier(&service.name);
@@ -99,5 +99,19 @@ pub(crate) fn emit(
         let response = type_name(&service.response_name);
         writeln!(output, "static inline {module}_runtime_result_t {module}_endpoint_{name}_start({module}_endpoint_t *endpoint, const {request}_t *request, uint32_t timeout_ms) {{\n  wl_time_ms_t now_ms = 0U;\n  (void)wl_endpoint_now({module}_endpoint_handle(endpoint), &now_ms);\n  return {module}_{name}_client_start(wl_endpoint_link({module}_endpoint_handle(endpoint)), {module}_endpoint_runtime(endpoint), request, timeout_ms, now_ms);\n}}\n\nstatic inline wl_rpc_err_t {module}_endpoint_{name}_inspect({module}_endpoint_t *endpoint, uint32_t operation_id, wl_rpc_client_result_t *result) {{\n  return {module}_{name}_client_inspect({module}_endpoint_runtime(endpoint), operation_id, result);\n}}\n\nstatic inline wl_rpc_err_t {module}_endpoint_{name}_release({module}_endpoint_t *endpoint, uint32_t operation_id) {{\n  return {module}_{name}_client_release({module}_endpoint_runtime(endpoint), operation_id);\n}}\n\nstatic inline {module}_runtime_result_t {module}_endpoint_{name}_complete({module}_endpoint_t *endpoint, const wl_rpc_server_request_t *request, const {response}_t *response) {{\n  wl_time_ms_t now_ms = 0U;\n  (void)wl_endpoint_now({module}_endpoint_handle(endpoint), &now_ms);\n  return {module}_{name}_server_complete({module}_endpoint_runtime(endpoint), request, response, now_ms);\n}}\n").unwrap();
     }
+    output
+}
+
+pub(crate) fn advanced(profile: &BindingProfileModel, module: &str) -> String {
+    let prefix = upper_snake(module);
+    let mut output = format!(
+        "/* SPDX-License-Identifier: Apache-2.0 */\n/* Explicit manual RPC opt-in. Never release a callback-managed call. */\n#ifndef {prefix}_ADVANCED_H\n#define {prefix}_ADVANCED_H\n#include \"{module}_runtime.h\"\n#if {prefix}_HAS_DEFAULT_ENDPOINT\n"
+    );
+    for service in &profile.rpc_services {
+        if service.is_managed() {
+            output.push_str(&crate::managed_rpc_codegen::endpoint(module, service));
+        }
+    }
+    output.push_str("#endif\n#endif\n");
     output
 }

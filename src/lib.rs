@@ -10,6 +10,7 @@ pub mod manifest;
 mod parser;
 pub mod profile;
 pub mod profile_semantic;
+mod rpc_endpoint_codegen;
 pub mod runtime_codegen;
 pub mod semantic;
 mod value_codegen;
