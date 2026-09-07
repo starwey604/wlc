@@ -31,7 +31,7 @@ pub(crate) fn assemble(
             .rpc_services
             .iter()
             .filter(|service| service.is_managed())
-            .map(|service| maxima[&service.request_id].unwrap() + 12)
+            .map(|service| maxima[&service.request_id].unwrap() + service.metadata_size())
             .max()
             .unwrap();
         let response_capacity = profile

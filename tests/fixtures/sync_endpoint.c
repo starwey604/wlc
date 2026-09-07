@@ -91,12 +91,12 @@ static void sync_initialize(void) {
   if (allocate_endpoints) {
     wl_allocator_t allocator = endpoint_allocator();
     sync_client = NULL;
-    CHECK(demo_endpoint_config_defaults(&config, 31) == WL_OK);
-    config.clock = (wl_clock_t){read_clock, NULL};
+    CHECK(demo_endpoint_config_defaults(&config, test_environment_id(31, (wl_clock_t){0})) == WL_OK);
+    config.environment.clock = (wl_clock_t){read_clock, NULL};
     CHECK(demo_endpoint_create(&sync_client, &config, &allocator) == WL_OK);
-  } else CHECK(demo_endpoint_init(sync_client, 31, (wl_clock_t){read_clock, NULL}) == WL_OK);
-  CHECK(demo_endpoint_config_defaults(&config, 32) == WL_OK);
-  config.clock = (wl_clock_t){read_clock, NULL};
+  } else CHECK(demo_endpoint_init(sync_client, test_environment_id(31, (wl_clock_t){read_clock, NULL})) == WL_OK);
+  CHECK(demo_endpoint_config_defaults(&config, test_environment_id(32, (wl_clock_t){0})) == WL_OK);
+  config.environment.clock = (wl_clock_t){read_clock, NULL};
   config.on_execute = sync_execute;
   config.on_download = download;
   CHECK(demo_endpoint_init_config(&sync_server, &config) == WL_OK);
@@ -152,12 +152,12 @@ static void run_sync_tests(void) {
   large_value_t large;
   empty_value_clear(&empty);
   result = demo_endpoint_download_sync(sync_client, &empty, &large, 100);
-  CHECK(result.status == WL_RPC_SUCCESS && large.data.length == 2031 && large.data.data[2030] == 0xa5);
+  CHECK(result.status == WL_RPC_SUCCESS && large.data.length == 2023 && large.data.data[2022] == 0xa5);
   result = demo_endpoint_execute_sync(sync_client, &value, &response, 0);
   CHECK(result.status == WL_RPC_FAILED && result.local_error == WL_ERR_INVALID_ARG);
   CHECK(allocations == before_allocations && deallocations == before_deallocations);
   sync_close();
-  CHECK(response.output == 42 && large.data.data[2030] == 0xa5);
+  CHECK(response.output == 42 && large.data.data[2022] == 0xa5);
 
   for (unsigned attempt = 0; attempt < 3; ++attempt) {
     sync_initialize();

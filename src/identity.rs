@@ -96,8 +96,8 @@ pub fn binding_profile_identity(model: &BindingProfileModel) -> u64 {
         hash.u16(service.response_id);
         if service.is_managed() {
             hash.string("runtime-owned-rpc-header");
-            hash.u8(1);
-            hash.u16(12);
+            hash.u8(2);
+            hash.u16(20);
         } else {
             let request = service.request_operation_id.as_ref().unwrap();
             let response = service.response_operation_id.as_ref().unwrap();

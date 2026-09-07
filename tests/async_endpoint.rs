@@ -22,7 +22,7 @@ version 1;
 message Request @id(2) { required int32 input @id(1); required string<31> name @id(2); }
 message Response @id(3) { required int32 output @id(1); required string<31> name @id(2); }
 message Empty @id(4) {}
-message Large @id(5) { required bytes<2031> data @id(1); }
+message Large @id(5) { required bytes<2023> data @id(1); }
 "#,
         )
         .unwrap(),
@@ -73,6 +73,8 @@ message Large @id(5) { required bytes<2031> data @id(1); }
                 .arg("-I")
                 .arg(root.join("include"))
                 .arg("-I")
+                .arg(root.join("tests/support"))
+                .arg("-I")
                 .arg(directory.path())
                 .arg(directory.path().join("headers.cpp"))
                 .output()
@@ -95,6 +97,8 @@ message Large @id(5) { required bytes<2031> data @id(1); }
                 .arg(format!("-DDEMO_ENDPOINT_RPC_CAPACITY={capacity}"))
                 .arg("-I")
                 .arg(root.join("include"))
+                .arg("-I")
+                .arg(root.join("tests/support"))
                 .arg("-I")
                 .arg(root.join("runtime/storage/include"))
                 .arg("-I")

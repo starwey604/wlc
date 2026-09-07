@@ -20,12 +20,13 @@ records `compiler.codegen_abi`. Build integrations should pin both rather than
 following a branch or the newest release.
 
 `wlc codegen-abi` prints this revision without requiring a schema. Current
-development generates ABI 25 (unreleased). Regenerate all codec/runtime artifacts
+development generates ABI 26 (unreleased). Regenerate all codec/runtime artifacts
 and use the matching Wirelink core. `<module>_values.h` supplies bounded self-owning
 business values. `<runtime>_endpoint.h` is the ordinary endpoint entry; it
 transitively includes runtime declarations for static layout, not an opaque ABI.
 
-Zero-initialize a stable `*_endpoint_t`, supply a session and clock, attach an
+Zero-initialize a stable `*_endpoint_t`, supply `wl_platform_environment()` (or
+an injected C environment), attach an
 adapter, and drive `step`. Ordinary `endpoint_<service>_async()` snapshots its
 owned request before acceptance and automatically recycles the call before its
 completion callback. Failed admission never notifies. Accepted calls notify once
@@ -377,9 +378,10 @@ explicit. These attributes were introduced without an ABI bump during ABI 20;
 the clock API now requires ABI 21. The syntax itself still does not change wire bytes.
 
 Omitting all three operation/status mappings selects managed RPC: the `.wl`
-messages contain only business fields. The runtime owns a versioned 12-byte
+messages contain only business fields. The runtime owns a versioned 20-byte
 prefix (zero discriminator, version, kind, reserved zero, BE32 call ID, BE32
-status). Successful responses carry a business body; nonzero rejections carry
+status, BE64 originating client session). ABI 26 uses metadata version 2;
+both peers must upgrade, regardless of delivery policy. Successful responses carry a business body; nonzero rejections carry
 only the prefix. Default endpoints provide `*_call_t`, `*_result_t`, and reply
 tokens, with `call/inspect/release/cancel/complete/reject` operations.
 Endpoint call/reply operations return `wl_rpc_err_t`; generic runtime result
@@ -394,8 +396,10 @@ and mapped modes cannot interoperate without an explicit peer migration, and
 have different profile identities. Different retained storage/role policies
 can still share one codec. Call correlation and bounded replay are not durable
 business idempotency. Local tokens expire on runtime reinit; default endpoints
-add ownership/incarnation checks. They do not guarantee response freshness
-across client restarts or wire-ID reuse.
+add ownership/incarnation checks. Managed v2 replies must match the local session
+as well as the call ID; automatic IDs stop at exhaustion until safe close/reinit.
+Mapped RPC retains its previous freshness limitations. Neither mode guarantees
+durable exactly-once execution or authentication.
 
 
 
@@ -470,7 +474,7 @@ TX handle; owner loops may apply their fallback action only while it is zero. In
 has no domain payload. A retained-only profile therefore does not carry the
 larger RPC result fields. Generated runtime headers likewise include only the
 LATEST, FIFO, and RPC public headers selected by that profile. The fixed
-`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `25` for this surface; regenerate
+`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `26` for this surface; regenerate
 all runtime sources and update field access together when that value changes.
 
 Every generated result exposes `*_runtime_result_ok()` for the common success

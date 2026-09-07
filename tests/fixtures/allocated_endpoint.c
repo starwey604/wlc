@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 /* Included before sync_endpoint.c; the latter replays all tests in this pool. */
 #include "wirelink/storage/fixed_pool.h"
+#include "test_environment.h"
 static _Alignas(DEMO_ENDPOINT_ALIGNMENT) unsigned char endpoint_memory[sizeof(demo_endpoint_t)];
 static wl_fixed_pool_t endpoint_pool;
 static unsigned allocations, deallocations;
@@ -31,8 +32,8 @@ static void run_allocation_tests(void) {
   wl_allocator_t allocator = endpoint_allocator();
   CHECK(wl_fixed_pool_init(&endpoint_pool, endpoint_memory, sizeof(endpoint_memory),
       sizeof(demo_endpoint_t), DEMO_ENDPOINT_ALIGNMENT, 1) == WL_OK);
-  CHECK(demo_endpoint_config_defaults(&config, 71) == WL_OK);
-  config.clock = (wl_clock_t){read_clock, NULL};
+  CHECK(demo_endpoint_config_defaults(&config, test_environment_id(71, (wl_clock_t){0})) == WL_OK);
+  config.environment.clock = (wl_clock_t){read_clock, NULL};
   CHECK(demo_endpoint_create(NULL, &config, &allocator) == WL_ERR_INVALID_ARG);
   CHECK(demo_endpoint_create(&endpoint, &config, NULL) == WL_ERR_INVALID_ARG);
   CHECK(allocations == 0 && endpoint == NULL);
@@ -47,10 +48,10 @@ static void run_allocation_tests(void) {
   /* Every internal init stage still rolls back the single object allocation. */
   for (unsigned stage = 0; stage < 4; ++stage) {
     demo_endpoint_config_t bad = config;
-    if (stage == 0) bad.clock.now_ms = NULL;
+    if (stage == 0) bad.environment.clock.now_ms = NULL;
     if (stage == 1) bad.event_budget = 0;
     if (stage == 2) bad.advanced.rpc_client_slot_count = 0;
-    if (stage == 3) bad.link.session_id = 0;
+    if (stage == 3) bad.environment.session.next = NULL;
     CHECK(demo_endpoint_create(&endpoint, &bad, &allocator) != WL_OK);
     CHECK(endpoint == NULL && wl_fixed_pool_in_use(&endpoint_pool) == 0);
   }

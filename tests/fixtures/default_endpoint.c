@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "demo_runtime.h"
+#include "test_environment.h"
 #include "peer_runtime.h"
 #include <stdio.h>
 #include "wirelink/loopback.h"
@@ -11,8 +12,8 @@ static wl_time_ms_t server_time;
 static wl_time_ms_t test_now;
 static wl_time_ms_t read_clock(void *user) { (void)user; return test_now; }
 static wl_err_t configure(demo_endpoint_config_t *config, uint64_t session) {
-  wl_err_t result = demo_endpoint_config_defaults(config, session);
-  config->clock = (wl_clock_t){read_clock, NULL};
+  wl_err_t result = demo_endpoint_config_defaults(config, test_environment_id(session, (wl_clock_t){0}));
+  config->environment.clock = (wl_clock_t){read_clock, NULL};
   return result;
 }
 static unsigned calls;
@@ -44,7 +45,7 @@ static int exercise(void) {
   uint32_t id;
 
   CHECK((test_now = 0, demo_endpoint_step(&a)) == WL_ERR_NOT_INITIALIZED);
-  CHECK(demo_endpoint_init(&a, 0, (wl_clock_t){read_clock, NULL}) == WL_ERR_INVALID_ARG);
+  CHECK(demo_endpoint_init(&a, test_environment_id(0, (wl_clock_t){read_clock, NULL})) == WL_ERR_INVALID_ARG);
   CHECK(configure(&client_config, 1) == WL_OK);
   CHECK(configure(&server_config, 2) == WL_OK);
   CHECK(demo_runtime_config_enable_client(&client_config.advanced) == WL_OK);
@@ -57,7 +58,7 @@ static int exercise(void) {
   server_config.advanced.rpc_server_cache_ttl_ms = 1000;
   CHECK(demo_endpoint_init_config(&a, &client_config) == WL_OK);
   CHECK(demo_endpoint_init_config(&b, &server_config) == WL_OK);
-  CHECK(demo_endpoint_init(&a, 7, (wl_clock_t){read_clock, NULL}) == WL_ERR_INVALID_STATE);
+  CHECK(demo_endpoint_init(&a, test_environment_id(7, (wl_clock_t){read_clock, NULL})) == WL_ERR_INVALID_STATE);
   CHECK(wl_loopback_connect(&cable, demo_endpoint_handle(&a), demo_endpoint_handle(&b)) == WL_OK);
   CHECK(wl_loopback_connect(&other, demo_endpoint_handle(&a), demo_endpoint_handle(&b)) == WL_ERR_BUSY);
 
@@ -171,7 +172,9 @@ static int configurations(void) {
       CHECK(configure(&config, 9) == WL_OK);
       config.link.envelope = envelope;
       config.link.integrity = integrity;
-      CHECK(wl_config_requirements(&config.link, &requirements) == WL_OK);
+      wl_config_t explicit_link = config.link;
+      explicit_link.session_id = 9U; /* Advanced sizing requires an identity. */
+      CHECK(wl_config_requirements(&explicit_link, &requirements) == WL_OK);
       CHECK(requirements.tx_unit_size <= DEMO_ENDPOINT_UNIT_CAPACITY);
       CHECK(requirements.control_unit_size <= DEMO_ENDPOINT_CONTROL_CAPACITY);
       CHECK(requirements.rx_fifo_size <= DEMO_ENDPOINT_UNIT_CAPACITY);

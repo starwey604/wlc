@@ -5,6 +5,7 @@
       @M@_@S@_request_token_t token;
       size_t canonical_length = 0U;
       int32_t status = 0;
+      uint64_t session = 0U;
       result.detail_kind = @P@_RUNTIME_DETAIL_RPC;
       if (event->type != @REQ_EVENT@) {
         result.domain = @P@_RUNTIME_DELIVERY_MISMATCH;
@@ -15,8 +16,13 @@
         break;
       }
       result.detail.rpc.rpc_result = @M@_rpc_header_read(event->payload,
-          event->payload_len, 1U, &result.detail.rpc.operation_id, &status);
+          event->payload_len, 1U, &result.detail.rpc.operation_id, &status, &session);
       if (result.detail.rpc.rpc_result != WL_RPC_OK) {
+        result.domain = @P@_RUNTIME_RPC_ERROR;
+        break;
+      }
+      if (event->type == WL_EVT_RELIABLE_RX && event->peer_session_id != session) {
+        result.detail.rpc.rpc_result = WL_RPC_ERR_SESSION_MISMATCH;
         result.domain = @P@_RUNTIME_RPC_ERROR;
         break;
       }
@@ -25,8 +31,8 @@
         result.domain = @P@_RUNTIME_MISSING_SCRATCH;
         break;
       }
-      result.detail.rpc.codec_status = @REQ@_decode(event->payload + 12U,
-          event->payload_len - 12U, runtime->@S@.request_scratch);
+      result.detail.rpc.codec_status = @REQ@_decode(event->payload + 20U,
+          event->payload_len - 20U, runtime->@S@.request_scratch);
       if (result.detail.rpc.codec_status != WL_CODEC_OK) {
         result.domain = @P@_RUNTIME_CODEC_ERROR;
         break;
@@ -38,11 +44,10 @@
         result.domain = @P@_RUNTIME_CODEC_ERROR;
         break;
       }
-      if (event->peer_session_id != 0U &&
-          runtime->rpc_peer.session_id != event->peer_session_id) {
+      if (runtime->rpc_peer.session_id != session) {
         wl_rpc_peer_observation_t observation = {0};
         result.detail.rpc.rpc_result = @M@_runtime_peer_observe(ctx, runtime,
-            event->peer_session_id, &observation);
+            session, &observation);
         if (result.detail.rpc.rpc_result != WL_RPC_OK) {
           result.domain = @P@_RUNTIME_RPC_ERROR;
           break;
@@ -54,8 +59,8 @@
       identity.response_message_id = @RES_ID@;
       identity.request_fingerprint = @M@_rpc_request_fingerprint(
           runtime->@S@.canonical_request_scratch.data, canonical_length);
-      identity.peer_session_id = event->peer_session_id;
-      result.detail.rpc.payload_length = canonical_length + 12U;
+      identity.peer_session_id = session;
+      result.detail.rpc.payload_length = canonical_length + 20U;
       result.detail.rpc.rpc_result = wl_rpc_server_begin(runtime->rpc_server,
           &identity, now_ms, &result.detail.rpc.rpc_disposition, &server_request, &replay);
       if (result.detail.rpc.rpc_result != WL_RPC_OK) {

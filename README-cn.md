@@ -33,7 +33,12 @@ required、presence 与默认值不变，解码失败不修改输出。
 得到的视图仍借用原值，不能比原值活得更久。普通 RPC 直接消费自持值，
 不需要业务手工做这些转换。
 
-## 默认 RPC 端点（ABI 25）
+## 默认 RPC 端点（ABI 26）
+
+`endpoint_init(endpoint, wl_platform_environment())` 自动生成实例身份并配置时钟。
+自定义 `wl_environment_t.session.next` 可接入裸机身份来源；业务无需传 session ID。
+托管 RPC 元数据 v2 为 20 字节，回送客户端身份以隔离旧实例响应；所有 delivery 组合
+适用。v1/v2 须两端成对升级；显式字段映射和 Compact-v1 帧格式不变。
 
 `<runtime>_endpoint.h` 是普通入口；因静态布局传递包含 runtime 头，
 不承诺所有高级声明都不可见。使用 `endpoint_<service>_async()` 提交自持请求，
@@ -205,12 +210,13 @@ RPC 请求、响应各自默认 `reliable`。有特殊需要才覆盖一个方�
 `request = HomeRequest @delivery(unreliable);`。属性属于绑定，不属于 schema 消息。
 省略默认值、显式可靠属性、旧 `request_delivery`／`response_delivery` 属性生成相同的
 代码、manifest 和标识。同一方向重复声明一律报错，即使值相同。LATEST／FIFO 仍显式指定策略。
-这些属性在 ABI 20 期间作为语法扩展加入，时钟注入在 ABI 21 引入；当前配对为 ABI 25。
+这些属性在 ABI 20 期间作为语法扩展加入，时钟注入在 ABI 21 引入；当前配对为 ABI 26。
 属性语法本身仍不改变编码字节，需使用配套提交。
 
 三个编号／状态映射全部省略，即选择托管 RPC，`.wl` 只定义业务参数。
-runtime 管理 12 字节前缀：零区分字节、版本、请求／响应类型、保留零、
-大端 uint32 调用编号和大端 int32 状态。成功响应带业务体，非零拒绝只带前缀。
+runtime 管理 20 字节前缀：零区分字节、版本、请求／响应类型、保留零、
+大端 uint32 调用编号、大端 int32 状态和大端 uint64 原客户端 session。
+ABI 26 使用元数据 v2，所有可靠性组合均须成对升级。成功响应带业务体，非零拒绝只带前缀。
 默认端点生成 `*_call_t`、`*_result_t` 和回复 token，使用
 `call/inspect/release/cancel/complete/reject`。端点发起／回复统一返回 `wl_rpc_err_t`，
 普通 handler 无需创建通用 runtime result；详细失败保留在 `endpoint_result()`。
@@ -221,7 +227,9 @@ runtime 管理 12 字节前缀：零区分字节、版本、请求／响应类�
 `response_status` 三个映射，保持旧编码；只写部分会报错。托管与映射两种模式不能直接
 互通，模式进入 profile identity，迁移需同步两端。仅 retained 策略和本地角色不同仍可共享 codec。
 调用关联与有界重放不等于持久化业务幂等。本地 token 在 runtime 重建后应丢弃，
-默认端点增加归属／代次检查，但不保证客户端跨重启或线上编号复用后的响应新鲜度。
+默认端点增加归属／代次检查；托管 v2 响应必须同时匹配本地 session 和调用编号。
+自动编号耗尽会拒绝新调用，安全 close/reinit 后才恢复。映射 RPC 保留原新鲜度限制；
+两者都不提供持久 exactly-once 或认证。
 
 
 
@@ -267,7 +275,7 @@ tagged union 组成。只在匹配 tag 时通过生成 accessor 读取 detail；
 dispatch release RX 或 reclaim 匹配 TX handle 后设置 `event_consumed`，owner fallback 只能在
 其为零时执行。
 
-当前固定宏为 `<MODULE>_RUNTIME_CODEGEN_ABI_VERSION 25`；`wlc codegen-abi` 可直接查询。
+当前固定宏为 `<MODULE>_RUNTIME_CODEGEN_ABI_VERSION 26`；`wlc codegen-abi` 可直接查询。
 ABI 改变时所有 runtime
 source 和字段访问一起更新。pump helper 共用一次 `now_ms`，最多 service 一个 response，
 合并 RPC deadline，并可把借用 diagnostic result 交给 observer。
@@ -309,7 +317,7 @@ re-encode 后计算 domain-tagged fingerprint，按 NEW/PENDING_DUPLICATE/REPLAY
 
 异步 completion 必须复制包含 peer session 的 identity。ABI 18 在可靠 request 前自动观察
 session；切换清理旧工作并请求取消 detached response，`peer_changed` 和 take API 通知产品。
-ABI 21 默认端点在初始化时接收 `wl_clock_t`（简便 init 的第三参数或 `config.clock`），
+ABI 21 引入初始化时钟；ABI 26 使用 `wl_environment_t`，可覆盖 `config.environment.clock`，
 step/call/complete/reject 不再传 `now_ms`。每轮取一次时间，立即回复复用它；
 step 外可靠提交取一次供链路/RPC 共用，unreliable 端点发送不取时钟。
 描述符复制，上下文借用到 close；核心不选择操作系统时钟。

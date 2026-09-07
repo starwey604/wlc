@@ -52,12 +52,12 @@ fn managed_rpc_profiles_have_no_business_metadata_or_partial_mapping() {
     assert!(
         runtime
             .header
-            .contains("#define DEMO_ENDPOINT_MAX_PAYLOAD 18U")
+            .contains("#define DEMO_ENDPOINT_MAX_PAYLOAD 26U")
     );
     assert!(
         runtime
             .source
-            .contains("config->rpc_client_response_capacity = 18U")
+            .contains("config->rpc_client_response_capacity = 26U")
     );
     assert!(
         runtime
@@ -106,7 +106,7 @@ fn managed_rpc_profiles_have_no_business_metadata_or_partial_mapping() {
 
 #[test]
 fn managed_metadata_counts_toward_one_frame_limits() {
-    for (count, available) in [(508, true), (509, false)] {
+    for (count, available) in [(506, true), (507, false)] {
         let source = format!(
             "version 1; message Request @id(2) {{ required packed fixed32 values[{count}] @id(1); }} message Response @id(3) {{}}"
         );
@@ -183,7 +183,7 @@ fn managed_rpc_runs_real_core_and_shared_codec_for_all_deliveries() {
                 ("peer_runtime.h", peer.header), ("peer_runtime.c", peer.source),
                 ("peer_advanced.h", peer.advanced_header),
                 ("test.c", include_str!("fixtures/managed_rpc.c").to_owned()),
-                ("headers.cpp", "#include \"demo_runtime.h\"\n#include \"peer_runtime.h\"\nstatic demo_endpoint_t a;\nstatic peer_endpoint_t b;\nint main() { return demo_endpoint_init(&a, 1, wl_clock_t{}) + peer_endpoint_init(&b, 2, wl_clock_t{}); }\n".to_owned()),
+                ("headers.cpp", "#include \"demo_runtime.h\"\n#include \"peer_runtime.h\"\nstatic demo_endpoint_t a;\nstatic peer_endpoint_t b;\nint main() { return demo_endpoint_init(&a, wl_environment_t{}) + peer_endpoint_init(&b, wl_environment_t{}); }\n".to_owned()),
             ] { fs::write(temp.path().join(name), text).unwrap(); }
             let mut cc = Command::new("cc");
             cc.args(["-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Werror"])
@@ -197,6 +197,8 @@ fn managed_rpc_runs_real_core_and_shared_codec_for_all_deliveries() {
                 ))
                 .arg("-I")
                 .arg(root.join("include"))
+                .arg("-I")
+                .arg(root.join("tests/support"))
                 .arg("-I")
                 .arg(temp.path());
             let mut sources = fs::read_dir(root.join("src"))
@@ -247,6 +249,8 @@ fn managed_rpc_runs_real_core_and_shared_codec_for_all_deliveries() {
                 ])
                 .arg("-I")
                 .arg(root.join("include"))
+                .arg("-I")
+                .arg(root.join("tests/support"))
                 .arg("-I")
                 .arg(temp.path())
                 .arg(temp.path().join("headers.cpp"))
@@ -303,6 +307,8 @@ fn managed_and_mapped_services_share_one_runtime_without_encoding_scratch_leakag
         ])
         .arg("-I")
         .arg(root.join("include"))
+        .arg("-I")
+        .arg(root.join("tests/support"))
         .arg("-I")
         .arg(temp.path())
         .arg(temp.path().join("demo.c"))

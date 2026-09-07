@@ -5,13 +5,13 @@ static inline void @M@_endpoint_@S@_prepare(void *context,
   wl_rpc_completion_t *result = &endpoint->private_state.completion;
   wl_rpc_async_completion(client, result);
   if (result->status == WL_RPC_SUCCESS) {
-    if (client->response_length < 12U) {
+    if (client->response_length < 20U) {
       result->status = WL_RPC_FAILED;
       result->runtime_error = WL_RPC_ERR_MALFORMED_METADATA;
       return;
     }
-    result->codec_error = @RES@_value_decode(client->response_data + 12U,
-        client->response_length - 12U, &endpoint->private_state.values.@S@.response);
+    result->codec_error = @RES@_value_decode(client->response_data + 20U,
+        client->response_length - 20U, &endpoint->private_state.values.@S@.response);
     if (result->codec_error != WL_CODEC_OK) result->status = WL_RPC_FAILED;
   }
 }

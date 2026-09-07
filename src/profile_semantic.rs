@@ -74,7 +74,7 @@ impl RpcService {
     }
 
     pub fn metadata_size(&self) -> u64 {
-        if self.is_managed() { 12 } else { 0 }
+        if self.is_managed() { 20 } else { 0 }
     }
 }
 

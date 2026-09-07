@@ -1,5 +1,6 @@
     case @RES_ID@: {
       wl_rpc_client_result_t client;
+      uint64_t session = 0U;
       result.detail_kind = @P@_RUNTIME_DETAIL_RPC;
       if (event->type != @RES_EVENT@) {
         result.domain = @P@_RUNTIME_DELIVERY_MISMATCH;
@@ -11,11 +12,17 @@
       }
       result.detail.rpc.rpc_result = @M@_rpc_header_read(event->payload,
           event->payload_len, 2U, &result.detail.rpc.operation_id,
-          &result.detail.rpc.application_result);
+          &result.detail.rpc.application_result, &session);
       if (result.detail.rpc.rpc_result != WL_RPC_OK ||
-          (result.detail.rpc.application_result != 0 && event->payload_len != 12U)) {
+          (result.detail.rpc.application_result != 0 && event->payload_len != 20U)) {
         result.detail.rpc.rpc_result = WL_RPC_ERR_MALFORMED_METADATA;
         result.domain = @P@_RUNTIME_RPC_ERROR;
+        break;
+      }
+      if (session != wl_link_session_id(ctx)) {
+        /* Observable stale/misdirected reply; do not touch another call. */
+        result.detail.rpc.rpc_result = WL_RPC_ERR_SESSION_MISMATCH;
+        result.domain = @P@_RUNTIME_OK;
         break;
       }
       if (runtime->rpc_async != NULL) {
@@ -47,8 +54,8 @@
           result.domain = @P@_RUNTIME_MISSING_SCRATCH;
           break;
         }
-        result.detail.rpc.codec_status = @RES@_decode(event->payload + 12U,
-            event->payload_len - 12U, runtime->@S@.response_scratch);
+        result.detail.rpc.codec_status = @RES@_decode(event->payload + 20U,
+            event->payload_len - 20U, runtime->@S@.response_scratch);
         if (result.detail.rpc.codec_status != WL_CODEC_OK) {
           result.domain = @P@_RUNTIME_CODEC_ERROR;
           break;
