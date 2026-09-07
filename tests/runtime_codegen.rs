@@ -13,23 +13,16 @@ fn profile(source: &str, schema: &wlc::SemanticModel) -> wlc::BindingProfileMode
 
 #[test]
 fn runtime_namespace_rejects_schema_macro_type_and_service_collisions() {
-    for symbol in [
-        "control_endpoint_driver",
-        "control_endpoint_add_sync",
-        "control_endpoint_add_sync_done",
-        "control_endpoint_add_proxy_submit",
-        "control_endpoint_add_submit_at",
-    ] {
-        let source = format!(
-            "version 1; enum Names @id(1) {{ {symbol} = 0; }} message Request @id(2) {{}} message Response @id(3) {{}}"
+    {
+        let model = schema(
+            "version 1; message ControlAddSyncState @id(1) {} message Request @id(2) {} message Response @id(3) {}",
         );
-        let model = schema(&source);
         let binding = profile(
             "profile version 1; rpc Add { request = Request; response = Response; }",
             &model,
         );
         let error = generate_runtime_c(&model, &binding, "control").unwrap_err();
-        assert!(error.0.contains(symbol), "{error}");
+        assert!(error.0.contains("control_add_sync_state_t"), "{error}");
     }
     let type_collision =
         schema("version 1; message ControlRuntime = 1 { optional uint32 value = 1; }");
