@@ -205,7 +205,7 @@ RPC 请求、响应各自默认 `reliable`。有特殊需要才覆盖一个方�
 `request = HomeRequest @delivery(unreliable);`。属性属于绑定，不属于 schema 消息。
 省略默认值、显式可靠属性、旧 `request_delivery`／`response_delivery` 属性生成相同的
 代码、manifest 和标识。同一方向重复声明一律报错，即使值相同。LATEST／FIFO 仍显式指定策略。
-这些属性在 ABI 20 期间作为语法扩展加入；当前时钟 API 要求 ABI 21。
+这些属性在 ABI 20 期间作为语法扩展加入，时钟注入在 ABI 21 引入；当前配对为 ABI 25。
 属性语法本身仍不改变编码字节，需使用配套提交。
 
 三个编号／状态映射全部省略，即选择托管 RPC，`.wl` 只定义业务参数。
@@ -267,7 +267,7 @@ tagged union 组成。只在匹配 tag 时通过生成 accessor 读取 detail；
 dispatch release RX 或 reclaim 匹配 TX handle 后设置 `event_consumed`，owner fallback 只能在
 其为零时执行。
 
-当前固定宏为 `<MODULE>_RUNTIME_CODEGEN_ABI_VERSION 20`；`wlc codegen-abi` 可直接查询。
+当前固定宏为 `<MODULE>_RUNTIME_CODEGEN_ABI_VERSION 25`；`wlc codegen-abi` 可直接查询。
 ABI 改变时所有 runtime
 source 和字段访问一起更新。pump helper 共用一次 `now_ms`，最多 service 一个 response，
 合并 RPC deadline，并可把借用 diagnostic result 交给 observer。
