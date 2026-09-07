@@ -1,0 +1,110 @@
+
+/* Internal stack completion; no large response temporary or borrowed fields. */
+typedef struct {
+  bool done;
+  wl_rpc_completion_t result;
+  @RES@_value_t *response;
+  @M@_endpoint_t *endpoint;
+  const @REQ@_value_t *request;
+  wl_rpc_sync_notify_fn notify;
+  void *notify_context;
+} @M@_@S@_sync_state_t;
+
+static inline void @M@_endpoint_@S@_sync_done(void *context,
+    const wl_rpc_completion_t *result, const @RES@_value_t *response) {
+  @M@_@S@_sync_state_t *state = (@M@_@S@_sync_state_t *)context;
+  state->result = *result;
+  if (response != NULL) *state->response = *response;
+  state->done = true;
+  if (state->notify != NULL) state->notify(state->notify_context, &state->result);
+}
+
+static inline wl_err_t @M@_endpoint_@S@_proxy_submit(void *context,
+    wl_time_ms_t deadline, wl_rpc_sync_notify_fn notify, void *notify_context,
+    wl_rpc_call_t *call) {
+  @M@_@S@_sync_state_t *state = (@M@_@S@_sync_state_t *)context;
+  wl_time_ms_t now_ms;
+  int error = wl_endpoint_now(@M@_endpoint_handle(state->endpoint), &now_ms);
+  if (error != WL_OK) return error;
+  const uint32_t remaining = deadline - now_ms;
+  if (remaining == 0U || remaining > INT32_MAX) return WL_ERR_TIMEOUT;
+  state->notify = notify;
+  state->notify_context = notify_context;
+  return @M@_endpoint_@S@_submit_at(state->endpoint, state->request, remaining, now_ms,
+      @M@_endpoint_@S@_sync_done, state, call);
+}
+
+/* Platform call: use the installed waiter on the owner thread, or the bound
+ * executor's proxy from business threads. Reuses async deadlines/completion;
+ * never call from the same owner's callbacks. Response changes only on SUCCESS. Admission
+ * and platform failures use local_error, not business rejection/transport_error.
+ * On return there is no remaining callback referring to this function's stack. */
+static inline wl_rpc_completion_t @M@_endpoint_@S@_sync(@M@_endpoint_t *endpoint,
+    const @REQ@_value_t *request, @RES@_value_t *response, uint32_t timeout_ms) {
+  @M@_@S@_sync_state_t state;
+  wl_rpc_call_t call;
+  wl_waiter_t waiter;
+  const wl_waiter_t *platform;
+  const wl_rpc_executor_t *executor;
+  wl_err_t error;
+  memset(&state, 0, sizeof(state));
+  state.result.status = WL_RPC_FAILED;
+  state.response = response;
+  state.endpoint = endpoint;
+  state.request = request;
+  if (endpoint == NULL || request == NULL || response == NULL) {
+    state.result.local_error = WL_ERR_INVALID_ARG;
+    return state.result;
+  }
+  /* The binding is immutable while callers run. Do not inspect mutable owner
+   * state on a proxy caller thread, including during executor shutdown. */
+  executor = wl_endpoint_rpc_executor(@M@_endpoint_handle(endpoint));
+  if (executor != NULL) {
+    const wl_rpc_sync_call_t proxy = {&state, @M@_endpoint_@S@_proxy_submit};
+    return executor->invoke(executor->context, &proxy, timeout_ms);
+  }
+  if (endpoint->private_state.stepping || endpoint->private_state.closing ||
+      endpoint->private_state.sync_waiting) {
+    state.result.local_error = WL_ERR_REENTRANT;
+    return state.result;
+  }
+  if (wl_endpoint_link(@M@_endpoint_handle(endpoint)) == NULL) {
+    state.result.local_error = WL_ERR_NOT_INITIALIZED;
+    return state.result;
+  }
+  platform = wl_endpoint_waiter(@M@_endpoint_handle(endpoint));
+  if (platform == NULL) {
+    state.result.local_error = WL_ERR_NOT_SUPPORTED;
+    return state.result;
+  }
+  waiter = *platform;
+  endpoint->private_state.sync_waiting = true;
+  error = @M@_endpoint_@S@_async(endpoint, request, timeout_ms,
+      @M@_endpoint_@S@_sync_done, &state, &call);
+  if (error == WL_OK) {
+    while (!state.done) {
+      wl_poll_hint_t hint;
+      error = @M@_endpoint_step(endpoint);
+      if (state.done || error != WL_OK) break;
+      error = wl_endpoint_get_hint(@M@_endpoint_handle(endpoint), &hint);
+      if (error != WL_OK) break;
+      if (hint.work_pending || hint.next_deadline_ms == 0U) continue;
+      error = waiter.wait(waiter.user_data, hint.next_deadline_ms);
+      if (error == WL_ERR_NO_DATA) error = WL_OK;
+      if (error != WL_OK) break;
+    }
+    if (!state.done) {
+      /* The accepted handle is still live. Shared notification machinery
+       * detaches this stack context without closing unrelated calls. */
+      endpoint->private_state.stepping = true;
+      (void)wl_rpc_async_cancel_complete(&endpoint->private_state.async, &call);
+      endpoint->private_state.stepping = false;
+      state.result.status = error == WL_ERR_CANCELLED ? WL_RPC_CANCELLED : WL_RPC_FAILED;
+      state.result.local_error = error;
+    }
+  } else {
+    state.result.local_error = error;
+  }
+  endpoint->private_state.sync_waiting = false;
+  return state.result;
+}

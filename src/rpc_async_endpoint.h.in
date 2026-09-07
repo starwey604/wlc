@@ -27,16 +27,12 @@ static inline void @M@_endpoint_@S@_notify(void *context,
  * out_call is optional cancellation authority. Successful completion owns its
  * fields; copy *response during the callback to save it. Never release a slot.
  * No callback on failed admission; BUSY means local bounded capacity is full. */
-static inline wl_err_t @M@_endpoint_@S@_async(@M@_endpoint_t *endpoint,
-    const @REQ@_value_t *request, uint32_t timeout_ms,
+static inline wl_err_t @M@_endpoint_@S@_submit_at(@M@_endpoint_t *endpoint,
+    const @REQ@_value_t *request, uint32_t timeout_ms, wl_time_ms_t now_ms,
     @M@_@S@_completion_fn callback, void *user_data, wl_rpc_call_t *out_call) {
-  wl_time_ms_t now_ms;
-  int error;
   wl_rpc_async_observer_t observer;
   if (endpoint == NULL || request == NULL || callback == NULL) return WL_ERR_INVALID_ARG;
   if (endpoint->private_state.closing) return WL_ERR_NOT_INITIALIZED;
-  error = wl_endpoint_now(@M@_endpoint_handle(endpoint), &now_ms);
-  if (error != WL_OK) return error;
   observer.prepare = @M@_endpoint_@S@_prepare;
   observer.notify = @M@_endpoint_@S@_notify;
   observer.context = endpoint;
@@ -45,4 +41,17 @@ static inline wl_err_t @M@_endpoint_@S@_async(@M@_endpoint_t *endpoint,
   return wl_rpc_async_submit(&endpoint->private_state.async, @REQ_ID@, @RES_ID@,
       @REQ_DELIVERY@, timeout_ms, now_ms, @M@_@S@_encode_submission, request,
       &observer, out_call);
+}
+
+static inline wl_err_t @M@_endpoint_@S@_async(@M@_endpoint_t *endpoint,
+    const @REQ@_value_t *request, uint32_t timeout_ms,
+    @M@_@S@_completion_fn callback, void *user_data, wl_rpc_call_t *out_call) {
+  wl_time_ms_t now_ms;
+  int error;
+  if (endpoint == NULL || request == NULL || callback == NULL) return WL_ERR_INVALID_ARG;
+  if (endpoint->private_state.closing) return WL_ERR_NOT_INITIALIZED;
+  error = wl_endpoint_now(@M@_endpoint_handle(endpoint), &now_ms);
+  if (error != WL_OK) return error;
+  return @M@_endpoint_@S@_submit_at(endpoint, request, timeout_ms, now_ms,
+      callback, user_data, out_call);
 }

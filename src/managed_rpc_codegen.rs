@@ -60,4 +60,5 @@ pub(crate) fn endpoint(module: &str, service: &RpcService) -> String {
 }
 pub(crate) fn async_endpoint(module: &str, service: &RpcService) -> String {
     expand(include_str!("rpc_async_endpoint.h.in"), module, service)
+        + &expand(include_str!("rpc_sync_endpoint.h.in"), module, service)
 }

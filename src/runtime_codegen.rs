@@ -271,6 +271,7 @@ fn validate_runtime_names(
             "completion_fn",
             "server_complete_value",
             "encode_submission",
+            "sync_state_t",
         ] {
             let symbol = format!("{module}_{name}_{suffix}");
             if !runtime_names.insert(symbol.clone()) {
@@ -292,6 +293,9 @@ fn validate_runtime_names(
         "result",
         "close",
         "cancel",
+        "driver",
+        "driver_step",
+        "driver_close",
     ] {
         runtime_names.insert(format!("{module}_endpoint_{suffix}"));
     }
@@ -328,6 +332,10 @@ fn validate_runtime_names(
                 "async",
                 "prepare",
                 "notify",
+                "submit_at",
+                "sync",
+                "sync_done",
+                "proxy_submit",
             ]
         } else {
             &["start", "inspect", "release", "complete"]
@@ -633,7 +641,7 @@ fn emit_header(
         output.push_str("#include <wirelink/rpc.h>\n");
     }
     if profile.rpc_services.iter().any(RpcService::is_managed) {
-        output.push_str("#include <wirelink/rpc_async.h>\n");
+        output.push_str("#include <wirelink/rpc_sync.h>\n");
     }
     output.push_str("\n#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n");
     writeln!(

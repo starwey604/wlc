@@ -16,7 +16,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: starwey604/wirelink
-          ref: 6ea75b7b0ee5f1858170489d27ca7b8e1d3d603c
+          ref: 39316f30a8c4a641b99c3055141ff4490fbd69ae
           path: wirelink
 
       - name: Check out wlc

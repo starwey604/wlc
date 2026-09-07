@@ -114,6 +114,8 @@ static void close_pair(void) {
   closing = false;
   CHECK(clock_reads == before);
 }
+#include "sync_endpoint.c"
+
 int main(void) {
   request_value_t value = request();
   unsigned before, target;
@@ -191,5 +193,6 @@ int main(void) {
   close_pair();
   printf("async endpoint: capacity=%u bytes=%zu completions=%u handlers=%u\n",
       (unsigned)DEMO_ENDPOINT_RPC_CAPACITY, sizeof(client), completions, handlers);
+  run_sync_tests();
   return 0;
 }

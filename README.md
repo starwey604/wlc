@@ -20,7 +20,7 @@ records `compiler.codegen_abi`. Build integrations should pin both rather than
 following a branch or the newest release.
 
 `wlc codegen-abi` prints this revision without requiring a schema. Current
-development generates ABI 23 (unreleased). Regenerate all codec/runtime artifacts
+development generates ABI 24 (unreleased). Regenerate all codec/runtime artifacts
 and use the matching Wirelink core. `<module>_values.h` supplies bounded self-owning
 business values. `<runtime>_endpoint.h` is the ordinary endpoint entry; it
 transitively includes runtime declarations for static layout, not an opaque ABI.
@@ -49,8 +49,21 @@ Callbacks may submit/cancel but cannot recursively step, synchronously close or
 reinitialize their own endpoint. Use generated close from an owner safe point
 before freeing the adapter; generic handle close skips generated notifications.
 No heap/thread is created and private members are unsupported. Oversized or
-unbounded selected messages set HAS_DEFAULT_ENDPOINT=0. Synchronous waiting
-(M3) and allocator creation (M4) are not part of this stage.
+unbounded selected messages set HAS_DEFAULT_ENDPOINT=0. Allocator creation (M4)
+is not part of this stage.
+
+`endpoint_<service>_sync(endpoint, request, response, timeout_ms)` returns
+`wl_rpc_completion_t`, updating the owned response only on success. UDP installs
+readiness waiting; other platforms install `wl_waiter_t` once. Missing waiting
+returns FAILED/local NOT_SUPPORTED. Local admission/platform errors use
+`local_error`, separate from business rejection and protocol errors. Sync reuses
+async completion and guarantees no callback references its stack after return.
+Never call it from the same owner's callbacks. Background host integrations bind
+the generated `endpoint_driver()` to `wirelink::host::Executor`; business threads
+then use the same sync entry through its bounded proxy, never step concurrently.
+Proxy queuing consumes the original timeout and samples the same clock at
+admission: that provider must be thread-safe. Stop and join all callers before
+destroying endpoint/adapter/executor. Static ownership and the wire format are unchanged.
 
 ## Schema grammar
 

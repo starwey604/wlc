@@ -182,3 +182,19 @@ static inline wl_err_t @M@_endpoint_close(@M@_endpoint_t *endpoint) {
 @RPC_CLOSE_END@
   return WL_OK;
 }
+
+static inline wl_err_t @M@_endpoint_driver_step(void *context) {
+  return @M@_endpoint_step((@M@_endpoint_t *)context);
+}
+static inline wl_err_t @M@_endpoint_driver_close(void *context) {
+  return @M@_endpoint_close((@M@_endpoint_t *)context);
+}
+/* Setup-only platform integration; ordinary code does not drive both objects. */
+static inline wl_endpoint_driver_t @M@_endpoint_driver(@M@_endpoint_t *endpoint) {
+  wl_endpoint_driver_t driver;
+  driver.endpoint = @M@_endpoint_handle(endpoint);
+  driver.context = endpoint;
+  driver.step = @M@_endpoint_driver_step;
+  driver.close = @M@_endpoint_driver_close;
+  return driver;
+}

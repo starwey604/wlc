@@ -49,6 +49,10 @@ message Large @id(5) { required bytes<2031> data @id(1); }
                 ("demo_endpoint.h", runtime.endpoint_header),
                 ("demo_runtime.c", runtime.source),
                 ("test.c", include_str!("fixtures/async_endpoint.c").into()),
+                (
+                    "sync_endpoint.c",
+                    include_str!("fixtures/sync_endpoint.c").into(),
+                ),
             ] {
                 fs::write(directory.path().join(name), text).unwrap();
             }

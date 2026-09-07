@@ -14,7 +14,7 @@ compiler version 与 generated-code ABI 是两个兼容轴。`wlc --version` 报
 manifest 的 `compiler.codegen_abi` 记录生成 ABI；build 必须同时 pin 两者，不能跟随 branch
 或自动使用最新版。
 
-当前开发版 `wlc codegen-abi` 输出 23（未发布）；核心和所有生成消费者必须配套重建。
+当前开发版 `wlc codegen-abi` 输出 24（未发布）；核心和所有生成消费者必须配套重建。
 
 ## 自持业务值与高级视图
 
@@ -33,7 +33,7 @@ required、presence 与默认值不变，解码失败不修改输出。
 得到的视图仍借用原值，不能比原值活得更久。普通 RPC 直接消费自持值，
 不需要业务手工做这些转换。
 
-## 默认 RPC 端点（ABI 23）
+## 默认 RPC 端点（ABI 24）
 
 `<runtime>_endpoint.h` 是普通入口；因静态布局传递包含 runtime 头，
 不承诺所有高级声明都不可见。使用 `endpoint_<service>_async()` 提交自持请求，
@@ -53,7 +53,15 @@ TTL 是最长保留而非保留窗口承诺。统一构建定义 `<PREFIX>_ENDPO
 `<runtime>_advanced.h`；普通端点入口不包含这些助手。
 回调可提交或取消其他调用，不可递归 step、同步 close/reinit 本端点。
 从 owner 安全点使用生成的 close，然后才释放 adapter；不能只关闭通用 handle。
-M3 同步等待、M4 分配器不包含在 ABI 23 本轮。
+`endpoint_<service>_sync(endpoint, request, response, timeout_ms)` 返回本次
+`wl_rpc_completion_t`，成功才更新自持响应。UDP 自动安装就绪等待；其他平台初始化时
+安装 `wl_waiter_t`，缺失则立即返回 FAILED/local NOT_SUPPORTED，不忙等。
+本地提交/等待错误记录在 `local_error`，不混用业务拒绝或协议诊断。
+sync 复用异步完成，返回后无回调访问其栈，不能从同一 owner 回调调用。
+后台主机用生成的 `endpoint_driver()` 绑定 `wirelink::host::Executor`；业务线程
+调用同一个 sync 入口通过有界代理提交，不直接推进端点。排队计入原超时，入队读取
+同一端点时钟，所以 provider 必须线程安全。停止并 join 所有调用线程后才能销毁
+endpoint/adapter/executor。静态存储和线上格式不变；M4 分配器尚未实现。
 
 ## Schema Grammar
 
