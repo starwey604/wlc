@@ -296,11 +296,14 @@ fn validate_runtime_names(
         "driver",
         "driver_step",
         "driver_close",
+        "create",
+        "destroy",
     ] {
         runtime_names.insert(format!("{module}_endpoint_{suffix}"));
     }
     for suffix in [
         "MAX_PAYLOAD",
+        "ALIGNMENT",
         "RAW_CAPACITY",
         "UNIT_CAPACITY",
         "CONTROL_CAPACITY",
@@ -621,7 +624,7 @@ fn emit_header(
     let prefix = upper_snake(module);
     let guard = format!("WIRELINK_GENERATED_{prefix}_RUNTIME_H");
     let mut output = format!(
-        "#ifndef {guard}\n#define {guard}\n\n#include \"{codec_module}_bindings.h\"\n#include <wirelink/pump.h>\n#include <wirelink/endpoint.h>\n#include <wirelink/frame.h>\n#include <string.h>\n"
+        "#ifndef {guard}\n#define {guard}\n\n#include \"{codec_module}_bindings.h\"\n#include <wirelink/pump.h>\n#include <wirelink/endpoint.h>\n#include <wirelink/allocator.h>\n#include <wirelink/frame.h>\n#include <string.h>\n"
     );
     if profile
         .retained_routes

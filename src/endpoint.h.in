@@ -23,6 +23,9 @@ typedef struct {
 typedef struct {
   struct {
     wl_endpoint_t owner;
+    wl_allocator_t allocator; /* Zero for caller-owned static storage. */
+    bool stepping;
+    bool closing;
     @M@_runtime_instance_t instance;
     union {
       @M@_runtime_default_storage_alignment_t alignment;
@@ -41,6 +44,14 @@ typedef struct {
     uint8_t rx_fifo[@P@_ENDPOINT_UNIT_CAPACITY];
   } private_state;
 } @M@_endpoint_t;
+
+#if defined(__cplusplus)
+#define @P@_ENDPOINT_ALIGNMENT alignof(@M@_endpoint_t)
+#elif defined(_MSC_VER)
+#define @P@_ENDPOINT_ALIGNMENT __alignof(@M@_endpoint_t)
+#else
+#define @P@_ENDPOINT_ALIGNMENT _Alignof(@M@_endpoint_t)
+#endif
 
 /* Config descriptors can be temporary; callbacks/user_data must outlive use.
  * Ordinary client capability and registered server handlers are assembled by init. */
@@ -108,6 +119,8 @@ static inline wl_err_t @M@_endpoint_init_config(
   int result;
   if (endpoint == NULL || config == NULL || config->event_budget == 0U)
     return WL_ERR_INVALID_ARG;
+  if (endpoint->private_state.stepping || endpoint->private_state.closing)
+    return WL_ERR_REENTRANT;
   if (wl_endpoint_link(@M@_endpoint_handle(endpoint)) != NULL)
     return WL_ERR_INVALID_STATE;
   if (config->clock.now_ms == NULL) return WL_ERR_INVALID_ARG;
@@ -180,6 +193,7 @@ static inline wl_err_t @M@_endpoint_close(@M@_endpoint_t *endpoint) {
 @RPC_CLOSE_BEGIN@
   wl_endpoint_close(@M@_endpoint_handle(endpoint));
 @RPC_CLOSE_END@
+  endpoint->private_state.closing = false;
   return WL_OK;
 }
 
@@ -197,4 +211,54 @@ static inline wl_endpoint_driver_t @M@_endpoint_driver(@M@_endpoint_t *endpoint)
   driver.step = @M@_endpoint_driver_step;
   driver.close = @M@_endpoint_driver_close;
   return driver;
+}
+
+/* Optional creation: one allocation for the complete endpoint and all protocol
+ * storage. *out must be NULL; failure leaves it unchanged. No global allocator
+ * or fallback heap. Configure transport/waiting after successful creation. */
+static inline wl_err_t @M@_endpoint_create(@M@_endpoint_t **out,
+    const @M@_endpoint_config_t *config, const wl_allocator_t *allocator) {
+  @M@_endpoint_t *endpoint;
+  wl_allocator_t storage;
+  int error;
+  if (out == NULL || *out != NULL || config == NULL || allocator == NULL ||
+      allocator->allocate == NULL || allocator->deallocate == NULL) return WL_ERR_INVALID_ARG;
+  storage = *allocator;
+  endpoint = (@M@_endpoint_t *)storage.allocate(storage.context,
+      sizeof(*endpoint), @P@_ENDPOINT_ALIGNMENT);
+  if (endpoint == NULL) return WL_ERR_NO_MEM;
+  if ((uintptr_t)endpoint % @P@_ENDPOINT_ALIGNMENT != 0U) {
+    storage.deallocate(storage.context, endpoint, sizeof(*endpoint), @P@_ENDPOINT_ALIGNMENT);
+    return WL_ERR_INVALID_ARG;
+  }
+  memset(endpoint, 0, sizeof(*endpoint));
+  error = @M@_endpoint_init_config(endpoint, config);
+  if (error != WL_OK) {
+    (void)@M@_endpoint_close(endpoint);
+    storage.deallocate(storage.context, endpoint, sizeof(*endpoint), @P@_ENDPOINT_ALIGNMENT);
+    return error;
+  }
+  endpoint->private_state.allocator = storage;
+  *out = endpoint;
+  return WL_OK;
+}
+
+/* Owner safe point, after background executor stop and all caller joins.
+ * Close/quiesce and finish callbacks before freeing. Reentrant failure leaves
+ * the pointer alive. Static storage must use close, not destroy. NULL is a no-op.
+ * Copies of this owning pointer are invalid after successful destruction. */
+static inline wl_err_t @M@_endpoint_destroy(@M@_endpoint_t **owner) {
+  @M@_endpoint_t *endpoint;
+  wl_allocator_t storage;
+  int error;
+  if (owner == NULL) return WL_ERR_INVALID_ARG;
+  endpoint = *owner;
+  if (endpoint == NULL) return WL_OK;
+  storage = endpoint->private_state.allocator;
+  if (storage.deallocate == NULL) return WL_ERR_INVALID_STATE;
+  error = @M@_endpoint_close(endpoint);
+  if (error != WL_OK) return error;
+  *owner = NULL;
+  storage.deallocate(storage.context, endpoint, sizeof(*endpoint), @P@_ENDPOINT_ALIGNMENT);
+  return WL_OK;
 }

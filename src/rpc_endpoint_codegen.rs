@@ -24,7 +24,7 @@ pub(crate) fn assemble(
     let mut bind = String::new();
     let mut defaults = String::new();
     let mut initialize = String::new();
-    let mut close_begin = String::new();
+    let close_begin = "  if (endpoint->private_state.stepping || endpoint->private_state.closing) return WL_ERR_REENTRANT;\n  endpoint->private_state.closing = true;".to_owned();
     let mut close_end = String::new();
     if managed {
         let request_capacity = profile
@@ -43,7 +43,7 @@ pub(crate) fn assemble(
         capacity = format!(
             "/* Set consistently for every TU using this endpoint; no runtime allocation. */\n#ifndef @P@_ENDPOINT_RPC_CAPACITY\n#define @P@_ENDPOINT_RPC_CAPACITY 4U\n#endif\n#if @P@_ENDPOINT_RPC_CAPACITY < 1 || @P@_ENDPOINT_RPC_CAPACITY > 65535\n#error \"endpoint RPC capacity must be 1..65535\"\n#endif\n#define @P@_ENDPOINT_REQUEST_CAPACITY {request_capacity}U\n#define @P@_ENDPOINT_RUNTIME_CAPACITY (@P@_RUNTIME_DEFAULT_STORAGE_CAPACITY + (@P@_ENDPOINT_RPC_CAPACITY - 1U) * (sizeof(wl_rpc_client_slot_t) + sizeof(wl_rpc_server_pending_slot_t) + sizeof(wl_rpc_server_cache_slot_t) + 2U * {response_capacity}U))"
         );
-        state.push_str("    uint64_t incarnation;\n    bool stepping;\n    bool closing;\n    bool sync_waiting;\n    wl_rpc_async_t async;\n    wl_rpc_async_slot_t submissions[@P@_ENDPOINT_RPC_CAPACITY];\n    uint8_t requests[@P@_ENDPOINT_RPC_CAPACITY][@P@_ENDPOINT_REQUEST_CAPACITY];\n    wl_rpc_completion_t completion;\n    union {\n");
+        state.push_str("    uint64_t incarnation;\n    bool sync_waiting;\n    wl_rpc_async_t async;\n    wl_rpc_async_slot_t submissions[@P@_ENDPOINT_RPC_CAPACITY];\n    uint8_t requests[@P@_ENDPOINT_RPC_CAPACITY][@P@_ENDPOINT_REQUEST_CAPACITY];\n    wl_rpc_completion_t completion;\n    union {\n");
         config.push_str("  if (endpoint->private_state.closing) return WL_ERR_REENTRANT;\n  if (runtime_config.rpc_client_slot_count > @P@_ENDPOINT_RPC_CAPACITY ||\n      runtime_config.rpc_server_pending_slot_count > @P@_ENDPOINT_RPC_CAPACITY ||\n      runtime_config.rpc_server_cache_slot_count > @P@_ENDPOINT_RPC_CAPACITY) return WL_ERR_INVALID_ARG;\n");
         for service in &profile.rpc_services {
             let s = c_identifier(&service.name);
@@ -68,7 +68,6 @@ pub(crate) fn assemble(
         state.push_str("    } values;");
         defaults.push_str("  config->advanced.rpc_client_enabled = 1U;\n  config->advanced.rpc_client_slot_count = @P@_ENDPOINT_RPC_CAPACITY;\n  config->advanced.rpc_server_pending_slot_count = @P@_ENDPOINT_RPC_CAPACITY;\n  config->advanced.rpc_server_cache_slot_count = @P@_ENDPOINT_RPC_CAPACITY;\n  config->advanced.rpc_server_pending_timeout_ms = 1000U;\n  config->advanced.rpc_server_cache_ttl_ms = 10000U;\n  config->advanced.rpc_server_cache_policy = WL_RPC_CACHE_EVICT_OLDEST;");
         initialize.push_str("  if (runtime_config.rpc_client_enabled) {\n    result = wl_rpc_async_init(&endpoint->private_state.async,\n        wl_endpoint_link(&endpoint->private_state.owner), endpoint->private_state.instance.runtime.rpc_client,\n        endpoint->private_state.submissions, runtime_config.rpc_client_slot_count,\n        endpoint->private_state.requests[0], sizeof(endpoint->private_state.requests),\n        @P@_ENDPOINT_REQUEST_CAPACITY, endpoint->private_state.incarnation);\n    if (result != WL_OK) { wl_endpoint_close(&endpoint->private_state.owner); return result; }\n    endpoint->private_state.instance.runtime.rpc_async = &endpoint->private_state.async;\n  }");
-        close_begin.push_str("  if (endpoint->private_state.stepping || endpoint->private_state.closing) return WL_ERR_REENTRANT;\n  endpoint->private_state.closing = true;");
         close_end.push_str("  {\n    int error = wl_rpc_async_close(&endpoint->private_state.async);\n    endpoint->private_state.closing = false;\n    if (error != WL_OK) return error;\n  }");
     }
     for (key, value) in [

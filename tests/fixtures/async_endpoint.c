@@ -114,6 +114,7 @@ static void close_pair(void) {
   closing = false;
   CHECK(clock_reads == before);
 }
+#include "allocated_endpoint.c"
 #include "sync_endpoint.c"
 
 int main(void) {
@@ -194,5 +195,9 @@ int main(void) {
   printf("async endpoint: capacity=%u bytes=%zu completions=%u handlers=%u\n",
       (unsigned)DEMO_ENDPOINT_RPC_CAPACITY, sizeof(client), completions, handlers);
   run_sync_tests();
+  run_allocation_tests();
+  allocate_endpoints = true;
+  run_sync_tests();
+  CHECK(allocations == 4 && deallocations == 4 && wl_fixed_pool_in_use(&endpoint_pool) == 0);
   return 0;
 }

@@ -20,7 +20,7 @@ records `compiler.codegen_abi`. Build integrations should pin both rather than
 following a branch or the newest release.
 
 `wlc codegen-abi` prints this revision without requiring a schema. Current
-development generates ABI 24 (unreleased). Regenerate all codec/runtime artifacts
+development generates ABI 25 (unreleased). Regenerate all codec/runtime artifacts
 and use the matching Wirelink core. `<module>_values.h` supplies bounded self-owning
 business values. `<runtime>_endpoint.h` is the ordinary endpoint entry; it
 transitively includes runtime declarations for static layout, not an opaque ABI.
@@ -49,8 +49,19 @@ Callbacks may submit/cancel but cannot recursively step, synchronously close or
 reinitialize their own endpoint. Use generated close from an owner safe point
 before freeing the adapter; generic handle close skips generated notifications.
 No heap/thread is created and private members are unsupported. Oversized or
-unbounded selected messages set HAS_DEFAULT_ENDPOINT=0. Allocator creation (M4)
-is not part of this stage.
+unbounded selected messages set HAS_DEFAULT_ENDPOINT=0.
+
+Optional `endpoint_create(&pointer, &config, &allocator)` makes one allocation
+for the same complete endpoint; `pointer` must initially be NULL. The C-compatible
+allocator provides allocate(context,size,alignment) and paired deallocate. Init
+failure frees the allocation, leaving the output unchanged. `endpoint_destroy`
+closes/quiesces/notifies before freeing and clears the owning pointer. Static
+objects still use close. No per-message allocation or implicit heap fallback.
+Use Wirelink's optional fixed-block pool or supply your own allocator; keep its
+context alive through destroy. With a background executor, stop/join it and all
+callers before destruction. Old pointer aliases/handles are invalid afterwards.
+All TUs must agree on endpoint capacity and alignment macros. Creation changes
+storage ownership, not the lifetime of copied business values.
 
 `endpoint_<service>_sync(endpoint, request, response, timeout_ms)` returns
 `wl_rpc_completion_t`, updating the owned response only on success. UDP installs

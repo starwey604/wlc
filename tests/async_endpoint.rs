@@ -53,6 +53,10 @@ message Large @id(5) { required bytes<2031> data @id(1); }
                     "sync_endpoint.c",
                     include_str!("fixtures/sync_endpoint.c").into(),
                 ),
+                (
+                    "allocated_endpoint.c",
+                    include_str!("fixtures/allocated_endpoint.c").into(),
+                ),
             ] {
                 fs::write(directory.path().join(name), text).unwrap();
             }
@@ -92,6 +96,8 @@ message Large @id(5) { required bytes<2031> data @id(1); }
                 .arg("-I")
                 .arg(root.join("include"))
                 .arg("-I")
+                .arg(root.join("runtime/storage/include"))
+                .arg("-I")
                 .arg(directory.path());
                 if std::env::var_os("WLC_TEST_SANITIZE").is_some() {
                     cc.args([
@@ -107,6 +113,7 @@ message Large @id(5) { required bytes<2031> data @id(1); }
                     .collect::<Vec<_>>();
                 sources.sort();
                 cc.args(sources)
+                    .arg(root.join("runtime/storage/src/fixed_pool.c"))
                     .arg(root.join("adapters/loopback/src/loopback.c"));
                 for file in ["demo.c", "demo_bindings.c", "demo_runtime.c", "test.c"] {
                     cc.arg(directory.path().join(file));
