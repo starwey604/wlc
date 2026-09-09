@@ -54,6 +54,8 @@ pub(crate) fn emit(
         .iter()
         .any(|service| service.is_managed());
     let rpc = crate::rpc_endpoint_codegen::fragments(profile, maxima, module);
+    let transport =
+        crate::endpoint_transport_codegen::fragments(profile.endpoint_layout().envelope, &prefix);
     let maximum = maximum.to_string();
     let mut values = vec![
         ("M", module),
@@ -85,6 +87,7 @@ pub(crate) fn emit(
             },
         ),
     ];
+    values.extend(transport.iter().map(|(key, value)| (*key, value.as_str())));
     values.extend(
         rpc.bindings
             .iter()
@@ -119,7 +122,9 @@ pub(crate) fn emit(
     }
     for service in &profile.rpc_services {
         if service.is_managed() {
-            output.push_str(&crate::managed_rpc_codegen::async_endpoint(module, service));
+            if profile.has_rpc_client() {
+                output.push_str(&crate::managed_rpc_codegen::async_endpoint(module, service));
+            }
             continue;
         }
         let name = c_identifier(&service.name);

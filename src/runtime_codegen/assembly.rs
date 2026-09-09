@@ -69,9 +69,11 @@ pub(super) fn default_storage_terms(
             }
         }
     }
-    if !profile.rpc_services.is_empty() {
+    if profile.has_rpc_client() {
         terms.push(format!("({padding} + sizeof(wl_rpc_client_slot_t))"));
         terms.push(format!("{}U", capacities.rpc_response.unwrap()));
+    }
+    if profile.has_rpc_server() {
         terms.push(format!(
             "({padding} + sizeof(wl_rpc_server_pending_slot_t))"
         ));
@@ -150,10 +152,11 @@ pub(super) fn emit_assembly_header(
             };
             writeln!(output, "  {message}_t {message}_{kind};").unwrap();
         }
-        if !profile.rpc_services.is_empty() {
-            output.push_str(
-                "  wl_rpc_client_slot_t rpc_client_slot;\n  wl_rpc_server_pending_slot_t rpc_server_pending_slot;\n  wl_rpc_server_cache_slot_t rpc_server_cache_slot;\n",
-            );
+        if profile.has_rpc_client() {
+            output.push_str("  wl_rpc_client_slot_t rpc_client_slot;\n");
+        }
+        if profile.has_rpc_server() {
+            output.push_str("  wl_rpc_server_pending_slot_t rpc_server_pending_slot;\n  wl_rpc_server_cache_slot_t rpc_server_cache_slot;\n");
         }
         writeln!(
             output,
@@ -185,7 +188,17 @@ pub(super) fn emit_assembly_header(
         let name = c_identifier(&service.name);
         let request = type_name(&service.request_name);
         let response = type_name(&service.response_name);
-        writeln!(output, "typedef union {{ {request}_t request; {response}_t response; }} {module}_runtime_{name}_decode_detail_t;").unwrap();
+        let request_member = if profile.has_rpc_server() {
+            format!("{request}_t request; ")
+        } else {
+            String::new()
+        };
+        let response_member = if profile.has_rpc_client() {
+            format!("{response}_t response; ")
+        } else {
+            String::new()
+        };
+        writeln!(output, "typedef union {{ {request_member}{response_member}}} {module}_runtime_{name}_decode_detail_t;").unwrap();
     }
     write!(
         output,
@@ -201,7 +214,12 @@ pub(super) fn emit_assembly_header(
         writeln!(output, "  {ty} {message}_{kind};").unwrap();
     }
     if !profile.rpc_services.is_empty() {
-        output.push_str("  wl_rpc_client_t rpc_client;\n  wl_rpc_server_t rpc_server;\n");
+        if profile.has_rpc_client() {
+            output.push_str("  wl_rpc_client_t rpc_client;\n");
+        }
+        if profile.has_rpc_server() {
+            output.push_str("  wl_rpc_server_t rpc_server;\n");
+        }
         if profile
             .rpc_services
             .iter()
@@ -269,6 +287,7 @@ pub(super) fn emit_config_defaults(
     module: &str,
 ) {
     let capacities = runtime_default_capacities(maxima, profile);
+    let prefix = upper_snake(module);
     write!(
         output,
         "wl_err_t {module}_runtime_config_defaults({module}_runtime_config_t *config) {{\n  if (config == NULL) return WL_ERR_INVALID_ARG;\n  memset(config, 0, sizeof(*config));\n"
@@ -305,7 +324,7 @@ pub(super) fn emit_config_defaults(
     if !profile.rpc_services.is_empty() {
         write!(
             output,
-            "wl_err_t {module}_runtime_config_enable_client({module}_runtime_config_t *config) {{\n  if (config == NULL) return WL_ERR_INVALID_ARG;\n  if (config->rpc_client_slot_count == 0U || config->rpc_client_response_capacity == 0U) return WL_ERR_NOT_SUPPORTED;\n  config->rpc_client_enabled = 1U;\n  return WL_OK;\n}}\n\nwl_err_t {module}_runtime_config_enable_server({module}_runtime_config_t *config) {{\n  if (config == NULL) return WL_ERR_INVALID_ARG;\n  if (config->rpc_server_pending_slot_count == 0U || config->rpc_server_cache_slot_count == 0U || config->rpc_server_response_capacity == 0U) return WL_ERR_NOT_SUPPORTED;\n"
+            "wl_err_t {module}_runtime_config_enable_client({module}_runtime_config_t *config) {{\n  if (config == NULL) return WL_ERR_INVALID_ARG;\n  if (!{prefix}_RUNTIME_HAS_RPC_CLIENT || config->rpc_client_slot_count == 0U || config->rpc_client_response_capacity == 0U) return WL_ERR_NOT_SUPPORTED;\n  config->rpc_client_enabled = 1U;\n  return WL_OK;\n}}\n\nwl_err_t {module}_runtime_config_enable_server({module}_runtime_config_t *config) {{\n  if (config == NULL) return WL_ERR_INVALID_ARG;\n  if (!{prefix}_RUNTIME_HAS_RPC_SERVER || config->rpc_server_pending_slot_count == 0U || config->rpc_server_cache_slot_count == 0U || config->rpc_server_response_capacity == 0U) return WL_ERR_NOT_SUPPORTED;\n"
         )
         .unwrap();
         output.push_str("  config->rpc_server_enabled = 1U;\n  return WL_OK;\n}\n\n");
@@ -327,6 +346,28 @@ pub(super) fn emit_assembly_source(
 ) {
     emit_config_defaults(output, maxima, profile, module);
     let prefix = upper_snake(module);
+    if !profile.rpc_services.is_empty() {
+        writeln!(
+            output,
+            "static int {module}_runtime_roles_valid(const {module}_runtime_config_t *config) {{"
+        )
+        .unwrap();
+        if !profile.has_rpc_client() {
+            output.push_str("  if (config->rpc_client_enabled) return WL_ERR_NOT_SUPPORTED;\n");
+        }
+        if !profile.has_rpc_server() {
+            output.push_str("  if (config->rpc_server_enabled) return WL_ERR_NOT_SUPPORTED;\n");
+            for service in &profile.rpc_services {
+                let name = c_identifier(&service.name);
+                writeln!(
+                    output,
+                    "  if (config->{name}_request_handler != NULL) return WL_ERR_NOT_SUPPORTED;"
+                )
+                .unwrap();
+            }
+        }
+        output.push_str("  (void)config;\n  return WL_OK;\n}\n\n");
+    }
     let has_components = !profile.retained_routes.is_empty() || !profile.rpc_services.is_empty();
     let result_declaration = if has_components {
         "  int result;\n"
@@ -394,7 +435,7 @@ pub(super) fn emit_assembly_source(
     if !profile.rpc_services.is_empty() {
         write!(
             output,
-            "  if (config->rpc_client_enabled > 1U || config->rpc_server_enabled > 1U) return WL_ERR_INVALID_ARG;\n  if (config->rpc_client_enabled != 0U) {{\n    if (config->rpc_client_slot_count == 0U || config->rpc_client_response_capacity == 0U) return WL_ERR_INVALID_ARG;\n    if (alignment < _Alignof(wl_rpc_client_slot_t)) alignment = _Alignof(wl_rpc_client_slot_t);\n    result = {module}_runtime_storage_region(&cursor, _Alignof(wl_rpc_client_slot_t), config->rpc_client_slot_count, sizeof(wl_rpc_client_slot_t), out_layout == NULL ? NULL : &out_layout->rpc_client_slots, NULL);\n    if (result != WL_OK) return result;\n    result = {module}_runtime_storage_region(&cursor, 1U, config->rpc_client_slot_count, config->rpc_client_response_capacity, out_layout == NULL ? NULL : &out_layout->rpc_client_responses, out_layout == NULL ? NULL : &out_layout->rpc_client_responses_size);\n    if (result != WL_OK) return result;\n  }}\n  if (config->rpc_server_enabled != 0U) {{\n    if (config->rpc_server_pending_slot_count == 0U || config->rpc_server_cache_slot_count == 0U || config->rpc_server_response_capacity == 0U) return WL_ERR_INVALID_ARG;\n    if ((config->rpc_server_pending_timeout_ms != 0U && config->rpc_server_pending_timeout_ms >= UINT32_C(0x80000000)) || (config->rpc_server_cache_ttl_ms != 0U && config->rpc_server_cache_ttl_ms >= UINT32_C(0x80000000))) return WL_ERR_INVALID_ARG;\n    if (config->rpc_server_cache_policy != WL_RPC_CACHE_REJECT_NEW && config->rpc_server_cache_policy != WL_RPC_CACHE_EVICT_OLDEST) return WL_ERR_INVALID_ARG;\n    if (alignment < _Alignof(wl_rpc_server_pending_slot_t)) alignment = _Alignof(wl_rpc_server_pending_slot_t);\n    if (alignment < _Alignof(wl_rpc_server_cache_slot_t)) alignment = _Alignof(wl_rpc_server_cache_slot_t);\n    result = {module}_runtime_storage_region(&cursor, _Alignof(wl_rpc_server_pending_slot_t), config->rpc_server_pending_slot_count, sizeof(wl_rpc_server_pending_slot_t), out_layout == NULL ? NULL : &out_layout->rpc_server_pending_slots, NULL);\n    if (result != WL_OK) return result;\n    result = {module}_runtime_storage_region(&cursor, _Alignof(wl_rpc_server_cache_slot_t), config->rpc_server_cache_slot_count, sizeof(wl_rpc_server_cache_slot_t), out_layout == NULL ? NULL : &out_layout->rpc_server_cache_slots, NULL);\n    if (result != WL_OK) return result;\n    result = {module}_runtime_storage_region(&cursor, 1U, config->rpc_server_cache_slot_count, config->rpc_server_response_capacity, out_layout == NULL ? NULL : &out_layout->rpc_server_responses, out_layout == NULL ? NULL : &out_layout->rpc_server_responses_size);\n    if (result != WL_OK) return result;\n"
+            "  if ({module}_runtime_roles_valid(config) != WL_OK) return WL_ERR_NOT_SUPPORTED;\n  if (config->rpc_client_enabled > 1U || config->rpc_server_enabled > 1U) return WL_ERR_INVALID_ARG;\n  if (config->rpc_client_enabled != 0U) {{\n    if (config->rpc_client_slot_count == 0U || config->rpc_client_response_capacity == 0U) return WL_ERR_INVALID_ARG;\n    if (alignment < _Alignof(wl_rpc_client_slot_t)) alignment = _Alignof(wl_rpc_client_slot_t);\n    result = {module}_runtime_storage_region(&cursor, _Alignof(wl_rpc_client_slot_t), config->rpc_client_slot_count, sizeof(wl_rpc_client_slot_t), out_layout == NULL ? NULL : &out_layout->rpc_client_slots, NULL);\n    if (result != WL_OK) return result;\n    result = {module}_runtime_storage_region(&cursor, 1U, config->rpc_client_slot_count, config->rpc_client_response_capacity, out_layout == NULL ? NULL : &out_layout->rpc_client_responses, out_layout == NULL ? NULL : &out_layout->rpc_client_responses_size);\n    if (result != WL_OK) return result;\n  }}\n  if (config->rpc_server_enabled != 0U) {{\n    if (config->rpc_server_pending_slot_count == 0U || config->rpc_server_cache_slot_count == 0U || config->rpc_server_response_capacity == 0U) return WL_ERR_INVALID_ARG;\n    if ((config->rpc_server_pending_timeout_ms != 0U && config->rpc_server_pending_timeout_ms >= UINT32_C(0x80000000)) || (config->rpc_server_cache_ttl_ms != 0U && config->rpc_server_cache_ttl_ms >= UINT32_C(0x80000000))) return WL_ERR_INVALID_ARG;\n    if (config->rpc_server_cache_policy != WL_RPC_CACHE_REJECT_NEW && config->rpc_server_cache_policy != WL_RPC_CACHE_EVICT_OLDEST) return WL_ERR_INVALID_ARG;\n    if (alignment < _Alignof(wl_rpc_server_pending_slot_t)) alignment = _Alignof(wl_rpc_server_pending_slot_t);\n    if (alignment < _Alignof(wl_rpc_server_cache_slot_t)) alignment = _Alignof(wl_rpc_server_cache_slot_t);\n    result = {module}_runtime_storage_region(&cursor, _Alignof(wl_rpc_server_pending_slot_t), config->rpc_server_pending_slot_count, sizeof(wl_rpc_server_pending_slot_t), out_layout == NULL ? NULL : &out_layout->rpc_server_pending_slots, NULL);\n    if (result != WL_OK) return result;\n    result = {module}_runtime_storage_region(&cursor, _Alignof(wl_rpc_server_cache_slot_t), config->rpc_server_cache_slot_count, sizeof(wl_rpc_server_cache_slot_t), out_layout == NULL ? NULL : &out_layout->rpc_server_cache_slots, NULL);\n    if (result != WL_OK) return result;\n    result = {module}_runtime_storage_region(&cursor, 1U, config->rpc_server_cache_slot_count, config->rpc_server_response_capacity, out_layout == NULL ? NULL : &out_layout->rpc_server_responses, out_layout == NULL ? NULL : &out_layout->rpc_server_responses_size);\n    if (result != WL_OK) return result;\n"
         )
         .unwrap();
         output.push_str("  }\n");
@@ -418,7 +459,7 @@ pub(super) fn emit_assembly_source(
     if !profile.rpc_services.is_empty() {
         write!(
             output,
-            "  if (config->rpc_client_enabled > 1U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_ROLE_ENABLE, \"rpc_client_enabled\", 1U, config->rpc_client_enabled, WL_ERR_INVALID_ARG);\n  if (config->rpc_server_enabled > 1U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_ROLE_ENABLE, \"rpc_server_enabled\", 1U, config->rpc_server_enabled, WL_ERR_INVALID_ARG);\n  if (config->rpc_client_enabled != 0U && config->rpc_client_slot_count == 0U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_CLIENT_CAPACITY, \"rpc_client_slot_count\", 1U, 0U, WL_ERR_INVALID_ARG);\n  if (config->rpc_client_enabled != 0U && config->rpc_client_response_capacity == 0U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_CLIENT_CAPACITY, \"rpc_client_response_capacity\", 1U, 0U, WL_ERR_INVALID_ARG);\n  if (config->rpc_server_enabled != 0U && config->rpc_server_pending_slot_count == 0U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_SERVER_CAPACITY, \"rpc_server_pending_slot_count\", 1U, 0U, WL_ERR_INVALID_ARG);\n  if (config->rpc_server_enabled != 0U && config->rpc_server_cache_slot_count == 0U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_SERVER_CAPACITY, \"rpc_server_cache_slot_count\", 1U, 0U, WL_ERR_INVALID_ARG);\n  if (config->rpc_server_enabled != 0U && config->rpc_server_response_capacity == 0U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_SERVER_CAPACITY, \"rpc_server_response_capacity\", 1U, 0U, WL_ERR_INVALID_ARG);\n  if (config->rpc_server_enabled != 0U && config->rpc_server_pending_timeout_ms >= UINT32_C(0x80000000)) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_TIMEOUT, \"rpc_server_pending_timeout_ms\", UINT32_C(0x7fffffff), config->rpc_server_pending_timeout_ms, WL_ERR_INVALID_ARG);\n  if (config->rpc_server_enabled != 0U && config->rpc_server_cache_ttl_ms >= UINT32_C(0x80000000)) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_TIMEOUT, \"rpc_server_cache_ttl_ms\", UINT32_C(0x7fffffff), config->rpc_server_cache_ttl_ms, WL_ERR_INVALID_ARG);\n  if (config->rpc_server_enabled != 0U && config->rpc_server_cache_policy != WL_RPC_CACHE_REJECT_NEW && config->rpc_server_cache_policy != WL_RPC_CACHE_EVICT_OLDEST) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_CACHE_POLICY, \"rpc_server_cache_policy\", 0U, (size_t)config->rpc_server_cache_policy, WL_ERR_INVALID_ARG);\n"
+            "  if ({module}_runtime_roles_valid(config) != WL_OK) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_ROLE_ENABLE, \"endpoint.rpc_role\", 0U, 1U, WL_ERR_NOT_SUPPORTED);\n  if (config->rpc_client_enabled > 1U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_ROLE_ENABLE, \"rpc_client_enabled\", 1U, config->rpc_client_enabled, WL_ERR_INVALID_ARG);\n  if (config->rpc_server_enabled > 1U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_ROLE_ENABLE, \"rpc_server_enabled\", 1U, config->rpc_server_enabled, WL_ERR_INVALID_ARG);\n  if (config->rpc_client_enabled != 0U && config->rpc_client_slot_count == 0U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_CLIENT_CAPACITY, \"rpc_client_slot_count\", 1U, 0U, WL_ERR_INVALID_ARG);\n  if (config->rpc_client_enabled != 0U && config->rpc_client_response_capacity == 0U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_CLIENT_CAPACITY, \"rpc_client_response_capacity\", 1U, 0U, WL_ERR_INVALID_ARG);\n  if (config->rpc_server_enabled != 0U && config->rpc_server_pending_slot_count == 0U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_SERVER_CAPACITY, \"rpc_server_pending_slot_count\", 1U, 0U, WL_ERR_INVALID_ARG);\n  if (config->rpc_server_enabled != 0U && config->rpc_server_cache_slot_count == 0U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_SERVER_CAPACITY, \"rpc_server_cache_slot_count\", 1U, 0U, WL_ERR_INVALID_ARG);\n  if (config->rpc_server_enabled != 0U && config->rpc_server_response_capacity == 0U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_SERVER_CAPACITY, \"rpc_server_response_capacity\", 1U, 0U, WL_ERR_INVALID_ARG);\n  if (config->rpc_server_enabled != 0U && config->rpc_server_pending_timeout_ms >= UINT32_C(0x80000000)) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_TIMEOUT, \"rpc_server_pending_timeout_ms\", UINT32_C(0x7fffffff), config->rpc_server_pending_timeout_ms, WL_ERR_INVALID_ARG);\n  if (config->rpc_server_enabled != 0U && config->rpc_server_cache_ttl_ms >= UINT32_C(0x80000000)) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_TIMEOUT, \"rpc_server_cache_ttl_ms\", UINT32_C(0x7fffffff), config->rpc_server_cache_ttl_ms, WL_ERR_INVALID_ARG);\n  if (config->rpc_server_enabled != 0U && config->rpc_server_cache_policy != WL_RPC_CACHE_REJECT_NEW && config->rpc_server_cache_policy != WL_RPC_CACHE_EVICT_OLDEST) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_CACHE_POLICY, \"rpc_server_cache_policy\", 0U, (size_t)config->rpc_server_cache_policy, WL_ERR_INVALID_ARG);\n"
         )
         .unwrap();
     }
@@ -451,14 +492,14 @@ pub(super) fn emit_assembly_source(
     if !profile.rpc_services.is_empty() {
         write!(
             output,
-            "  if (config->rpc_client_enabled != 0U) {{\n    const wl_rpc_client_config_t client_config = {{\n      (wl_rpc_client_slot_t *)layout.rpc_client_slots,\n      config->rpc_client_slot_count,\n      (uint8_t *)layout.rpc_client_responses,\n      layout.rpc_client_responses_size,\n      config->rpc_client_response_capacity,\n      config->rpc_client_next_operation_id\n    }};\n    if (wl_rpc_client_init(&instance->rpc_client, &client_config) != WL_RPC_OK) {{\n      result = WL_ERR_INVALID_ARG;\n      goto init_failed;\n    }}\n    instance->runtime.rpc_client = &instance->rpc_client;\n  }}\n  if (config->rpc_server_enabled != 0U) {{\n    const wl_rpc_server_config_t server_config = {{\n      (wl_rpc_server_pending_slot_t *)layout.rpc_server_pending_slots,\n      config->rpc_server_pending_slot_count,\n      (wl_rpc_server_cache_slot_t *)layout.rpc_server_cache_slots,\n      config->rpc_server_cache_slot_count,\n      (uint8_t *)layout.rpc_server_responses,\n      layout.rpc_server_responses_size,\n      config->rpc_server_response_capacity,\n      config->rpc_server_pending_timeout_ms,\n      config->rpc_server_cache_ttl_ms,\n      config->rpc_server_cache_policy\n    }};\n    if (wl_rpc_server_init(&instance->rpc_server, &server_config) != WL_RPC_OK) {{\n      result = WL_ERR_INVALID_ARG;\n      goto init_failed;\n    }}\n    instance->runtime.rpc_server = &instance->rpc_server;\n  }}\n"
+            "#if {prefix}_RUNTIME_HAS_RPC_CLIENT\n  if (config->rpc_client_enabled != 0U) {{\n    const wl_rpc_client_config_t client_config = {{\n      (wl_rpc_client_slot_t *)layout.rpc_client_slots,\n      config->rpc_client_slot_count,\n      (uint8_t *)layout.rpc_client_responses,\n      layout.rpc_client_responses_size,\n      config->rpc_client_response_capacity,\n      config->rpc_client_next_operation_id\n    }};\n    if (wl_rpc_client_init(&instance->rpc_client, &client_config) != WL_RPC_OK) {{\n      result = WL_ERR_INVALID_ARG;\n      goto init_failed;\n    }}\n    instance->runtime.rpc_client = &instance->rpc_client;\n  }}\n#endif\n#if {prefix}_RUNTIME_HAS_RPC_SERVER\n  if (config->rpc_server_enabled != 0U) {{\n    const wl_rpc_server_config_t server_config = {{\n      (wl_rpc_server_pending_slot_t *)layout.rpc_server_pending_slots,\n      config->rpc_server_pending_slot_count,\n      (wl_rpc_server_cache_slot_t *)layout.rpc_server_cache_slots,\n      config->rpc_server_cache_slot_count,\n      (uint8_t *)layout.rpc_server_responses,\n      layout.rpc_server_responses_size,\n      config->rpc_server_response_capacity,\n      config->rpc_server_pending_timeout_ms,\n      config->rpc_server_cache_ttl_ms,\n      config->rpc_server_cache_policy\n    }};\n    if (wl_rpc_server_init(&instance->rpc_server, &server_config) != WL_RPC_OK) {{\n      result = WL_ERR_INVALID_ARG;\n      goto init_failed;\n    }}\n    instance->runtime.rpc_server = &instance->rpc_server;\n  }}\n#endif\n"
         )
         .unwrap();
         for service in &profile.rpc_services {
             let service_name = c_identifier(&service.name);
             write!(
                 output,
-                "  if (config->rpc_server_enabled != 0U) {{\n    instance->runtime.{service_name}.request_scratch = &instance->{service_name}_scratch.request;\n    instance->runtime.{service_name}.request_handler = config->{service_name}_request_handler;\n    instance->runtime.{service_name}.user_data = config->{service_name}_user_data;\n  }}\n  if (config->rpc_client_enabled != 0U) instance->runtime.{service_name}.response_scratch = &instance->{service_name}_scratch.response;\n"
+                "#if {prefix}_RUNTIME_HAS_RPC_SERVER\n  if (config->rpc_server_enabled != 0U) {{\n    instance->runtime.{service_name}.request_scratch = &instance->{service_name}_scratch.request;\n    instance->runtime.{service_name}.request_handler = config->{service_name}_request_handler;\n    instance->runtime.{service_name}.user_data = config->{service_name}_user_data;\n  }}\n#endif\n#if {prefix}_RUNTIME_HAS_RPC_CLIENT\n  if (config->rpc_client_enabled != 0U) instance->runtime.{service_name}.response_scratch = &instance->{service_name}_scratch.response;\n#endif\n"
             )
             .unwrap();
         }

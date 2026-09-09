@@ -73,6 +73,7 @@ pub(super) fn emit_header(
         "#define {prefix}_RUNTIME_CODEGEN_ABI_VERSION {CODEGEN_ABI_VERSION}U\n"
     )
     .unwrap();
+    writeln!(output, "/* Generated capabilities, not application overrides. */\n#define {prefix}_RUNTIME_HAS_RPC_CLIENT {}\n#define {prefix}_RUNTIME_HAS_RPC_SERVER {}\n", u8::from(profile.has_rpc_client()), u8::from(profile.has_rpc_server())).unwrap();
     if !profile.rpc_services.is_empty() {
         writeln!(
             output,

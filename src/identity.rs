@@ -130,6 +130,22 @@ pub fn binding_profile_identity(model: &BindingProfileModel) -> u64 {
             hash_delivery(&mut hash, route.delivery);
         }
     }
+    let layout = model.endpoint_layout();
+    if layout != crate::endpoint_layout::EndpointLayout::default() {
+        use crate::endpoint_layout::{EndpointEnvelope, EndpointRpcRole};
+        hash.string("endpoint-layout-v1");
+        hash.u8(match layout.envelope {
+            EndpointEnvelope::Any => 0,
+            EndpointEnvelope::NativePacket => 1,
+            EndpointEnvelope::CobsStream => 2,
+            EndpointEnvelope::BusLength16 => 3,
+        });
+        hash.u8(match layout.rpc_role {
+            EndpointRpcRole::Both => 0,
+            EndpointRpcRole::Client => 1,
+            EndpointRpcRole::Server => 2,
+        });
+    }
     hash.finish()
 }
 

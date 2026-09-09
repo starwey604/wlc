@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Compact, pre-refactor artifact snapshots. Not a wire-format compatibility test.
+//! Compact, reviewed artifact snapshots. Not a wire-format compatibility test.
 use std::{fs, path::PathBuf, process::Command};
 use wlc::{
     ManifestArtifact, analyze_binding_profile, analyze_schema, binding_profile_identity,
@@ -25,7 +25,7 @@ fn codec_matrix() -> String {
 }
 
 #[test]
-fn generated_artifacts_match_pre_refactor_snapshots() {
+fn generated_artifacts_match_reviewed_snapshots() {
     let cases = [
         ("codec_matrix", codec_matrix(), None),
         (

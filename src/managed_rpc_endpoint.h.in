@@ -9,6 +9,7 @@ static inline wl_rpc_err_t @M@_endpoint_@S@_record_result(@M@_endpoint_t *endpoi
       (result->domain == @P@_RUNTIME_INVALID_ARGUMENT ? WL_RPC_ERR_INVALID_ARG : WL_RPC_ERR_INVALID_STATE);
 }
 
+#if @P@_RUNTIME_HAS_RPC_CLIENT
 /* A copyable call handle, not a wire ID. Do not inspect private_state. Calls
  * belong to one endpoint incarnation; release only after a terminal result. */
 typedef struct {
@@ -114,6 +115,9 @@ static inline wl_rpc_err_t @M@_endpoint_@S@_cancel(@M@_endpoint_t *endpoint,
   return error;
 }
 
+#endif
+
+#if @P@_RUNTIME_HAS_RPC_SERVER
 /* Reply submission returns an RPC error code, not a generic runtime result. */
 static inline wl_rpc_err_t @M@_endpoint_@S@_complete(@M@_endpoint_t *endpoint,
     const @M@_@S@_request_token_t *token, const @RES@_t *response) {
@@ -135,3 +139,4 @@ static inline wl_rpc_err_t @M@_endpoint_@S@_reject(@M@_endpoint_t *endpoint,
   result = @M@_@S@_server_reject(runtime, token, application_status, now_ms);
   return @M@_endpoint_@S@_record_result(endpoint, &result);
 }
+#endif

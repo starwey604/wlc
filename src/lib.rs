@@ -3,6 +3,8 @@
 pub mod ast;
 pub mod codegen;
 mod endpoint_codegen;
+pub mod endpoint_layout;
+mod endpoint_transport_codegen;
 pub mod identity;
 mod lexer;
 mod managed_rpc_codegen;

@@ -234,10 +234,14 @@ pub(super) fn validate_runtime_names(
         "RPC_CAPACITY",
         "REQUEST_CAPACITY",
         "RUNTIME_CAPACITY",
+        "RX_FIFO_CAPACITY",
     ] {
         runtime_names.insert(format!("{prefix}_ENDPOINT_{suffix}"));
     }
     runtime_names.insert(format!("{prefix}_HAS_DEFAULT_ENDPOINT"));
+    runtime_names.insert(format!("{prefix}_RUNTIME_HAS_RPC_CLIENT"));
+    runtime_names.insert(format!("{prefix}_RUNTIME_HAS_RPC_SERVER"));
+    runtime_names.insert(format!("{module}_runtime_roles_valid"));
     for route in &profile.retained_routes {
         let message = type_name(&route.message_name);
         for verb in ["send", "read"] {

@@ -19,8 +19,8 @@ search over the already sorted descriptors. Wire types are computed by WLC.
 Messages containing exactly one packed fixed32/fixed64/float32/float64 array get
 specialized public codec entry points with constant lengths/prefixes and looped
 elements; clearing and other shapes retain the common engine. These are implementation choices,
-not schema annotations or stable thresholds. ABI 29, public ownership and encoded
-bytes are unchanged; all validation and unknown-field behavior still apply.
+not schema annotations or stable thresholds. Strategy selection does not change
+public ownership or encoded bytes; validation and unknown-field behavior still apply.
 
 ## Prebuilt compiler
 
@@ -36,7 +36,7 @@ records `compiler.codegen_abi`. Build integrations should pin both rather than
 following a branch or the newest release.
 
 `wlc codegen-abi` prints this revision without requiring a schema. Current
-development generates ABI 29 (unreleased). Regenerate all codec/runtime artifacts
+development generates ABI 30 (unreleased). Regenerate all codec/runtime artifacts
 and use the matching Wirelink core. `<module>_values.h` supplies bounded self-owning
 business values. `<runtime>_endpoint.h` is the ordinary endpoint entry; it
 transitively includes runtime declarations for static layout, not an opaque ABI.
@@ -398,6 +398,24 @@ Diagnostics use `line:column: message`; at the CLI boundary `miette` renders a
 source snippet at the invalid token.
 
 ## Optional binding profiles
+
+ABI 30 adds local endpoint layout selection. Compose shared RPC definitions with
+one deployment fragment:
+
+```text
+profile version 1;
+endpoint { envelope = native_packet; rpc_role = server; }
+```
+
+Envelope values: `any` (default), `native_packet`, `cobs_stream`, `bus_length16`.
+RPC roles: `both` (default), `client`, `server`. These are local storage/API
+capabilities, not message wire properties. Composed profiles permit at most one
+endpoint block, with no overrides. Layout-only fragments are valid. The compiler
+omits unused FIFO/RPC storage and ordinary opposite-role helpers; initialization
+rejects attempts to enable omitted capabilities. Fixed-envelope defaults match
+the selected envelope. CRC32C bounds still permit smaller checksums, and the
+existing build-wide `*_ENDPOINT_RPC_CAPACITY` controls slots. Layout choices enter
+profile identity without changing codec/schema identity or payload format.
 
 Application routing policy lives in a separate, versioned sidecar rather than
 the frozen `.wl` wire-schema grammar. A profile currently describes retained

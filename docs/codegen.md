@@ -20,6 +20,7 @@ schema/profile syntax and generated API are not defined by the module layout.
 | Runtime declarations and static storage assembly | `runtime_codegen/header.rs`, `runtime_codegen/assembly.rs` |
 | Retained routes, RPC, dispatch, pump | Matching files in `runtime_codegen/` |
 | Default endpoint and managed RPC glue | `endpoint_codegen.rs`, `rpc_endpoint_codegen.rs`, `managed_rpc_codegen.rs` |
+| Local role/envelope capabilities and transport bounds | `endpoint_layout.rs`, `endpoint_transport_codegen.rs` |
 
 `CModel` performs codec-side validation and computes bounds once per generation
 entry. Runtime-only generation uses those facts without generating and throwing
@@ -27,6 +28,13 @@ away a codec. Runtime storage and endpoint sizing receive the same bounds.
 `MessagePlan` holds compiler-side choices reused by descriptors and packed
 wrappers; it adds no runtime metadata. Put future strategy decisions here, not
 in string formatting or business schemas.
+
+Endpoint capabilities come from the composed profile's single `endpoint` block.
+Use `has_rpc_client()` / `has_rpc_server()` consistently for storage and facade
+generation. Keep disabled-role checks in both endpoint and advanced runtime
+initialization. Generated capability macros describe a fixed layout; they are
+not user overrides. Test memory bounds by executing all envelope/role variants,
+not by asserting only that a field disappeared.
 
 ## Templates are literal fragments
 

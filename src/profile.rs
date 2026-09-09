@@ -16,6 +16,13 @@ pub const BINDING_PROFILE_VERSION: u32 = 1;
 pub struct BindingProfile {
     pub version: Spanned<u32>,
     pub bindings: Vec<BindingDeclaration>,
+    pub endpoint: Option<EndpointBinding>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EndpointBinding {
+    pub envelope: Option<Spanned<String>>,
+    pub rpc_role: Option<Spanned<String>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -250,8 +257,16 @@ impl Parser {
         self.expect_symbol(TokenKind::Semicolon, "`;` after profile version")?;
 
         let mut bindings = Vec::new();
+        let mut endpoint = None;
         while self.current().kind != TokenKind::End {
             let kind = self.word("binding kind")?;
+            if kind.value == "endpoint" {
+                if endpoint.is_some() {
+                    return Err(self.error(kind.span, "duplicate endpoint layout"));
+                }
+                endpoint = Some(self.parse_endpoint()?);
+                continue;
+            }
             let binding = match kind.value.as_str() {
                 "send" => BindingDeclaration::Send(self.parse_route("send")?),
                 "latest" => BindingDeclaration::Latest(self.parse_route("latest")?),
@@ -260,19 +275,55 @@ impl Parser {
                 _ => {
                     return Err(self.error(
                         kind.span,
-                        "binding must start with `send`, `latest`, `fifo`, or `rpc`",
+                        "binding must start with `send`, `latest`, `fifo`, `rpc`, or `endpoint`",
                     ));
                 }
             };
             bindings.push(binding);
         }
-        if bindings.is_empty() {
+        if bindings.is_empty() && endpoint.is_none() {
             return Err(self.error(
                 version.span,
                 "a binding profile must declare at least one binding",
             ));
         }
-        Ok(BindingProfile { version, bindings })
+        Ok(BindingProfile {
+            version,
+            bindings,
+            endpoint,
+        })
+    }
+
+    fn parse_endpoint(&mut self) -> Result<EndpointBinding, ProfileParseError> {
+        self.expect_symbol(TokenKind::LeftBrace, "`{` before endpoint properties")?;
+        let mut endpoint = EndpointBinding {
+            envelope: None,
+            rpc_role: None,
+        };
+        while self.current().kind != TokenKind::RightBrace {
+            let property = self.word("endpoint property name")?;
+            self.expect_symbol(TokenKind::Equal, "`=` after endpoint property")?;
+            let value = self.word("endpoint property value")?;
+            self.expect_symbol(TokenKind::Semicolon, "`;` after endpoint property")?;
+            let target = match property.value.as_str() {
+                "envelope" => &mut endpoint.envelope,
+                "rpc_role" => &mut endpoint.rpc_role,
+                _ => {
+                    return Err(self.error(
+                        property.span,
+                        format!("unknown endpoint property `{}`", property.value),
+                    ));
+                }
+            };
+            if target.replace(value).is_some() {
+                return Err(self.error(
+                    property.span,
+                    format!("duplicate endpoint property `{}`", property.value),
+                ));
+            }
+        }
+        self.advance();
+        Ok(endpoint)
     }
 
     fn parse_route(&mut self, kind: &str) -> Result<RouteBinding, ProfileParseError> {

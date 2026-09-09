@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::endpoint_layout::{EndpointEnvelope, EndpointLayout, EndpointRpcRole};
 use miette::{Diagnostic, SourceSpan};
 use thiserror::Error;
 
@@ -26,12 +27,28 @@ pub enum RetainedRouteKind {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BindingProfileModel {
     pub version: u32,
+    /// At most one deployment declaration across composed fragments.
+    pub endpoint: Option<EndpointLayout>,
     /// Outbound-only messages, sorted by message ID. No retained storage.
     pub send_routes: Vec<SendRoute>,
     /// Canonically sorted by message ID and then route kind.
     pub retained_routes: Vec<RetainedRoute>,
     /// Canonically sorted by service name.
     pub rpc_services: Vec<RpcService>,
+}
+
+impl BindingProfileModel {
+    pub fn endpoint_layout(&self) -> EndpointLayout {
+        self.endpoint.unwrap_or_default()
+    }
+
+    pub fn has_rpc_client(&self) -> bool {
+        !self.rpc_services.is_empty() && self.endpoint_layout().has_client()
+    }
+
+    pub fn has_rpc_server(&self) -> bool {
+        !self.rpc_services.is_empty() && self.endpoint_layout().has_server()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -126,6 +143,33 @@ pub fn analyze_binding_profile(
     schema: &SemanticModel,
 ) -> Result<BindingProfileModel, ProfileSemanticErrors> {
     let mut errors = Vec::new();
+    let endpoint = profile.endpoint.as_ref().map(|binding| {
+        let mut layout = EndpointLayout::default();
+        if let Some(value) = &binding.envelope {
+            layout.envelope = match value.value.as_str() {
+                "any" => EndpointEnvelope::Any,
+                "native_packet" => EndpointEnvelope::NativePacket,
+                "cobs_stream" => EndpointEnvelope::CobsStream,
+                "bus_length16" => EndpointEnvelope::BusLength16,
+                _ => {
+                    errors.push(ProfileSemanticError::new(value.span, "endpoint envelope must be any, native_packet, cobs_stream, or bus_length16"));
+                    EndpointEnvelope::Any
+                }
+            };
+        }
+        if let Some(value) = &binding.rpc_role {
+            layout.rpc_role = match value.value.as_str() {
+                "client" => EndpointRpcRole::Client,
+                "server" => EndpointRpcRole::Server,
+                "both" => EndpointRpcRole::Both,
+                _ => {
+                    errors.push(ProfileSemanticError::new(value.span, "endpoint rpc_role must be client, server, or both"));
+                    EndpointRpcRole::Both
+                }
+            };
+        }
+        layout
+    });
     if profile.version.value != BINDING_PROFILE_VERSION {
         errors.push(ProfileSemanticError::new(
             profile.version.span,
@@ -338,6 +382,7 @@ pub fn analyze_binding_profile(
     rpc_services.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(BindingProfileModel {
         version: profile.version.value,
+        endpoint,
         send_routes,
         retained_routes,
         rpc_services,
@@ -357,6 +402,7 @@ pub fn compose_binding_profiles(
     }
     let mut merged = BindingProfileModel {
         version: BINDING_PROFILE_VERSION,
+        endpoint: None,
         send_routes: Vec::new(),
         retained_routes: Vec::new(),
         rpc_services: Vec::new(),
@@ -366,6 +412,13 @@ pub fn compose_binding_profiles(
     let mut service_names = HashSet::new();
     let mut rpc_ids = HashSet::new();
     for profile in profiles {
+        if let Some(layout) = profile.endpoint
+            && merged.endpoint.replace(layout).is_some()
+        {
+            return Err(ProfileCompositionError(
+                "duplicate endpoint layout across profiles".into(),
+            ));
+        }
         if profile.version != BINDING_PROFILE_VERSION {
             return Err(ProfileCompositionError(
                 "incompatible profile version".into(),

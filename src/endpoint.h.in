@@ -3,10 +3,9 @@
  * All profile-selected messages must have finite one-frame bounds. */
 #define @P@_HAS_DEFAULT_ENDPOINT 1
 #define @P@_ENDPOINT_MAX_PAYLOAD @MAX@U
-/* Reserve for any supported envelope using CRC32C (the largest checksum). */
+/* Layout is fixed by the local profile; CRC32C bounds also cover smaller CRCs. */
 #define @P@_ENDPOINT_RAW_CAPACITY (@P@_ENDPOINT_MAX_PAYLOAD + WL_FRAME_HEADER_SIZE + WL_FRAME_MAX_CRC)
-#define @P@_ENDPOINT_UNIT_CAPACITY (@P@_ENDPOINT_RAW_CAPACITY + @P@_ENDPOINT_RAW_CAPACITY / 254U + 2U)
-#define @P@_ENDPOINT_CONTROL_CAPACITY (WL_FRAME_HEADER_SIZE + WL_FRAME_MAX_CRC + 2U)
+@TRANSPORT_CAPACITY@
 @RPC_CAPACITY@
 
 typedef struct {
@@ -44,7 +43,7 @@ typedef struct {
     uint8_t tx_unit[@P@_ENDPOINT_UNIT_CAPACITY];
     uint8_t control_unit[@P@_ENDPOINT_CONTROL_CAPACITY];
     uint8_t rx_fallback[@P@_ENDPOINT_UNIT_CAPACITY];
-    uint8_t rx_fifo[@P@_ENDPOINT_UNIT_CAPACITY];
+@TRANSPORT_STATE@
   } private_state;
 } @M@_endpoint_t;
 
@@ -64,7 +63,7 @@ static inline wl_err_t @M@_endpoint_config_defaults(
   if (config == NULL) return WL_ERR_INVALID_ARG;
   memset(config, 0, sizeof(*config));
   config->link.max_payload_len = @P@_ENDPOINT_MAX_PAYLOAD;
-  config->link.envelope = WL_ENVELOPE_NATIVE_PACKET;
+  config->link.envelope = @DEFAULT_ENVELOPE@;
   config->link.integrity = WL_INTEGRITY_CRC32C;
   config->environment = environment;
   config->link.ack_timeout_ms = 100U;
@@ -129,12 +128,13 @@ static inline wl_err_t @M@_endpoint_init_config(
     return WL_ERR_INVALID_STATE;
   if (config->environment.clock.now_ms == NULL || config->link.session_id != 0U)
     return WL_ERR_INVALID_ARG;
+@LAYOUT_VALIDATE@
+  runtime_config = config->advanced;
+@RPC_CONFIG_INIT@
   link_config = config->link;
   result = wl_session_next(config->environment.session,
       endpoint->private_state.previous_session, &link_config.session_id);
   if (result != WL_OK) return result;
-  runtime_config = config->advanced;
-@RPC_CONFIG_INIT@
 @RPC_BEGIN_INIT@
   memset(&link_storage, 0, sizeof(link_storage));
   link_storage.tx_payload = endpoint->private_state.tx_payload;
@@ -145,8 +145,7 @@ static inline wl_err_t @M@_endpoint_init_config(
   link_storage.control_unit_size = sizeof(endpoint->private_state.control_unit);
   link_storage.rx_fallback = endpoint->private_state.rx_fallback;
   link_storage.rx_fallback_size = sizeof(endpoint->private_state.rx_fallback);
-  link_storage.rx_fifo = endpoint->private_state.rx_fifo;
-  link_storage.rx_fifo_size = sizeof(endpoint->private_state.rx_fifo);
+@TRANSPORT_BIND@
   storage.data = endpoint->private_state.arena.bytes;
   storage.size = sizeof(endpoint->private_state.arena.bytes);
   result = @M@_runtime_init(&endpoint->private_state.instance, &runtime_config, &storage);
