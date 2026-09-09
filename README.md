@@ -7,7 +7,23 @@ payload codecs plus optional typed Wirelink bindings.
 A Chinese review version is available in [`README-cn.md`](README-cn.md). This
 English document and the generated/public interfaces remain normative.
 
+## Codec implementation planning
+
+For compiler changes, follow the [generator source map and correctness gates](docs/codegen.md).
+Codec/runtime facades delegate to private planning, validation, emission and
+storage modules. This organization does not change the public or generated API.
+
+Codec implementation planning is automatic: up to eight fields use linear lookup;
+larger contiguous field IDs use direct indexing, and larger sparse IDs use binary
+search over the already sorted descriptors. Wire types are computed by WLC.
+Messages containing exactly one packed fixed32/fixed64/float32/float64 array get
+specialized public codec entry points with constant lengths/prefixes and looped
+elements; clearing and other shapes retain the common engine. These are implementation choices,
+not schema annotations or stable thresholds. ABI 29, public ownership and encoded
+bytes are unchanged; all validation and unknown-field behavior still apply.
+
 ## Prebuilt compiler
+
 
 Tagged releases publish host tools for Windows x86-64, Linux x86-64/aarch64
 (static musl executables), and macOS x86-64/Apple Silicon. Each archive
@@ -20,7 +36,7 @@ records `compiler.codegen_abi`. Build integrations should pin both rather than
 following a branch or the newest release.
 
 `wlc codegen-abi` prints this revision without requiring a schema. Current
-development generates ABI 26 (unreleased). Regenerate all codec/runtime artifacts
+development generates ABI 29 (unreleased). Regenerate all codec/runtime artifacts
 and use the matching Wirelink core. `<module>_values.h` supplies bounded self-owning
 business values. `<runtime>_endpoint.h` is the ordinary endpoint entry; it
 transitively includes runtime declarations for static layout, not an opaque ABI.
@@ -36,7 +52,10 @@ supports cancellation; inspect/release is an advanced opt-in.
 
 Register `config.on_<service>` for immediate handlers: zero means success,
 nonzero means business rejection, never a framework error. Business context is
-`config.<service>_user_data`. Client capability is ready at init and handlers
+`config.user_data`, shared by ordinary handlers and diagnostics. A non-NULL
+`config.<service>_user_data` overrides it for one service; NULL inherits the shared
+context. Deferred handlers and per-call completions keep explicit contexts.
+Client capability is ready at init and handlers
 enable server capability. Defaults provide four bounded client/pending/cache
 slots and a recent-result cache which evicts only the oldest delivered response.
 TTL is a maximum age, not a retention guarantee. Set
@@ -76,6 +95,39 @@ then use the same sync entry through its bounded proxy, never step concurrently.
 Proxy queuing consumes the original timeout and samples the same clock at
 admission: that provider must be thread-safe. Stop and join all callers before
 destroying endpoint/adapter/executor. Static ownership and the wire format are unchanged.
+
+## Sharing service definitions between endpoints
+
+Keep common RPC declarations in `services.bind.wl` and endpoint-specific routes in
+another profile. Repeat `--profile` to combine independently valid fragments:
+
+```sh
+wlc compile-runtime device.wl --profile services.bind.wl --profile server.bind.wl \
+  --runtime-name device_server --out-dir generated
+```
+
+`validate`, `identity` and `compile` accept the same composition. File order does
+not affect output; duplicates and cross-fragment conflicts are errors, not
+overrides. CMake's `wirelink_wlc_generate_runtime` accepts `PROFILES` for the same
+purpose; `PROFILE` remains the single-file spelling.
+
+For a message an endpoint only sends, declare:
+
+```wl
+profile version 1;
+send DeviceTelemetry { delivery = unreliable; }
+```
+
+This generates a typed endpoint send helper and includes the message in endpoint
+payload sizing without allocating a receive mailbox. A peer can select `latest`
+or `fifo` independently. Existing retained bindings still supply symmetric send
+helpers; an explicit `send` for that message chooses its outbound delivery.
+RPC request/response messages cannot also be plain send/retained routes. Unbounded
+or oversized sends disable default endpoint assembly just like retained messages.
+Profiles without explicit sends preserve their existing identity.
+
+ABI 27 also adds shared ordinary-handler context inheritance, with no codec,
+Compact-v1 or managed RPC v2 wire change. Rebuild generated consumers together.
 
 ## Schema grammar
 
@@ -446,7 +498,7 @@ Use the custom path below after supplying explicit capacities.
 reports the exact byte count and base alignment for caller-owned storage.
 `<module>_runtime_init()` partitions that storage and wires every declared
 LATEST/FIFO route, enabled RPC client/server, RPC slot/cache array, typed
-request/response scratch object, canonical-request buffer, handler and user
+request/response scratch object, handler and user
 pointer into `instance.runtime`. It validates the complete layout, including
 overflow, size, alignment and overlap with the instance, before modifying the
 instance or storage. The configuration and storage descriptors are copied and
@@ -460,8 +512,7 @@ diagnostics can be removed by function/data-section linker garbage collection.
 
 RPC client and server roles can be enabled independently. Sizing fields for a
 disabled role are ignored and its runtime pointer remains null. FIFO capacity,
-RPC slot counts, response capacities, expiry policy, and canonical-request
-capacity are deployment configuration and deliberately do not participate in
+RPC slot counts, response capacities and expiry policy are deployment configuration and deliberately do not participate in
 the schema or binding-profile identity. Applications may still construct the
 lower-level `<module>_runtime_t` manually when they need a custom layout.
 
@@ -556,8 +607,13 @@ validates the mapped ID and status, copies the raw payload into
 `wl_rpc_client_t` before releasing the RX event, and leaves typed response
 scratch under caller ownership.
 
-The static instance owns per-service decode scratch; mapped services additionally
-share RPC encode scratch. The storage arena owns canonical-request bytes. With manual
+ABI 29 static instances with default bounded storage share one cross-service decode
+union; unbounded profiles retain per-service decode objects so caller-configured
+repeated backing is not overwritten. Mapped services additionally share RPC encode
+scratch. ABI 29 computes fingerprints while visiting canonical encoded fields;
+no canonical-request byte buffer or capacity setting is needed. Dispatch must not recursively
+reenter the same runtime, and deferred work must copy callback-scoped inputs.
+With manual
 runtime assembly, the caller supplies those objects directly and sets
 `runtime.rpc_encode_scratch`. Borrowed `bytes` and `string`
 fields in request/response scratch remain valid only until the callback or
@@ -578,17 +634,22 @@ response into shared encode scratch and set operation ID/status only on that
 private copy in mapped mode. Managed requests encode directly into the TX claim;
 managed responses encode directly into the reserved cache segment.
 
-Server dispatch decodes and canonically re-encodes the complete request before
-computing a separately domain-tagged payload fingerprint. `NEW` invokes the
+Server dispatch validates during decode, then feeds canonical encoded fields
+directly into a domain-seeded fingerprint sink. The runtime owns the RPC domain;
+the codec uses the same field emitter as public encoding and does not hash raw
+input bytes. `NEW` invokes the
 typed callback, `PENDING_DUPLICATE` suppresses it, `REPLAY` sends cached bytes,
 and `CONFLICT` reports an RPC-domain error. Complete/reject encode exactly once,
 move those bytes into the server cache, and send the identical cached sequence;
 cached retry is public for a failed or deferred transport send. Request decode,
-response decode, and canonical encode backing are supplied through the
+and response decode backing are supplied through the
 generated runtime struct, so borrowed RPC fields remain valid only until the
 callback/dispatcher returns. Reliable delivery confirms the Wirelink transfer,
 not application acceptance; application rejection is represented by the
-schema status and replay cache.
+schema status and replay cache. Ordinary owned handlers use a generator-private
+copy after successful decode, without repeating UTF-8 validation. Public view
+conversion still validates before modifying output. An owned result is zeroed
+once, including unused capacity and padding; nested copies do not clear it again.
 
 The callback's completion identity includes the reliable RX event's peer
 session. Copy it before returning when completion is asynchronous, then pass

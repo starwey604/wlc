@@ -1,29 +1,19 @@
 //! Default, allocation-free endpoint facade over the advanced runtime API.
-use std::fmt::Write;
+use std::{collections::HashMap, fmt::Write};
 
 use crate::{
-    codegen::{c_identifier, static_max_encoded_sizes, type_name, upper_snake},
+    codegen::{c_identifier, type_name, upper_snake},
     profile_semantic::{BindingProfileModel, DeliveryPolicy, RetainedRouteKind},
-    semantic::{SemanticModel, Symbol},
 };
 
 pub(crate) fn emit(
-    schema: &SemanticModel,
+    maxima: &HashMap<u16, Option<u64>>,
     profile: &BindingProfileModel,
     codec: &str,
     module: &str,
     has_runtime_storage: bool,
 ) -> String {
     let prefix = upper_snake(module);
-    let messages = schema
-        .declarations
-        .iter()
-        .filter_map(|symbol| match symbol {
-            Symbol::Message(message) => Some(message),
-            Symbol::Enum(_) => None,
-        })
-        .collect::<Vec<_>>();
-    let maxima = static_max_encoded_sizes(&messages);
     let mut selected = profile
         .retained_routes
         .iter()
@@ -63,20 +53,45 @@ pub(crate) fn emit(
         .rpc_services
         .iter()
         .any(|service| service.is_managed());
-    let mut output = include_str!("endpoint.h.in")
-        .replace("@RPC_CHECK@", &rpc_check)
-        .replace("@RPC_STEP_BEGIN@", "  if (endpoint->private_state.stepping || endpoint->private_state.closing) return WL_ERR_REENTRANT;\n  endpoint->private_state.stepping = true;")
-        .replace("@RPC_STEP_END@", "  endpoint->private_state.stepping = false;")
-        .replace("@RPC_BEGIN_INIT@", if managed {
-            "  if (endpoint->private_state.incarnation == UINT64_MAX) return WL_ERR_INVALID_STATE;\n  ++endpoint->private_state.incarnation;"
-        } else { "" })
-        .replace("@RPC_INCARNATION@", if !managed { "" } else {
-            "  endpoint->private_state.instance.runtime.rpc_incarnation = endpoint->private_state.incarnation;"
-        });
-    output = crate::rpc_endpoint_codegen::assemble(output, profile, &maxima, module)
-        .replace("@M@", module)
-        .replace("@P@", &prefix)
-        .replace("@MAX@", &maximum.to_string());
+    let rpc = crate::rpc_endpoint_codegen::fragments(profile, maxima, module);
+    let maximum = maximum.to_string();
+    let mut values = vec![
+        ("M", module),
+        ("P", prefix.as_str()),
+        ("MAX", maximum.as_str()),
+        ("RPC_CHECK", rpc_check.as_str()),
+        (
+            "RPC_STEP_BEGIN",
+            "  if (endpoint->private_state.stepping || endpoint->private_state.closing) return WL_ERR_REENTRANT;\n  endpoint->private_state.stepping = true;",
+        ),
+        (
+            "RPC_STEP_END",
+            "  endpoint->private_state.stepping = false;",
+        ),
+        (
+            "RPC_BEGIN_INIT",
+            if managed {
+                "  if (endpoint->private_state.incarnation == UINT64_MAX) return WL_ERR_INVALID_STATE;\n  ++endpoint->private_state.incarnation;"
+            } else {
+                ""
+            },
+        ),
+        (
+            "RPC_INCARNATION",
+            if managed {
+                "  endpoint->private_state.instance.runtime.rpc_incarnation = endpoint->private_state.incarnation;"
+            } else {
+                ""
+            },
+        ),
+    ];
+    values.extend(
+        rpc.bindings
+            .iter()
+            .map(|(key, value)| (*key, value.as_str())),
+    );
+    let mut output = crate::template::render(include_str!("endpoint.h.in"), &values);
+    output.push_str(&rpc.suffix);
     for route in &profile.retained_routes {
         let message = type_name(&route.message_name);
         let kind = match route.kind {

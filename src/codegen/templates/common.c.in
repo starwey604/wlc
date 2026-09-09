@@ -1,0 +1,292 @@
+#include "@MODULE@.h"
+
+#include <limits.h>
+#include <stddef.h>
+#include <string.h>
+
+enum {
+  WLC_OPTIONAL,
+  WLC_REPEATED,
+  WLC_PACKED,
+  WLC_BOOL,
+  WLC_U8,
+  WLC_U16,
+  WLC_U32,
+  WLC_U64,
+  WLC_I8,
+  WLC_I16,
+  WLC_I32,
+  WLC_I64,
+  WLC_F32,
+  WLC_F64,
+  WLC_FLOAT32,
+  WLC_FLOAT64,
+  WLC_BYTES,
+  WLC_STRING,
+  WLC_ENUM,
+  WLC_MESSAGE
+};
+typedef struct wlc_desc wlc_desc_t;
+typedef struct {
+  uint16_t number;
+  uint8_t card, kind, required, wire, key_size;
+  size_t value, has, count, capacity, element, packed_count;
+  uint16_t max_length;
+  uint8_t key[3];
+  int64_t signed_default;
+  uint64_t unsigned_default;
+  const char *string_default;
+  const wlc_desc_t *nested;
+} wlc_field_t;
+enum { WLC_LOOKUP_LINEAR, WLC_LOOKUP_DENSE, WLC_LOOKUP_BINARY };
+struct wlc_desc { const wlc_field_t *fields; size_t count; uint8_t lookup; };
+
+static inline wl_codec_status_t wlc_add(size_t *a, size_t b) {
+  if (b > SIZE_MAX - *a) return WL_CODEC_ERR_OVERFLOW;
+  *a += b;
+  return WL_CODEC_OK;
+}
+static inline size_t wlc_vsize(uint64_t v) {
+  size_t n = 1U;
+  while (v >= 128U) { v >>= 7U; ++n; }
+  return n;
+}
+static inline void wlc_putv(uint8_t **p, uint64_t v) {
+  while (v >= 128U) { *(*p)++ = (uint8_t)(v | 128U); v >>= 7U; }
+  *(*p)++ = (uint8_t)v;
+}
+static wl_codec_status_t wlc_getv(const uint8_t *in, size_t length, size_t *at,
+                                  uint64_t *out) {
+  size_t start = *at, n = 0U;
+  uint64_t v = 0U;
+  while (*at < length && n < 10U) {
+    uint8_t b = in[(*at)++];
+    if (n == 9U && b > 1U) return WL_CODEC_ERR_OVERFLOW;
+    v |= (uint64_t)(b & 127U) << (7U * n++);
+    if ((b & 128U) == 0U) {
+      if (wlc_vsize(v) != *at - start) return WL_CODEC_ERR_MALFORMED;
+      *out = v;
+      return WL_CODEC_OK;
+    }
+  }
+  return *at == length ? WL_CODEC_ERR_MALFORMED : WL_CODEC_ERR_OVERFLOW;
+}
+static bool wlc_utf8(const uint8_t *s, size_t n) {
+  size_t i = 0U;
+  while (i < n) {
+    uint8_t a = s[i++];
+    if (a < 0x80U) continue;
+    size_t need;
+    uint32_t v;
+    if (a >= 0xC2U && a <= 0xDFU) { need = 1U; v = a & 0x1FU; }
+    else if (a >= 0xE0U && a <= 0xEFU) { need = 2U; v = a & 0x0FU; }
+    else if (a >= 0xF0U && a <= 0xF4U) { need = 3U; v = a & 0x07U; }
+    else return false;
+    if (need > n - i) return false;
+    while (need-- != 0U) {
+      uint8_t b = s[i++];
+      if ((b & 0xC0U) != 0x80U) return false;
+      v = (v << 6U) | (b & 0x3FU);
+    }
+    if ((a == 0xE0U && v < 0x800U) ||
+        (a == 0xEDU && v >= 0xD800U) ||
+        (a == 0xF0U && v < 0x10000U) ||
+        (a == 0xF4U && v > 0x10FFFFU)) return false;
+  }
+  return true;
+}
+static inline uint8_t wlc_wire(const wlc_field_t *f) {
+  return f->wire;
+}
+static inline uint64_t wlc_z32(int32_t v) {
+  return ((uint32_t)v << 1U) ^ (uint32_t)-(uint32_t)(v < 0);
+}
+static inline uint64_t wlc_z64(int64_t v) {
+  return ((uint64_t)v << 1U) ^ (uint64_t)-(uint64_t)(v < 0);
+}
+static inline int32_t wlc_uz32(uint32_t v) {
+  return (int32_t)((v >> 1U) ^ (uint32_t)-(v & 1U));
+}
+static inline int64_t wlc_uz64(uint64_t v) {
+  return (int64_t)((v >> 1U) ^ (uint64_t)-(v & 1U));
+}
+static wl_codec_status_t wlc_measure(const wlc_desc_t *, const void *, size_t *);
+static wl_codec_status_t wlc_measure_impl(const wlc_desc_t *, const void *, size_t *, bool);
+static void wlc_clear(const wlc_desc_t *, void *);
+static wl_codec_status_t wlc_decode(const wlc_desc_t *, const uint8_t *, size_t,
+                                    void *);
+static wl_codec_status_t wlc_emit_fields(const wlc_desc_t *, const void *,
+                                         uint8_t **);
+
+static wl_codec_status_t wlc_packed_bytes(const wlc_field_t *f, size_t *bytes) {
+  if (f->packed_count != 0U && f->element > SIZE_MAX / f->packed_count)
+    return WL_CODEC_ERR_OVERFLOW;
+  *bytes = f->element * f->packed_count;
+  return WL_CODEC_OK;
+}
+static wl_codec_status_t wlc_body(const wlc_field_t *f, const void *p,
+                                  size_t *n, bool validated) {
+  *n = 0U;
+  switch (f->kind) {
+    case WLC_BOOL: {
+      bool v = *(const bool *)p;
+      if (v != false && v != true) return WL_CODEC_ERR_INVALID_VALUE;
+      *n = 1U;
+      return WL_CODEC_OK;
+    }
+    case WLC_U8: *n = wlc_vsize(*(const uint8_t *)p); return WL_CODEC_OK;
+    case WLC_U16: *n = wlc_vsize(*(const uint16_t *)p); return WL_CODEC_OK;
+    case WLC_U32: *n = wlc_vsize(*(const uint32_t *)p); return WL_CODEC_OK;
+    case WLC_U64: *n = wlc_vsize(*(const uint64_t *)p); return WL_CODEC_OK;
+    case WLC_I8: *n = wlc_vsize(wlc_z32(*(const int8_t *)p)); return WL_CODEC_OK;
+    case WLC_I16: *n = wlc_vsize(wlc_z32(*(const int16_t *)p)); return WL_CODEC_OK;
+    case WLC_I32:
+    case WLC_ENUM: *n = wlc_vsize(wlc_z32(*(const int32_t *)p)); return WL_CODEC_OK;
+    case WLC_I64: *n = wlc_vsize(wlc_z64(*(const int64_t *)p)); return WL_CODEC_OK;
+    case WLC_F32:
+    case WLC_FLOAT32: *n = 4U; return WL_CODEC_OK;
+    case WLC_F64:
+    case WLC_FLOAT64: *n = 8U; return WL_CODEC_OK;
+    case WLC_BYTES: {
+      const wl_codec_bytes_t *v = p;
+      if (f->max_length != 0U && v->length > (size_t)f->max_length)
+        return WL_CODEC_ERR_INVALID_VALUE;
+      if (v->length != 0U && v->data == NULL) return WL_CODEC_ERR_INVALID_VALUE;
+      if (wlc_add(n, wlc_vsize(v->length)) != WL_CODEC_OK)
+        return WL_CODEC_ERR_OVERFLOW;
+      return wlc_add(n, v->length);
+    }
+    case WLC_STRING: {
+      const wl_codec_string_t *v = p;
+      if (f->max_length != 0U && v->length > (size_t)f->max_length)
+        return WL_CODEC_ERR_INVALID_VALUE;
+      if (v->length != 0U && v->data == NULL) return WL_CODEC_ERR_INVALID_VALUE;
+      if (!validated && !wlc_utf8((const uint8_t *)v->data, v->length)) return WL_CODEC_ERR_UTF8;
+      if (wlc_add(n, wlc_vsize(v->length)) != WL_CODEC_OK)
+        return WL_CODEC_ERR_OVERFLOW;
+      return wlc_add(n, v->length);
+    }
+    case WLC_MESSAGE: {
+      size_t child;
+      wl_codec_status_t s = wlc_measure_impl(f->nested, p, &child, validated);
+      if (s != WL_CODEC_OK) return s;
+      *n = wlc_vsize(child);
+      return wlc_add(n, child);
+    }
+    default: return WL_CODEC_ERR_INVALID_VALUE;
+  }
+}
+static wl_codec_status_t wlc_measure_impl(const wlc_desc_t *d, const void *value,
+                                     size_t *out, bool validated) {
+  size_t n = 0U;
+  if (d == NULL || value == NULL || out == NULL) return WL_CODEC_ERR_INVALID_VALUE;
+  for (size_t i = 0U; i < d->count; ++i) {
+    const wlc_field_t *f = &d->fields[i];
+    const uint8_t *base = value;
+    if (f->card == WLC_PACKED) {
+      size_t bytes;
+      wl_codec_status_t s;
+      if (!*(const bool *)(base + f->has)) {
+        if (f->required != 0U) return WL_CODEC_ERR_MISSING_REQUIRED_FIELD;
+        continue;
+      }
+      if ((s = wlc_packed_bytes(f, &bytes)) != WL_CODEC_OK) return s;
+      if ((s = wlc_add(&n, f->key_size)) != WL_CODEC_OK ||
+          (s = wlc_add(&n, wlc_vsize(bytes))) != WL_CODEC_OK ||
+          (s = wlc_add(&n, bytes)) != WL_CODEC_OK) return s;
+      continue;
+    }
+    size_t count = 1U;
+    if (f->card == WLC_OPTIONAL) {
+      if (!*(const bool *)(base + f->has)) {
+        if (f->required != 0U) return WL_CODEC_ERR_MISSING_REQUIRED_FIELD;
+        continue;
+      }
+    } else {
+      count = *(const size_t *)(base + f->count);
+      if ((count != 0U && *(void *const *)(base + f->value) == NULL) ||
+          count > *(const size_t *)(base + f->capacity))
+        return WL_CODEC_ERR_INVALID_VALUE;
+    }
+    for (size_t j = 0U; j < count; ++j) {
+      size_t body;
+      const void *p = f->card == WLC_REPEATED
+                          ? *(const uint8_t *const *)(base + f->value) + j * f->element
+                          : base + f->value;
+      wl_codec_status_t s = wlc_body(f, p, &body, validated);
+      if (s != WL_CODEC_OK) return s;
+      if ((s = wlc_add(&n, f->key_size)) != WL_CODEC_OK ||
+          (s = wlc_add(&n, body)) != WL_CODEC_OK) return s;
+    }
+  }
+  *out = n;
+  return WL_CODEC_OK;
+}
+static wl_codec_status_t wlc_measure(const wlc_desc_t *d, const void *value, size_t *out) {
+  return wlc_measure_impl(d, value, out, false);
+}
+static wl_codec_status_t wlc_measure_validated(const wlc_desc_t *d, const void *value, size_t *out) {
+  return wlc_measure_impl(d, value, out, true);
+}
+static void wlc_clear(const wlc_desc_t *d, void *value) {
+  uint8_t *base = value;
+  for (size_t i = 0U; i < d->count; ++i) {
+    const wlc_field_t *f = &d->fields[i];
+    void *p = base + f->value;
+    if (f->card == WLC_REPEATED) {
+      *(size_t *)(base + f->count) = 0U;
+      continue;
+    }
+    *(bool *)(base + f->has) = false;
+    if (f->card == WLC_PACKED) {
+      memset(p, 0, f->element * f->packed_count);
+      continue;
+    }
+    if (f->kind == WLC_MESSAGE) { wlc_clear(f->nested, p); continue; }
+    if (f->kind == WLC_STRING) {
+      *(wl_codec_string_t *)p =
+          (wl_codec_string_t){f->string_default, (size_t)f->unsigned_default};
+      continue;
+    }
+    if (f->kind == WLC_BYTES) {
+      *(wl_codec_bytes_t *)p = (wl_codec_bytes_t){NULL, 0U};
+      continue;
+    }
+    if (f->kind == WLC_FLOAT32 || f->kind == WLC_FLOAT64) {
+      memset(p, 0, f->element);
+      continue;
+    }
+    if (f->kind == WLC_BOOL) *(bool *)p = f->unsigned_default != 0U;
+    else if (f->kind == WLC_I8) *(int8_t *)p = (int8_t)f->signed_default;
+    else if (f->kind == WLC_I16) *(int16_t *)p = (int16_t)f->signed_default;
+    else if (f->kind == WLC_I32 || f->kind == WLC_ENUM)
+      *(int32_t *)p = (int32_t)f->signed_default;
+    else if (f->kind == WLC_I64) *(int64_t *)p = f->signed_default;
+    else if (f->kind == WLC_U8) *(uint8_t *)p = (uint8_t)f->unsigned_default;
+    else if (f->kind == WLC_U16) *(uint16_t *)p = (uint16_t)f->unsigned_default;
+    else if (f->kind == WLC_U32 || f->kind == WLC_F32)
+      *(uint32_t *)p = (uint32_t)f->unsigned_default;
+    else if (f->kind == WLC_U64 || f->kind == WLC_F64)
+      *(uint64_t *)p = f->unsigned_default;
+  }
+}
+static inline void wlc_put32(uint8_t **p, uint32_t v) {
+  *(*p)++ = (uint8_t)(v >> 24U);
+  *(*p)++ = (uint8_t)(v >> 16U);
+  *(*p)++ = (uint8_t)(v >> 8U);
+  *(*p)++ = (uint8_t)v;
+}
+static inline void wlc_put64(uint8_t **p, uint64_t v) {
+  wlc_put32(p, (uint32_t)(v >> 32U));
+  wlc_put32(p, (uint32_t)v);
+}
+static inline void wlc_copy_span(uint8_t **out, const void *data, size_t length) {
+  if (length != 0U) { memcpy(*out, data, length); *out += length; }
+}
+static inline void wlc_put_key(uint8_t **out, const wlc_field_t *f) {
+  *(*out)++ = f->key[0];
+  if (f->key_size > 1U) {
+    *(*out)++ = f->key[1];
+    if (f->key_size > 2U) *(*out)++ = f->key[2];
+  }
+}

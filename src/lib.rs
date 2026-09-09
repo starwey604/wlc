@@ -7,13 +7,13 @@ pub mod identity;
 mod lexer;
 mod managed_rpc_codegen;
 pub mod manifest;
-mod packed_codegen;
 mod parser;
 pub mod profile;
 pub mod profile_semantic;
 mod rpc_endpoint_codegen;
 pub mod runtime_codegen;
 pub mod semantic;
+mod template;
 mod value_codegen;
 
 pub use codegen::{GeneratedC, generate_c};

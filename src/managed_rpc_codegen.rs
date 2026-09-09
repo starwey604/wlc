@@ -2,26 +2,54 @@
 use crate::{
     codegen::{c_identifier, type_name, upper_snake},
     profile_semantic::{DeliveryPolicy, RpcService},
+    template::render,
 };
 
 fn expand(template: &str, module: &str, service: &RpcService) -> String {
-    template
-        .replace("@M@", module)
-        .replace("@P@", &upper_snake(module))
-        .replace("@S@", &c_identifier(&service.name))
-        .replace("@REQ@", &type_name(&service.request_name))
-        .replace("@RES@", &type_name(&service.response_name))
-        .replace("@REQ_P@", &upper_snake(&service.request_name))
-        .replace("@RES_P@", &upper_snake(&service.response_name))
-        .replace("@REQ_ID@", &format!("{}U", service.request_id))
-        .replace("@RES_ID@", &format!("{}U", service.response_id))
-        .replace("@REQ_EVENT@", event(service.request_delivery))
-        .replace("@RES_EVENT@", event(service.response_delivery))
-        .replace("@REQ_DELIVERY@", delivery(service.request_delivery))
-        .replace("@TRANSITION@", match service.request_delivery {
-            DeliveryPolicy::Reliable => "wl_rpc_client_bind_tx(runtime->rpc_client, operation_id, result.detail.rpc.handle)",
-            DeliveryPolicy::Unreliable => "wl_rpc_client_tx_completed(runtime->rpc_client, operation_id)",
-        })
+    expand_with(template, module, service, &[])
+}
+
+fn expand_with(
+    template: &str,
+    module: &str,
+    service: &RpcService,
+    extra: &[(&str, &str)],
+) -> String {
+    let prefix = upper_snake(module);
+    let name = c_identifier(&service.name);
+    let request = type_name(&service.request_name);
+    let response = type_name(&service.response_name);
+    let request_prefix = upper_snake(&service.request_name);
+    let response_prefix = upper_snake(&service.response_name);
+    let request_id = format!("{}U", service.request_id);
+    let response_id = format!("{}U", service.response_id);
+    let mut values = vec![
+        ("M", module),
+        ("P", &prefix),
+        ("S", &name),
+        ("REQ", &request),
+        ("RES", &response),
+        ("REQ_P", &request_prefix),
+        ("RES_P", &response_prefix),
+        ("REQ_ID", &request_id),
+        ("RES_ID", &response_id),
+        ("REQ_EVENT", event(service.request_delivery)),
+        ("RES_EVENT", event(service.response_delivery)),
+        ("REQ_DELIVERY", delivery(service.request_delivery)),
+        (
+            "TRANSITION",
+            match service.request_delivery {
+                DeliveryPolicy::Reliable => {
+                    "wl_rpc_client_bind_tx(runtime->rpc_client, operation_id, result.detail.rpc.handle)"
+                }
+                DeliveryPolicy::Unreliable => {
+                    "wl_rpc_client_tx_completed(runtime->rpc_client, operation_id)"
+                }
+            },
+        ),
+    ];
+    values.extend_from_slice(extra);
+    render(template, &values)
 }
 
 fn event(policy: DeliveryPolicy) -> &'static str {
@@ -38,13 +66,18 @@ fn delivery(policy: DeliveryPolicy) -> &'static str {
 }
 
 pub(crate) fn header_types(module: &str, codec: &str, service: &RpcService) -> String {
-    expand(include_str!("managed_rpc_types.h.in"), module, service).replace("@CODEC@", codec)
+    expand_with(
+        include_str!("managed_rpc_types.h.in"),
+        module,
+        service,
+        &[("CODEC", codec)],
+    )
 }
 pub(crate) fn header_functions(module: &str, service: &RpcService) -> String {
     expand(include_str!("managed_rpc_functions.h.in"), module, service)
 }
 pub(crate) fn helpers(module: &str) -> String {
-    include_str!("managed_rpc_helpers.c.in").replace("@M@", module)
+    render(include_str!("managed_rpc_helpers.c.in"), &[("M", module)])
 }
 pub(crate) fn request_case(module: &str, service: &RpcService) -> String {
     expand(include_str!("managed_rpc_request.c.in"), module, service)

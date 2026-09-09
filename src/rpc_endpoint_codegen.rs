@@ -1,17 +1,24 @@
 //! Static default RPC storage and role assembly. The core async dispatcher owns
 //! admission/completion; generated glue only supplies typed snapshots/callbacks.
 use crate::{
-    codegen::{c_identifier, type_name},
+    codegen::{c_identifier, type_name, upper_snake},
     profile_semantic::BindingProfileModel,
+    template::render,
 };
 use std::{collections::HashMap, fmt::Write};
 
-pub(crate) fn assemble(
-    mut out: String,
+/// Each fragment is fully rendered before insertion into the endpoint template.
+/// Insertion never runs another substitution pass over generated/user text.
+pub(crate) struct EndpointRpcFragments {
+    pub bindings: Vec<(&'static str, String)>,
+    pub suffix: String,
+}
+
+pub(crate) fn fragments(
     profile: &BindingProfileModel,
     maxima: &HashMap<u16, Option<u64>>,
     module: &str,
-) -> String {
+) -> EndpointRpcFragments {
     let managed = profile
         .rpc_services
         .iter()
@@ -70,7 +77,9 @@ pub(crate) fn assemble(
         initialize.push_str("  if (runtime_config.rpc_client_enabled) {\n    result = wl_rpc_async_init(&endpoint->private_state.async,\n        wl_endpoint_link(&endpoint->private_state.owner), endpoint->private_state.instance.runtime.rpc_client,\n        endpoint->private_state.submissions, runtime_config.rpc_client_slot_count,\n        endpoint->private_state.requests[0], sizeof(endpoint->private_state.requests),\n        @P@_ENDPOINT_REQUEST_CAPACITY, endpoint->private_state.incarnation);\n    if (result != WL_OK) { wl_endpoint_close(&endpoint->private_state.owner); return result; }\n    endpoint->private_state.instance.runtime.rpc_async = &endpoint->private_state.async;\n  }");
         close_end.push_str("  {\n    int error = wl_rpc_async_close(&endpoint->private_state.async);\n    endpoint->private_state.closing = false;\n    if (error != WL_OK) return error;\n  }");
     }
-    for (key, value) in [
+    let prefix = upper_snake(module);
+    let context = [("M", module), ("P", prefix.as_str())];
+    let bindings = [
         ("RPC_CAPACITY", capacity),
         ("RPC_STATE", state),
         ("RPC_HANDLERS", handlers),
@@ -80,11 +89,16 @@ pub(crate) fn assemble(
         ("RPC_ASYNC_INIT", initialize),
         ("RPC_CLOSE_BEGIN", close_begin),
         ("RPC_CLOSE_END", close_end),
-    ] {
-        out = out.replace(&format!("@{key}@"), &value);
-    }
+    ]
+    .into_iter()
+    .map(|(key, value)| (key, render(&value, &context)))
+    .collect();
+    let mut suffix = String::new();
     if managed {
-        out.push_str("\n/* Optional cancellation; completion still arrives once, with no release. */\nstatic inline wl_err_t @M@_endpoint_cancel(@M@_endpoint_t *endpoint, const wl_rpc_call_t *call) {\n  if (endpoint == NULL || call == NULL) return WL_ERR_INVALID_ARG;\n  if (endpoint->private_state.closing || wl_endpoint_link(@M@_endpoint_handle(endpoint)) == NULL) return WL_ERR_NOT_INITIALIZED;\n  return wl_rpc_async_cancel(&endpoint->private_state.async, call);\n}\n");
+        suffix = render(
+            "\n/* Optional cancellation; completion still arrives once, with no release. */\nstatic inline wl_err_t @M@_endpoint_cancel(@M@_endpoint_t *endpoint, const wl_rpc_call_t *call) {\n  if (endpoint == NULL || call == NULL) return WL_ERR_INVALID_ARG;\n  if (endpoint->private_state.closing || wl_endpoint_link(@M@_endpoint_handle(endpoint)) == NULL) return WL_ERR_NOT_INITIALIZED;\n  return wl_rpc_async_cancel(&endpoint->private_state.async, call);\n}\n",
+            &context,
+        );
     }
-    out
+    EndpointRpcFragments { bindings, suffix }
 }
