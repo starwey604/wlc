@@ -1,9 +1,10 @@
 # Changelog
 
-## Unreleased — generated ABI 31
+## 0.6.0 — 2026-09-09
 
-Regenerate and rebuild consumers with the matching development Wirelink. The
-released v0.5.0 compiler remains ABI 30; this work does not publish a new tag.
+This release advances generated compatibility to **ABI 31**. Regenerate and
+rebuild consumers with Wirelink v0.6.0; v0.5.0 generated ABI 30. Release tests
+pin the matching core implementation at `ba891341feb8a32bb98d39ce59d37e1b269104b1`.
 
 - Allow a target-wide COBS receive FIFO capacity override for generated endpoints.
 - Mark generated driver readiness as complete so consumed events alone do not

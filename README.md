@@ -35,8 +35,8 @@ The compiler version and generated-code ABI are separate compatibility axes.
 records `compiler.codegen_abi`. Build integrations should pin both rather than
 following a branch or the newest release.
 
-`wlc codegen-abi` prints this revision without requiring a schema. Current
-development generates ABI 30 (unreleased). Regenerate all codec/runtime artifacts
+`wlc codegen-abi` prints this revision without requiring a schema. WLC v0.6.0
+generates ABI 31 and pairs with Wirelink v0.6.0. Regenerate all codec/runtime artifacts
 and use the matching Wirelink core. `<module>_values.h` supplies bounded self-owning
 business values. `<runtime>_endpoint.h` is the ordinary endpoint entry; it
 transitively includes runtime declarations for static layout, not an opaque ABI.
