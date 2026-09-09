@@ -17,7 +17,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: starwey604/wirelink
-          ref: 9dbdedc478a37dc84886491e0a89b244d539701b
+          ref: 5f83685d935f64b17d0b512bfa72b5d667c25669
           path: wirelink
 
       - name: Check out wlc
@@ -97,7 +97,8 @@ jobs:
           "${binary}" compile tests/fixtures/release_smoke.wl \
             --profile tests/fixtures/release_smoke.bind.wl \
             --out-dir target/release-smoke
-          test "$(jq -r '.compiler.codegen_abi' target/release-smoke/release_smoke_manifest.json)" = "12"
+          test "$(${binary} codegen-abi)" = "30"
+          test "$(jq -r '.compiler.codegen_abi' target/release-smoke/release_smoke_manifest.json)" = "30"
 
       - name: Smoke-test release binary
         if: runner.os == 'Windows'
@@ -112,7 +113,8 @@ jobs:
             --out-dir target/release-smoke
           if ($LASTEXITCODE -ne 0) { throw "release compiler smoke test failed" }
           $manifest = Get-Content target/release-smoke/release_smoke_manifest.json | ConvertFrom-Json
-          if ($manifest.compiler.codegen_abi -ne 12) { throw "unexpected codegen ABI" }
+          if ((& $binary codegen-abi) -ne "30") { throw "unexpected compiler ABI" }
+          if ($manifest.compiler.codegen_abi -ne 30) { throw "unexpected manifest ABI" }
 
       - name: Create tar archive
         if: matrix.archive == 'tar.gz'
@@ -121,7 +123,8 @@ jobs:
           mkdir -p dist/package
           cp "target/${{ matrix.target }}/release/wlc" dist/package/wlc
           cp README.md dist/package/README.md
-          tar -C dist/package -czf "dist/${{ matrix.asset }}.tar.gz" wlc README.md
+          cp CHANGELOG.md dist/package/CHANGELOG.md
+          tar -C dist/package -czf "dist/${{ matrix.asset }}.tar.gz" wlc README.md CHANGELOG.md
 
       - name: Create zip archive
         if: matrix.archive == 'zip'
@@ -130,7 +133,8 @@ jobs:
           New-Item -ItemType Directory -Force dist/package | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/wlc.exe" dist/package/wlc.exe
           Copy-Item README.md dist/package/README.md
-          Compress-Archive -Path dist/package/wlc.exe,dist/package/README.md `
+          Copy-Item CHANGELOG.md dist/package/CHANGELOG.md
+          Compress-Archive -Path dist/package/wlc.exe,dist/package/README.md,dist/package/CHANGELOG.md `
             -DestinationPath "dist/${{ matrix.asset }}.zip"
 
       - name: Upload package
