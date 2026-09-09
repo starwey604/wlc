@@ -1,0 +1,31 @@
+{
+  "format": "wirelink-codegen-manifest-v1",
+  "compiler": {
+    "name": "wlc",
+    "version": "0.4.0",
+    "codegen_abi": 29
+  },
+  "module": "business",
+  "identity": {
+    "algorithm": "fnv1a64-v1",
+    "schema": "0x7a963437ca23c6d6",
+    "binding_profile": "0xaa1a6a06e366bbb3"
+  },
+  "bounded_fields": [
+    {"message": "Request", "message_id": 3, "field": "label", "field_number": 1, "kind": "string", "max_length": 32},
+    {"message": "Request", "message_id": 3, "field": "data", "field_number": 2, "kind": "bytes", "max_length": 128},
+    {"message": "Response", "message_id": 4, "field": "result", "field_number": 1, "kind": "string", "max_length": 64}
+  ],
+  "artifact_digest_algorithm": "fnv1a64-domain-bytes-v1",
+  "artifacts": [
+    {"path": "business.c", "size": 62082, "digest": "0xda5f8e351918e308"},
+    {"path": "business.h", "size": 5846, "digest": "0x0b281ffc223cbffe"},
+    {"path": "business_bindings.c", "size": 18286, "digest": "0x544ca75a291d9500"},
+    {"path": "business_bindings.h", "size": 5546, "digest": "0x200171b4829e995b"},
+    {"path": "business_values.h", "size": 5252, "digest": "0xc9909e0a175fed55"},
+    {"path": "station_advanced.h", "size": 245, "digest": "0xd07f49fd41e8b45e"},
+    {"path": "station_endpoint.h", "size": 398, "digest": "0xbaffac443d555187"},
+    {"path": "station_runtime.c", "size": 45750, "digest": "0xacfcd9467ffa1288"},
+    {"path": "station_runtime.h", "size": 12599, "digest": "0xeb94f1a202fc0894"}
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "format": "wirelink-codegen-manifest-v1",
+  "compiler": {
+    "name": "wlc",
+    "version": "0.4.0",
+    "codegen_abi": 29
+  },
+  "module": "business",
+  "identity": {
+    "algorithm": "fnv1a64-v1",
+    "schema": "0xd2385a69c9704dff",
+    "binding_profile": null
+  },
+  "bounded_fields": [
+    {"message": "Scalars", "message_id": 101, "field": "label", "field_number": 15, "kind": "string", "max_length": 32},
+    {"message": "Scalars", "message_id": 101, "field": "data", "field_number": 2048, "kind": "bytes", "max_length": 16}
+  ],
+  "artifact_digest_algorithm": "fnv1a64-domain-bytes-v1",
+  "artifacts": [
+    {"path": "business.c", "size": 224487, "digest": "0x9fe8c250ce5cca90"},
+    {"path": "business.h", "size": 23596, "digest": "0xdc970965a904bc34"},
+    {"path": "business_bindings.c", "size": 47568, "digest": "0xbc6eaf78bd44b2a0"},
+    {"path": "business_bindings.h", "size": 11768, "digest": "0x180a96f922da43e5"},
+    {"path": "business_values.h", "size": 22356, "digest": "0x00b77d68616066e3"}
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "format": "wirelink-codegen-manifest-v1",
+  "compiler": {
+    "name": "wlc",
+    "version": "0.4.0",
+    "codegen_abi": 29
+  },
+  "module": "business",
+  "identity": {
+    "algorithm": "fnv1a64-v1",
+    "schema": "0x25262b229432ee0b",
+    "binding_profile": "0x9926f688ebbbf34d"
+  },
+  "bounded_fields": [
+  ],
+  "artifact_digest_algorithm": "fnv1a64-domain-bytes-v1",
+  "artifacts": [
+    {"path": "business.c", "size": 32847, "digest": "0xe0390bde77a83ed4"},
+    {"path": "business.h", "size": 899, "digest": "0x10f8c723973861f8"},
+    {"path": "business_bindings.c", "size": 3081, "digest": "0xf05e6556fdb7dee4"},
+    {"path": "business_bindings.h", "size": 2012, "digest": "0x7adaf2c419a1d526"},
+    {"path": "business_values.h", "size": 1170, "digest": "0x6f4d35b32441eeab"},
+    {"path": "station_advanced.h", "size": 245, "digest": "0xd07f49fd41e8b45e"},
+    {"path": "station_endpoint.h", "size": 398, "digest": "0xbaffac443d555187"},
+    {"path": "station_runtime.c", "size": 11948, "digest": "0xd6c70479bb9bf27e"},
+    {"path": "station_runtime.h", "size": 19571, "digest": "0xed0f93a0aebe71eb"}
+  ]
+}
