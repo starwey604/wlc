@@ -28,6 +28,7 @@ pub struct EndpointBinding {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BindingDeclaration {
     Send(RouteBinding),
+    Direct(RouteBinding),
     Latest(RouteBinding),
     Fifo(RouteBinding),
     Rpc(Box<RpcBinding>),
@@ -269,13 +270,14 @@ impl Parser {
             }
             let binding = match kind.value.as_str() {
                 "send" => BindingDeclaration::Send(self.parse_route("send")?),
+                "direct" => BindingDeclaration::Direct(self.parse_route("direct")?),
                 "latest" => BindingDeclaration::Latest(self.parse_route("latest")?),
                 "fifo" => BindingDeclaration::Fifo(self.parse_route("fifo")?),
                 "rpc" => BindingDeclaration::Rpc(Box::new(self.parse_rpc()?)),
                 _ => {
                     return Err(self.error(
                         kind.span,
-                        "binding must start with `send`, `latest`, `fifo`, `rpc`, or `endpoint`",
+                        "binding must start with `send`, `direct`, `latest`, `fifo`, `rpc`, or `endpoint`",
                     ));
                 }
             };

@@ -8,6 +8,7 @@ use miette::Diagnostic;
 use thiserror::Error;
 
 mod assembly;
+mod direct;
 mod dispatch;
 mod header;
 mod pump;

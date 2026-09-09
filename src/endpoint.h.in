@@ -14,6 +14,8 @@ typedef struct {
   /* Expert policy/storage overrides; ordinary applications use defaults. */
   @M@_runtime_config_t advanced;
 @RPC_HANDLERS@
+@DIRECT_HANDLERS@
+@RESPONSE_HANDLER@
   size_t event_budget;
   @M@_runtime_result_fn on_result;
   /* Shared context for on_result and ordinary on_<rpc> handlers. Advanced
@@ -130,6 +132,7 @@ static inline wl_err_t @M@_endpoint_init_config(
     return WL_ERR_INVALID_ARG;
 @LAYOUT_VALIDATE@
   runtime_config = config->advanced;
+@DIRECT_INIT@
 @RPC_CONFIG_INIT@
   link_config = config->link;
   result = wl_session_next(config->environment.session,
@@ -152,6 +155,7 @@ static inline wl_err_t @M@_endpoint_init_config(
   if (result != WL_OK) return result;
 @RPC_INCARNATION@
 @RPC_BIND_VALUES@
+@RESPONSE_INIT@
   result = @M@_runtime_pump_init(&endpoint->private_state.pump,
       &endpoint->private_state.instance.runtime, @M@_endpoint_record, endpoint);
   if (result != WL_OK) return result;

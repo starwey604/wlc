@@ -33,6 +33,27 @@ pub(super) fn validate_runtime_names(
         };
         member_names.insert(format!("{}_{kind}", type_name(&route.message_name)));
     }
+    for route in &profile.direct_routes {
+        member_names.insert(format!("{}_direct", type_name(&route.message_name)));
+    }
+    let mut handler_names = BTreeSet::from(["result".to_owned(), "response_terminal".to_owned()]);
+    for name in profile
+        .direct_routes
+        .iter()
+        .map(|route| type_name(&route.message_name))
+        .chain(
+            profile
+                .rpc_services
+                .iter()
+                .map(|service| c_identifier(&service.name)),
+        )
+    {
+        if !handler_names.insert(name.clone()) {
+            return Err(RuntimeCodegenError(format!(
+                "endpoint handlers collide as C identifier `on_{name}`"
+            )));
+        }
+    }
     let mut runtime_names = BTreeSet::from([
         format!("{module}_endpoint_t"),
         format!("{module}_endpoint_config_t"),
@@ -86,6 +107,15 @@ pub(super) fn validate_runtime_names(
     if !profile.retained_routes.is_empty() {
         runtime_names.insert(format!("{module}_runtime_retained_detail_t"));
         runtime_names.insert(format!("{module}_runtime_result_retained_detail"));
+    }
+    if !profile.direct_routes.is_empty() {
+        runtime_names.insert(format!("{module}_runtime_direct_detail_t"));
+        runtime_names.insert(format!("{prefix}_RUNTIME_DETAIL_DIRECT"));
+        for route in &profile.direct_routes {
+            let name = type_name(&route.message_name);
+            runtime_names.insert(format!("{module}_{name}_direct_fn"));
+            runtime_names.insert(format!("{module}_{name}_direct_t"));
+        }
     }
     if !profile.rpc_services.is_empty() {
         for symbol in [
@@ -375,6 +405,22 @@ pub(super) fn validate_profile_model(
         }
     }
     let mut service_names = HashSet::new();
+    let mut direct_ids = HashSet::new();
+    for route in &profile.direct_routes {
+        let message = exact_message(&messages, &route.message_name, route.message_id)?;
+        if !direct_ids.insert(message.id) || retained_ids.contains(&message.id) {
+            return Err(RuntimeCodegenError(format!(
+                "message `{}` has multiple receive routes",
+                message.name
+            )));
+        }
+        if crate::profile_semantic::has_repeated_fields(message, &messages) {
+            return Err(RuntimeCodegenError(format!(
+                "direct message `{}` requires repeated backing",
+                message.name
+            )));
+        }
+    }
     let mut rpc_roles = HashSet::new();
     for service in &profile.rpc_services {
         if !service_names.insert(service.name.as_str()) {
@@ -392,6 +438,12 @@ pub(super) fn validate_profile_model(
             )));
         }
         for (message, role) in [(request, "request"), (response, "response")] {
+            if direct_ids.contains(&message.id) {
+                return Err(RuntimeCodegenError(format!(
+                    "RPC {role} message `{}` also has a direct route",
+                    message.name
+                )));
+            }
             if send_ids.contains(&message.id) {
                 return Err(RuntimeCodegenError(format!(
                     "RPC {role} message `{}` also has a plain send binding",

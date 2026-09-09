@@ -7,6 +7,7 @@ pub mod endpoint_layout;
 mod endpoint_transport_codegen;
 pub mod identity;
 mod lexer;
+mod loader;
 mod managed_rpc_codegen;
 pub mod manifest;
 mod parser;
@@ -20,6 +21,7 @@ mod value_codegen;
 
 pub use codegen::{GeneratedC, generate_c};
 pub use identity::{IDENTITY_ALGORITHM, binding_profile_identity, schema_identity};
+pub use loader::{LoadedSchema, load_schema};
 pub use manifest::{
     ARTIFACT_DIGEST_ALGORITHM, CODEGEN_ABI_VERSION, CODEGEN_MANIFEST_FORMAT, COMPILER_NAME,
     COMPILER_VERSION, ManifestArtifact, generate_codegen_manifest,

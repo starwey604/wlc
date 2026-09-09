@@ -98,6 +98,14 @@ pub(super) fn emit_assembly_header(
         "typedef struct {\n",
         "  uint8_t _reserved;\n",
     ));
+    for route in &profile.direct_routes {
+        let name = type_name(&route.message_name);
+        writeln!(
+            output,
+            "  {module}_{name}_direct_fn {name}_direct_handler;\n  void *{name}_direct_user_data;"
+        )
+        .unwrap();
+    }
     for route in &profile.retained_routes {
         let message = type_name(&route.message_name);
         match route.kind {
@@ -212,6 +220,16 @@ pub(super) fn emit_assembly_header(
             RetainedRouteKind::Fifo => ("wl_fifo_t", "fifo"),
         };
         writeln!(output, "  {ty} {message}_{kind};").unwrap();
+    }
+    if !profile.direct_routes.is_empty() {
+        output.push_str(
+            "  /* One direct callback at a time; no payload is retained. */\n  union {\n",
+        );
+        for route in &profile.direct_routes {
+            let name = type_name(&route.message_name);
+            writeln!(output, "    {name}_t {name}_direct_scratch;").unwrap();
+        }
+        output.push_str("  };\n");
     }
     if !profile.rpc_services.is_empty() {
         if profile.has_rpc_client() {
@@ -487,6 +505,11 @@ pub(super) fn emit_assembly_source(
                 .unwrap();
             }
         }
+    }
+
+    for route in &profile.direct_routes {
+        let name = type_name(&route.message_name);
+        writeln!(output, "  instance->runtime.{name}_direct.handler = config->{name}_direct_handler;\n  instance->runtime.{name}_direct.user_data = config->{name}_direct_user_data;\n  instance->runtime.{name}_direct.scratch = &instance->{name}_direct_scratch;").unwrap();
     }
 
     if !profile.rpc_services.is_empty() {

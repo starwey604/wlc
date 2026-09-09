@@ -16,7 +16,7 @@
 fixed32/fixed64/float32/float64 数组的消息才生成专用入口，长度与前缀为编译期常量，
 数组元素仍用循环处理；清零及其他结构保留通用引擎。
 这些是可继续调整的实现策略，不是新的
-schema 属性或稳定阈值。生成 ABI 仍为 29，公开所有权、校验规则和线上字节不变。
+schema 属性或稳定阈值，不改变 codec 的线上字节。
 
 ## 预编译 Compiler
 
@@ -28,7 +28,14 @@ compiler version 与 generated-code ABI 是两个兼容轴。`wlc --version` 报
 manifest 的 `compiler.codegen_abi` 记录生成 ABI；build 必须同时 pin 两者，不能跟随 branch
 或自动使用最新版。
 
-当前开发版 `wlc codegen-abi` 输出 29（未发布）；核心和所有生成消费者必须配套重建。
+当前开发版为 `0.7.0-dev`，`wlc codegen-abi` 输出 32（未发布）；核心和所有生成
+消费者必须配套重建。此轮支持根 schema 的 `import "arm.wl";` 静态组合，以及
+profile 的 `direct BulkChunk { delivery = reliable; }` 借用式接收路由。
+导入相对当前文件解析，共享文件去重，循环与全局 ID/名称冲突在编译期拒绝；根版本
+表示组合协议版本。`wlc dependencies product.wl` 输出传递依赖，供增量构建使用。
+`config.on_bulk_chunk` 的输入及其 bytes/string 只在回调期间有效，延后处理必须复制。
+WLC 负责唯一 RX 释放；direct 不能与同 ID 的 retained/RPC 同时接收，不能含 repeated
+字段（含嵌套），支持固定 packed 数组。详细契约见英文 README 的 Static product composition。
 
 ## 多服务定义复用与只发送消息
 

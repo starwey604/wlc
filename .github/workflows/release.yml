@@ -17,7 +17,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: starwey604/wirelink
-          ref: ba891341feb8a32bb98d39ce59d37e1b269104b1
+          ref: d8e1404ee8b0328aa1fc05d6a13076462e4c33dd
           path: wirelink
 
       - name: Check out wlc
@@ -113,8 +113,8 @@ jobs:
             --out-dir target/release-smoke
           if ($LASTEXITCODE -ne 0) { throw "release compiler smoke test failed" }
           $manifest = Get-Content target/release-smoke/release_smoke_manifest.json | ConvertFrom-Json
-          if ((& $binary codegen-abi) -ne "31") { throw "unexpected compiler ABI" }
-          if ($manifest.compiler.codegen_abi -ne 31) { throw "unexpected manifest ABI" }
+          if ((& $binary codegen-abi) -ne "32") { throw "unexpected compiler ABI" }
+          if ($manifest.compiler.codegen_abi -ne 32) { throw "unexpected manifest ABI" }
 
       - name: Create tar archive
         if: matrix.archive == 'tar.gz'

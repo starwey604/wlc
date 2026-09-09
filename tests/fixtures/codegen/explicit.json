@@ -2,8 +2,8 @@
   "format": "wirelink-codegen-manifest-v1",
   "compiler": {
     "name": "wlc",
-    "version": "0.6.0",
-    "codegen_abi": 31
+    "version": "0.7.0-dev",
+    "codegen_abi": 32
   },
   "module": "business",
   "identity": {
@@ -26,6 +26,6 @@
     {"path": "station_advanced.h", "size": 245, "digest": "0xd07f49fd41e8b45e"},
     {"path": "station_endpoint.h", "size": 398, "digest": "0xbaffac443d555187"},
     {"path": "station_runtime.c", "size": 47113, "digest": "0x5cb4d9ee7fd7c2e2"},
-    {"path": "station_runtime.h", "size": 12773, "digest": "0x04fcb1985ad155e8"}
+    {"path": "station_runtime.h", "size": 12773, "digest": "0x3c17c679ce0e63ef"}
   ]
 }

@@ -79,6 +79,9 @@ pub(super) fn emit_source(
     for route in &profile.retained_routes {
         emit_retained_case(&mut output, module, &prefix, route);
     }
+    for route in &profile.direct_routes {
+        super::direct::emit_case(&mut output, &prefix, route);
+    }
     for service in &profile.rpc_services {
         emit_rpc_request_case(&mut output, module, &prefix, service);
         emit_rpc_response_case(&mut output, module, &prefix, service);

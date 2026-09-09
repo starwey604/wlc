@@ -16,6 +16,8 @@ pub struct Spanned<T> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Schema {
     pub version: Spanned<u32>,
+    /// File-relative imports. Resolve with load_schema() before semantic analysis.
+    pub imports: Vec<Spanned<String>>,
     /// Globally reserved message or enum IDs.
     pub reserved_ids: Vec<Spanned<u16>>,
     pub declarations: Vec<Declaration>,

@@ -106,7 +106,13 @@ pub(super) fn emit_header(
         )
         .unwrap();
     }
+    if !profile.direct_routes.is_empty() {
+        writeln!(output, "#define {prefix}_RUNTIME_DETAIL_DIRECT 3U\ntypedef struct {{\n  wl_codec_status_t codec_status;\n  int32_t application_result;\n}} {module}_runtime_direct_detail_t;\n").unwrap();
+    }
     output.push_str("typedef union {\n");
+    if !profile.direct_routes.is_empty() {
+        writeln!(output, "  {module}_runtime_direct_detail_t direct;").unwrap();
+    }
     if profile.retained_routes.is_empty() && profile.rpc_services.is_empty() {
         output.push_str("  uint8_t _reserved;\n");
     }
@@ -130,6 +136,9 @@ pub(super) fn emit_header(
     .unwrap();
     for route in &profile.retained_routes {
         emit_retained_header_type(&mut output, module, route);
+    }
+    for route in &profile.direct_routes {
+        super::direct::emit_type(&mut output, module, route);
     }
     for service in &profile.rpc_services {
         emit_rpc_header_types(&mut output, codec_module, module, service);
@@ -163,6 +172,10 @@ pub(super) fn emit_header(
         .unwrap();
     }
     output.push_str("typedef struct {\n  uint8_t _reserved;\n");
+    for route in &profile.direct_routes {
+        let name = type_name(&route.message_name);
+        writeln!(output, "  {module}_{name}_direct_t {name}_direct;").unwrap();
+    }
     for route in &profile.retained_routes {
         let message = type_name(&route.message_name);
         let kind = match route.kind {

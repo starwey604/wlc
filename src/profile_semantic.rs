@@ -31,6 +31,8 @@ pub struct BindingProfileModel {
     pub endpoint: Option<EndpointLayout>,
     /// Outbound-only messages, sorted by message ID. No retained storage.
     pub send_routes: Vec<SendRoute>,
+    /// Callback-scoped typed receives; no retained mailbox or payload copy.
+    pub direct_routes: Vec<SendRoute>,
     /// Canonically sorted by message ID and then route kind.
     pub retained_routes: Vec<RetainedRoute>,
     /// Canonically sorted by service name.
@@ -195,7 +197,9 @@ pub fn analyze_binding_profile(
         let (kind, route) = match binding {
             BindingDeclaration::Latest(route) => (RetainedRouteKind::Latest, route),
             BindingDeclaration::Fifo(route) => (RetainedRouteKind::Fifo, route),
-            BindingDeclaration::Rpc(_) | BindingDeclaration::Send(_) => continue,
+            BindingDeclaration::Rpc(_)
+            | BindingDeclaration::Send(_)
+            | BindingDeclaration::Direct(_) => continue,
         };
         let Some(message) = resolve_message(&route.message, schema, &messages, &mut errors) else {
             continue;
@@ -374,6 +378,40 @@ pub fn analyze_binding_profile(
             });
         }
     }
+    let mut direct_routes = Vec::new();
+    let mut direct_ids = HashSet::new();
+    for binding in &profile.bindings {
+        let BindingDeclaration::Direct(route) = binding else {
+            continue;
+        };
+        let Some(message) = resolve_message(&route.message, schema, &messages, &mut errors) else {
+            continue;
+        };
+        if !direct_ids.insert(message.id)
+            || retained_message_ids.contains_key(&message.id)
+            || rpc_roles.contains_key(&message.id)
+        {
+            errors.push(ProfileSemanticError::new(
+                route.message.span,
+                format!(
+                    "message `{}` has multiple receive routes (direct/retained/RPC)",
+                    message.name
+                ),
+            ));
+        }
+        if has_repeated_fields(message, &messages) {
+            errors.push(ProfileSemanticError::new(route.message.span,
+                format!("direct message `{}` requires caller-owned repeated backing; use fixed packed arrays", message.name)));
+        }
+        if let Some(delivery) = resolve_delivery(&route.delivery, &mut errors) {
+            direct_routes.push(SendRoute {
+                message_name: message.name.clone(),
+                message_id: message.id,
+                delivery,
+            });
+        }
+    }
+    direct_routes.sort_by_key(|route| route.message_id);
     if !errors.is_empty() {
         return Err(ProfileSemanticErrors { errors });
     }
@@ -381,6 +419,7 @@ pub fn analyze_binding_profile(
     send_routes.sort_by_key(|route| route.message_id);
     rpc_services.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(BindingProfileModel {
+        direct_routes,
         version: profile.version.value,
         endpoint,
         send_routes,
@@ -404,11 +443,13 @@ pub fn compose_binding_profiles(
         version: BINDING_PROFILE_VERSION,
         endpoint: None,
         send_routes: Vec::new(),
+        direct_routes: Vec::new(),
         retained_routes: Vec::new(),
         rpc_services: Vec::new(),
     };
     let mut send_ids = HashSet::new();
     let mut retained_ids = HashSet::new();
+    let mut direct_ids = HashSet::new();
     let mut service_names = HashSet::new();
     let mut rpc_ids = HashSet::new();
     for profile in profiles {
@@ -442,6 +483,15 @@ pub fn compose_binding_profiles(
             }
             merged.retained_routes.push(route.clone());
         }
+        for route in &profile.direct_routes {
+            if !direct_ids.insert(route.message_id) {
+                return Err(ProfileCompositionError(format!(
+                    "duplicate direct binding for message `{}` across profiles",
+                    route.message_name
+                )));
+            }
+            merged.direct_routes.push(route.clone());
+        }
         for service in &profile.rpc_services {
             if !service_names.insert(&service.name) {
                 return Err(ProfileCompositionError(format!(
@@ -467,7 +517,7 @@ pub fn compose_binding_profiles(
             (service.request_id, &service.request_name),
             (service.response_id, &service.response_name),
         ] {
-            if send_ids.contains(&id) || retained_ids.contains(&id) {
+            if send_ids.contains(&id) || retained_ids.contains(&id) || direct_ids.contains(&id) {
                 return Err(ProfileCompositionError(format!(
                     "RPC message `{name}` also has a plain send/retained binding across profiles"
                 )));
@@ -475,6 +525,15 @@ pub fn compose_binding_profiles(
         }
     }
     merged.send_routes.sort_by_key(|route| route.message_id);
+    for route in &merged.direct_routes {
+        if retained_ids.contains(&route.message_id) {
+            return Err(ProfileCompositionError(format!(
+                "message `{}` has direct and retained receive routes across profiles",
+                route.message_name
+            )));
+        }
+    }
+    merged.direct_routes.sort_by_key(|route| route.message_id);
     merged
         .retained_routes
         .sort_by_key(|route| (route.message_id, route.kind));
@@ -531,6 +590,14 @@ fn resolve_delivery(
             None
         }
     }
+}
+
+pub(crate) fn has_repeated_fields(
+    message: &MessageSymbol,
+    messages: &HashMap<&str, &MessageSymbol>,
+) -> bool {
+    message.fields.iter().any(|field| field.cardinality == Cardinality::Repeated ||
+        matches!(&field.ty, ResolvedType::Message { name, .. } if messages.get(name.as_str()).is_some_and(|child| has_repeated_fields(child, messages))))
 }
 
 fn retained_ownership_problem<'a>(

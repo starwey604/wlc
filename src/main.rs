@@ -17,6 +17,8 @@ struct Arguments {
 enum Command {
     /// Print the generated C API/layout revision for build-tool compatibility checks.
     CodegenAbi,
+    /// Print canonical transitive schema inputs, one path per line.
+    Dependencies { schema: PathBuf },
     /// Validate a schema and optionally check it against its predecessor.
     Validate {
         schema: PathBuf,
@@ -84,6 +86,12 @@ fn is_portable_c_identifier(value: &str) -> bool {
 fn main() -> Result<()> {
     let arguments = Arguments::parse();
     let (schema_path, previous, profile, operation) = match arguments.command {
+        Command::Dependencies { schema } => {
+            for path in wlc::load_schema(&schema)?.dependencies {
+                println!("{}", path.display());
+            }
+            return Ok(());
+        }
         Command::CodegenAbi => {
             println!("{}", wlc::CODEGEN_ABI_VERSION);
             return Ok(());
@@ -116,34 +124,19 @@ fn main() -> Result<()> {
         ),
         Command::Identity { schema, profile } => (schema, None, profile, Operation::Identity),
     };
-    let source = fs::read_to_string(&schema_path)
-        .into_diagnostic()
-        .wrap_err_with(|| format!("could not read `{}`", schema_path.display()))?;
-
-    let schema = wlc::parse_schema(&source).map_err(|error| {
+    let loaded = wlc::load_schema(&schema_path)?;
+    let model = wlc::analyze_schema(&loaded.schema).map_err(|error| {
         miette::Report::new(error).with_source_code(NamedSource::new(
             schema_path.display().to_string(),
-            source.clone(),
+            loaded.source,
         ))
     })?;
-    let model = wlc::analyze_schema(&schema).map_err(|error| {
-        miette::Report::new(error)
-            .with_source_code(NamedSource::new(schema_path.display().to_string(), source))
-    })?;
     if let Some(previous) = previous {
-        let previous_source = fs::read_to_string(&previous)
-            .into_diagnostic()
-            .wrap_err_with(|| format!("could not read `{}`", previous.display()))?;
-        let previous_schema = wlc::parse_schema(&previous_source).map_err(|error| {
+        let previous_loaded = wlc::load_schema(&previous)?;
+        let previous_model = wlc::analyze_schema(&previous_loaded.schema).map_err(|error| {
             miette::Report::new(error).with_source_code(NamedSource::new(
                 previous.display().to_string(),
-                previous_source.clone(),
-            ))
-        })?;
-        let previous_model = wlc::analyze_schema(&previous_schema).map_err(|error| {
-            miette::Report::new(error).with_source_code(NamedSource::new(
-                previous.display().to_string(),
-                previous_source,
+                previous_loaded.source,
             ))
         })?;
         wlc::check_compatibility(&previous_model, &model).map_err(miette::Report::new)?;
@@ -346,6 +339,7 @@ fn main() -> Result<()> {
                 .join(", "),
             profile_model.version,
             profile_model.retained_routes.len()
+                + profile_model.direct_routes.len()
                 + profile_model.send_routes.len()
                 + profile_model.rpc_services.len()
         );

@@ -131,6 +131,15 @@ pub fn binding_profile_identity(model: &BindingProfileModel) -> u64 {
         }
     }
     let layout = model.endpoint_layout();
+    if !model.direct_routes.is_empty() {
+        hash.string("direct-routes-v1");
+        hash.len(model.direct_routes.len());
+        for route in &model.direct_routes {
+            hash.string(&route.message_name);
+            hash.u16(route.message_id);
+            hash_delivery(&mut hash, route.delivery);
+        }
+    }
     if layout != crate::endpoint_layout::EndpointLayout::default() {
         use crate::endpoint_layout::{EndpointEnvelope, EndpointRpcRole};
         hash.string("endpoint-layout-v1");

@@ -20,6 +20,12 @@ pub(crate) fn emit(
         .map(|route| (route.message_id, 0))
         .chain(
             profile
+                .direct_routes
+                .iter()
+                .map(|route| (route.message_id, 0)),
+        )
+        .chain(
+            profile
                 .send_routes
                 .iter()
                 .map(|route| (route.message_id, 0)),
@@ -57,7 +63,32 @@ pub(crate) fn emit(
     let transport =
         crate::endpoint_transport_codegen::fragments(profile.endpoint_layout().envelope, &prefix);
     let maximum = maximum.to_string();
+    let mut direct_handlers = String::new();
+    let mut direct_init = String::new();
+    let response_handler = if profile.rpc_services.is_empty() {
+        String::new()
+    } else {
+        "  wl_rpc_response_observer_fn on_response_terminal;".to_owned()
+    };
+    let response_init = if profile.rpc_services.is_empty() {
+        String::new()
+    } else {
+        "  if (config->on_response_terminal != NULL) {\n    if (endpoint->private_state.instance.runtime.rpc_server == NULL) return WL_ERR_INVALID_ARG;\n    if (wl_rpc_server_set_response_observer(endpoint->private_state.instance.runtime.rpc_server, config->on_response_terminal, config->user_data) != WL_RPC_OK) return WL_ERR_INVALID_STATE;\n  }".to_owned()
+    };
+    for route in &profile.direct_routes {
+        let name = type_name(&route.message_name);
+        writeln!(
+            direct_handlers,
+            "  {module}_{name}_direct_fn on_{name};\n  void *{name}_user_data;"
+        )
+        .unwrap();
+        writeln!(direct_init, "  if (config->on_{name} != NULL) {{\n    if (runtime_config.{name}_direct_handler != NULL) return WL_ERR_INVALID_ARG;\n    runtime_config.{name}_direct_handler = config->on_{name};\n    runtime_config.{name}_direct_user_data = config->{name}_user_data != NULL ? config->{name}_user_data : config->user_data;\n  }}").unwrap();
+    }
     let mut values = vec![
+        ("DIRECT_HANDLERS", direct_handlers.as_str()),
+        ("DIRECT_INIT", direct_init.as_str()),
+        ("RESPONSE_HANDLER", response_handler.as_str()),
+        ("RESPONSE_INIT", response_init.as_str()),
         ("M", module),
         ("P", prefix.as_str()),
         ("MAX", maximum.as_str()),

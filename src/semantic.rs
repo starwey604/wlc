@@ -159,6 +159,12 @@ pub fn analyze_schema(schema: &Schema) -> Result<SemanticModel, SemanticErrors> 
         .map(|declaration| (declaration.name().value.as_str(), declaration))
         .collect();
     let mut errors = Vec::new();
+    for import in &schema.imports {
+        errors.push(SemanticError::new(
+            import.span,
+            "unresolved schema import: use load_schema() before analyze_schema()".to_owned(),
+        ));
+    }
     let mut declarations = Vec::new();
 
     for declaration in &schema.declarations {

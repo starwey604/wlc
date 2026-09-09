@@ -6,6 +6,7 @@ pub(crate) enum TokenKind {
     Number(IntegerLiteral),
     String(String),
     Version,
+    Import,
     Message,
     Enum,
     Optional,
@@ -168,6 +169,7 @@ impl Lexer<'_> {
         }
         match &self.source[start..self.offset] {
             "version" => TokenKind::Version,
+            "import" => TokenKind::Import,
             "message" => TokenKind::Message,
             "enum" => TokenKind::Enum,
             "optional" => TokenKind::Optional,

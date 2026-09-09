@@ -62,11 +62,33 @@ impl Parser {
         self.expect_symbol(TokenKind::Semicolon, "`;` after version")?;
 
         let mut declarations = Vec::new();
+        let mut imports = Vec::new();
         let mut names = HashSet::new();
         let mut ids = HashSet::new();
         let mut reserved_ids = Vec::new();
         let mut reserved_id_values = HashSet::new();
         while !matches!(self.current().kind, TokenKind::End) {
+            if matches!(self.current().kind, TokenKind::Import) {
+                let start = self.current().span;
+                self.position += 1;
+                let TokenKind::String(path) = self.current().kind.clone() else {
+                    return Err(self.error_current("expected a quoted import path"));
+                };
+                if path.is_empty() || path.contains(['\n', '\r', '\0']) {
+                    return Err(self.error_current("import path must be nonempty and on one line"));
+                }
+                self.position += 1;
+                let end = self.current().span;
+                self.expect_symbol(TokenKind::Semicolon, "`;` after import")?;
+                imports.push(Spanned {
+                    value: path,
+                    span: Span {
+                        length: end.offset + end.length - start.offset,
+                        ..start
+                    },
+                });
+                continue;
+            }
             if matches!(self.current().kind, TokenKind::Reserved) {
                 let reserved = self.parse_reservation("declaration ID")?;
                 if !reserved_id_values.insert(reserved.value) {
@@ -120,7 +142,7 @@ impl Parser {
             declarations.push(declaration);
         }
 
-        if declarations.is_empty() {
+        if declarations.is_empty() && imports.is_empty() {
             return Err(self.error(
                 version_span,
                 "a schema must declare at least one message or enum",
@@ -128,6 +150,7 @@ impl Parser {
         }
         Ok(Schema {
             version,
+            imports,
             reserved_ids,
             declarations,
         })

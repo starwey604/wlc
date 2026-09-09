@@ -35,11 +35,52 @@ The compiler version and generated-code ABI are separate compatibility axes.
 records `compiler.codegen_abi`. Build integrations should pin both rather than
 following a branch or the newest release.
 
-`wlc codegen-abi` prints this revision without requiring a schema. WLC v0.6.0
-generates ABI 31 and pairs with Wirelink v0.6.0. Regenerate all codec/runtime artifacts
+`wlc codegen-abi` prints this revision without requiring a schema. WLC 0.7.0-dev
+generates ABI 32 and pairs with Wirelink 0.7.0-dev. This development pair is not
+a published release; build this checkout explicitly. Regenerate all codec/runtime artifacts
 and use the matching Wirelink core. `<module>_values.h` supplies bounded self-owning
 business values. `<runtime>_endpoint.h` is the ordinary endpoint entry; it
 transitively includes runtime declarations for static layout, not an opaque ABI.
+
+### Static product composition (ABI 32)
+
+A root schema can compose independently maintained service schemas:
+
+```wirelink
+version 1;
+import "arm.wl";
+import "upgrade.wl";
+```
+
+Imports resolve relative to the importing file; canonical paths are deduplicated
+and cycles/depth over 64 are rejected. One global declaration/ID/reservation
+namespace is validated after composition. The root version is the product
+contract revision. Import paths, ordering and imported version numbers do not
+enter the wire identity: the result matches an equivalent flattened schema.
+The library entry is `load_schema(path)` then `analyze_schema(&loaded.schema)`;
+`parse_schema()` deliberately does not access files and unresolved imports cannot
+be analyzed. `wlc dependencies product.wl` prints sorted transitive inputs,
+including the root, one canonical path per line, for build dependency tracking.
+
+Compose profiles as before using repeated `--profile`. For borrowed streaming
+input, use `direct BulkChunk { delivery = reliable; }`, then register
+`config.on_bulk_chunk`. Its decoded message and nested bytes/string spans expire
+on callback return; copy deferred work into application-owned storage. Return
+zero on success, nonzero for a diagnostic application error (not an automatic
+wire reply). WLC releases every RX exactly once, including missing callbacks,
+decode errors and unknown IDs. Only one receive route may own each message ID;
+direct/retained/RPC collisions fail generation. `send` may coexist with `direct`.
+Direct routes support borrowed bytes/strings and fixed packed arrays, but reject
+repeated backing storage, including nested repeated fields. Bounded direct
+messages contribute to default endpoint payload sizing; unbounded/oversized
+messages require custom storage. Direct scratch is a shared owner-local union.
+
+Wirelink's `wl_endpoint_set_services()` binds a static array of owner-local
+progress/deadline/session/close hooks without replacing generated dispatch.
+Generated RPC endpoints also expose `config.on_response_terminal` for reliable
+response ACK/timeout/failure observation. Record an intent there, not a reboot:
+the owner still needs to retire the observed TX event. These additions do not
+change compact-v1 frames, codecs, or managed/mapped RPC payload formats.
 
 Zero-initialize a stable `*_endpoint_t`, supply `wl_platform_environment()` (or
 an injected C environment), attach an
