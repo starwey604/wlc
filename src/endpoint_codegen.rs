@@ -28,6 +28,12 @@ pub(crate) fn emit(
         .retained_routes
         .iter()
         .map(|route| (route.message_id, 0))
+        .chain(
+            profile
+                .send_routes
+                .iter()
+                .map(|route| (route.message_id, 0)),
+        )
         .chain(profile.rpc_services.iter().flat_map(|service| {
             [
                 (service.request_id, service.metadata_size()),
@@ -77,17 +83,24 @@ pub(crate) fn emit(
             RetainedRouteKind::Latest => "latest",
             RetainedRouteKind::Fifo => "fifo",
         };
-        let delivery = match route.delivery {
-            DeliveryPolicy::Unreliable => "WL_DELIVERY_UNRELIABLE",
-            DeliveryPolicy::Reliable => "WL_DELIVERY_RELIABLE",
-        };
-        let clock_sample = match route.delivery {
-            DeliveryPolicy::Unreliable => String::new(),
-            DeliveryPolicy::Reliable => {
-                format!("  (void)wl_endpoint_now({module}_endpoint_handle(endpoint), &now_ms);\n")
-            }
-        };
-        writeln!(output, "/* Delivery follows this binding. Use codec sends to override explicitly. */\nstatic inline {codec}_send_result_t {module}_endpoint_send_{message}({module}_endpoint_t *endpoint, const {message}_t *message) {{\n  wl_time_ms_t now_ms = 0U;\n{clock_sample}  return {codec}_{message}_send(wl_endpoint_link({module}_endpoint_handle(endpoint)), message, {delivery}, now_ms);\n}}\n\n/* Copy an owned value and release its lease internally. NO_DATA leaves out unchanged. */\nstatic inline wl_err_t {module}_endpoint_read_{message}({module}_endpoint_t *endpoint, {message}_t *out) {{\n  {module}_{message}_{kind}_view_t view;\n  {module}_runtime_t *runtime = {module}_endpoint_runtime(endpoint);\n  int result;\n  if (out == NULL) return WL_ERR_INVALID_ARG;\n  if (runtime == NULL) return WL_ERR_NOT_INITIALIZED;\n  result = {module}_{message}_{kind}_acquire(runtime, &view);\n  if (result != WL_OK) return result;\n  *out = *view.value;\n  return {module}_{message}_{kind}_release(runtime, &view);\n}}\n").unwrap();
+        // Retained bindings keep their symmetric convenience send. An explicit
+        // outbound declaration selects its own delivery without adding storage.
+        if !profile
+            .send_routes
+            .iter()
+            .any(|send| send.message_id == route.message_id)
+        {
+            output.push_str(&emit_send(codec, module, &message, route.delivery));
+        }
+        writeln!(output, "/* Copy an owned value and release its lease internally. NO_DATA leaves out unchanged. */\nstatic inline wl_err_t {module}_endpoint_read_{message}({module}_endpoint_t *endpoint, {message}_t *out) {{\n  {module}_{message}_{kind}_view_t view;\n  {module}_runtime_t *runtime = {module}_endpoint_runtime(endpoint);\n  int result;\n  if (out == NULL) return WL_ERR_INVALID_ARG;\n  if (runtime == NULL) return WL_ERR_NOT_INITIALIZED;\n  result = {module}_{message}_{kind}_acquire(runtime, &view);\n  if (result != WL_OK) return result;\n  *out = *view.value;\n  return {module}_{message}_{kind}_release(runtime, &view);\n}}\n").unwrap();
+    }
+    for route in &profile.send_routes {
+        output.push_str(&emit_send(
+            codec,
+            module,
+            &type_name(&route.message_name),
+            route.delivery,
+        ));
     }
     for service in &profile.rpc_services {
         if service.is_managed() {
@@ -100,6 +113,19 @@ pub(crate) fn emit(
         writeln!(output, "static inline {module}_runtime_result_t {module}_endpoint_{name}_start({module}_endpoint_t *endpoint, const {request}_t *request, uint32_t timeout_ms) {{\n  wl_time_ms_t now_ms = 0U;\n  (void)wl_endpoint_now({module}_endpoint_handle(endpoint), &now_ms);\n  return {module}_{name}_client_start(wl_endpoint_link({module}_endpoint_handle(endpoint)), {module}_endpoint_runtime(endpoint), request, timeout_ms, now_ms);\n}}\n\nstatic inline wl_rpc_err_t {module}_endpoint_{name}_inspect({module}_endpoint_t *endpoint, uint32_t operation_id, wl_rpc_client_result_t *result) {{\n  return {module}_{name}_client_inspect({module}_endpoint_runtime(endpoint), operation_id, result);\n}}\n\nstatic inline wl_rpc_err_t {module}_endpoint_{name}_release({module}_endpoint_t *endpoint, uint32_t operation_id) {{\n  return {module}_{name}_client_release({module}_endpoint_runtime(endpoint), operation_id);\n}}\n\nstatic inline {module}_runtime_result_t {module}_endpoint_{name}_complete({module}_endpoint_t *endpoint, const wl_rpc_server_request_t *request, const {response}_t *response) {{\n  wl_time_ms_t now_ms = 0U;\n  (void)wl_endpoint_now({module}_endpoint_handle(endpoint), &now_ms);\n  return {module}_{name}_server_complete({module}_endpoint_runtime(endpoint), request, response, now_ms);\n}}\n").unwrap();
     }
     output
+}
+
+fn emit_send(codec: &str, module: &str, message: &str, policy: DeliveryPolicy) -> String {
+    let (delivery, clock_sample) = match policy {
+        DeliveryPolicy::Unreliable => ("WL_DELIVERY_UNRELIABLE", String::new()),
+        DeliveryPolicy::Reliable => (
+            "WL_DELIVERY_RELIABLE",
+            format!("  (void)wl_endpoint_now({module}_endpoint_handle(endpoint), &now_ms);\n"),
+        ),
+    };
+    format!(
+        "/* Delivery follows this binding. Use codec sends to override explicitly. */\nstatic inline {codec}_send_result_t {module}_endpoint_send_{message}({module}_endpoint_t *endpoint, const {message}_t *message) {{\n  wl_time_ms_t now_ms = 0U;\n{clock_sample}  return {codec}_{message}_send(wl_endpoint_link({module}_endpoint_handle(endpoint)), message, {delivery}, now_ms);\n}}\n\n"
+    )
 }
 
 pub(crate) fn advanced(profile: &BindingProfileModel, module: &str) -> String {

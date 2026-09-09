@@ -14,6 +14,73 @@ fn codegen_abi_is_queryable_without_a_schema() {
 }
 
 #[test]
+fn repeated_profiles_compose_deterministically_and_report_conflicts() {
+    let directory = tempdir().unwrap();
+    let schema = directory.path().join("device.wl");
+    let common = directory.path().join("services.bind.wl");
+    let local = directory.path().join("server.bind.wl");
+    fs::write(&schema, "version 1; message State @id(1) { required uint32 value @id(1); } message Request @id(2) {} message Response @id(3) {}").unwrap();
+    fs::write(
+        &common,
+        "profile version 1; rpc Query { request = Request; response = Response; }",
+    )
+    .unwrap();
+    fs::write(
+        &local,
+        "profile version 1; send State { delivery = unreliable; }",
+    )
+    .unwrap();
+    let mut outputs = Vec::new();
+    for profiles in [[&common, &local], [&local, &common]] {
+        let output = Command::cargo_bin("wlc")
+            .unwrap()
+            .arg("identity")
+            .arg(&schema)
+            .arg("--profile")
+            .arg(profiles[0])
+            .arg("--profile")
+            .arg(profiles[1])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        outputs.push(output.stdout);
+    }
+    assert_eq!(outputs[0], outputs[1]);
+    for operation in ["compile", "compile-runtime"] {
+        let output = directory.path().join(operation);
+        Command::cargo_bin("wlc")
+            .unwrap()
+            .arg(operation)
+            .arg(&schema)
+            .arg("--out-dir")
+            .arg(&output)
+            .arg("--profile")
+            .arg(&common)
+            .arg("--profile")
+            .arg(&local)
+            .assert()
+            .success();
+        assert!(
+            fs::read_to_string(output.join("device_runtime.h"))
+                .unwrap()
+                .contains("device_endpoint_send_state")
+        );
+    }
+    let output = Command::cargo_bin("wlc")
+        .unwrap()
+        .arg("validate")
+        .arg(&schema)
+        .arg("--profile")
+        .arg(&common)
+        .arg("--profile")
+        .arg(&common)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("duplicate RPC service"));
+}
+
+#[test]
 fn version_reports_the_package_release() {
     let output = Command::cargo_bin("wlc")
         .unwrap()

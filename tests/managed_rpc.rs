@@ -62,7 +62,7 @@ fn managed_rpc_profiles_have_no_business_metadata_or_partial_mapping() {
     assert!(
         runtime
             .source
-            .contains("config->execute_canonical_request_capacity = 6U")
+            .contains("request_wlc_detail_fingerprint(runtime->execute.request_scratch")
     );
     assert_eq!(
         runtime,

@@ -120,6 +120,16 @@ pub fn binding_profile_identity(model: &BindingProfileModel) -> u64 {
         hash_delivery(&mut hash, service.request_delivery);
         hash_delivery(&mut hash, service.response_delivery);
     }
+    // Preserve the exact identity of existing profiles without send bindings.
+    if !model.send_routes.is_empty() {
+        hash.string("outbound-routes-v1");
+        hash.len(model.send_routes.len());
+        for route in &model.send_routes {
+            hash.string(&route.message_name);
+            hash.u16(route.message_id);
+            hash_delivery(&mut hash, route.delivery);
+        }
+    }
     hash.finish()
 }
 

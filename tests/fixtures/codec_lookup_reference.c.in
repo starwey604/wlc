@@ -1,0 +1,115 @@
+/* SPDX-License-Identifier: Apache-2.0 */
+/* Frozen pre-cursor decoder: deliberately linear lookup, including nested
+ * recursion. Shares scalar/skip helpers: this oracle targets lookup semantics. */
+static wl_codec_status_t reference_decode(const wlc_desc_t *, const uint8_t *,
+                                          size_t, void *);
+static const wlc_field_t *reference_find_field(const wlc_desc_t *d, uint16_t number) {
+  for (size_t i = 0; i < d->count; ++i)
+    if (d->fields[i].number == number) return &d->fields[i];
+  return NULL;
+}
+static wl_codec_status_t reference_read_value(const wlc_field_t *f, const uint8_t *in,
+                                        size_t n, size_t *at, void *out) {
+  uint64_t v;
+  wl_codec_status_t s;
+  if (f->kind == WLC_F32 || f->kind == WLC_F64 ||
+      f->kind == WLC_FLOAT32 || f->kind == WLC_FLOAT64)
+    return wlc_read_fixed(f->kind, in, n, at, out);
+  if (f->kind == WLC_BYTES || f->kind == WLC_STRING || f->kind == WLC_MESSAGE) {
+    if ((s = wlc_getv(in, n, at, &v)) != WL_CODEC_OK) return s;
+    if ((f->kind == WLC_BYTES || f->kind == WLC_STRING) &&
+        f->max_length != 0U && v > (uint64_t)f->max_length)
+      return WL_CODEC_ERR_INVALID_VALUE;
+    if (v > n - *at) return WL_CODEC_ERR_MALFORMED;
+    size_t bytes = (size_t)v;
+    if (f->kind == WLC_BYTES)
+      *(wl_codec_bytes_t *)out = (wl_codec_bytes_t){in + *at, bytes};
+    else if (f->kind == WLC_STRING) {
+      if (!wlc_utf8(in + *at, bytes)) return WL_CODEC_ERR_UTF8;
+      *(wl_codec_string_t *)out =
+          (wl_codec_string_t){(const char *)(in + *at), bytes};
+    } else {
+      s = reference_decode(f->nested, in + *at, bytes, out);
+      if (s != WL_CODEC_OK) return s;
+    }
+    *at += bytes;
+    return WL_CODEC_OK;
+  }
+  if ((s = wlc_getv(in, n, at, &v)) != WL_CODEC_OK) return s;
+  if (f->kind == WLC_BOOL) {
+    if (v > 1U) return WL_CODEC_ERR_INVALID_VALUE;
+    *(bool *)out = v != 0U;
+  } else if (f->kind == WLC_U8) {
+    if (v > UINT8_MAX) return WL_CODEC_ERR_OVERFLOW;
+    *(uint8_t *)out = (uint8_t)v;
+  } else if (f->kind == WLC_U16) {
+    if (v > UINT16_MAX) return WL_CODEC_ERR_OVERFLOW;
+    *(uint16_t *)out = (uint16_t)v;
+  } else if (f->kind == WLC_U32) {
+    if (v > UINT32_MAX) return WL_CODEC_ERR_OVERFLOW;
+    *(uint32_t *)out = (uint32_t)v;
+  } else if (f->kind == WLC_U64) *(uint64_t *)out = v;
+  else if (f->kind == WLC_I8) {
+    if (v > UINT8_MAX) return WL_CODEC_ERR_OVERFLOW;
+    *(int8_t *)out = (int8_t)wlc_uz32((uint32_t)v);
+  } else if (f->kind == WLC_I16) {
+    if (v > UINT16_MAX) return WL_CODEC_ERR_OVERFLOW;
+    *(int16_t *)out = (int16_t)wlc_uz32((uint32_t)v);
+  } else if (f->kind == WLC_I32 || f->kind == WLC_ENUM) {
+    if (v > UINT32_MAX) return WL_CODEC_ERR_OVERFLOW;
+    *(int32_t *)out = wlc_uz32((uint32_t)v);
+  } else if (f->kind == WLC_I64) *(int64_t *)out = wlc_uz64(v);
+  else return WL_CODEC_ERR_INVALID_VALUE;
+  return WL_CODEC_OK;
+}
+
+static wl_codec_status_t reference_decode(const wlc_desc_t *d, const uint8_t *in,
+                                    size_t n, void *out) {
+  if (d == NULL || out == NULL || (n != 0U && in == NULL))
+    return WL_CODEC_ERR_INVALID_VALUE;
+  wlc_clear(d, out);
+  for (size_t at = 0U; at < n;) {
+    uint64_t key;
+    wl_codec_status_t s = wlc_getv(in, n, &at, &key);
+    if (s != WL_CODEC_OK) return s;
+    uint64_t number = key >> 3U;
+    uint8_t wire = (uint8_t)(key & 7U);
+    if (number == 0U || number > 65535U ||
+        (wire != 0U && wire != 1U && wire != 2U && wire != 5U))
+      return WL_CODEC_ERR_MALFORMED;
+    const wlc_field_t *f = reference_find_field(d, (uint16_t)number);
+    if (f == NULL) {
+      if ((s = wlc_skip(wire, in, n, &at)) != WL_CODEC_OK) return s;
+      continue;
+    }
+    if (wire != wlc_wire(f)) return WL_CODEC_ERR_WIRE_TYPE;
+    uint8_t *base = out;
+    if (f->card == WLC_PACKED) {
+      if (*(bool *)(base + f->has)) return WL_CODEC_ERR_DUPLICATE_FIELD;
+      if ((s = wlc_read_packed(f, in, n, &at, base + f->value)) != WL_CODEC_OK)
+        return s;
+      *(bool *)(base + f->has) = true;
+      continue;
+    }
+    void *p;
+    if (f->card == WLC_OPTIONAL) {
+      if (*(bool *)(base + f->has)) return WL_CODEC_ERR_DUPLICATE_FIELD;
+      p = base + f->value;
+    } else {
+      size_t count = *(size_t *)(base + f->count);
+      if (count >= *(size_t *)(base + f->capacity)) return WL_CODEC_ERR_CAPACITY;
+      void *storage = *(void **)(base + f->value);
+      if (storage == NULL) return WL_CODEC_ERR_INVALID_VALUE;
+      p = (uint8_t *)storage + count * f->element;
+    }
+    if ((s = reference_read_value(f, in, n, &at, p)) != WL_CODEC_OK) return s;
+    if (f->card == WLC_OPTIONAL) *(bool *)(base + f->has) = true;
+    else ++*(size_t *)(base + f->count);
+  }
+  for (size_t i = 0U; i < d->count; ++i) {
+    const wlc_field_t *f = &d->fields[i];
+    if (f->required != 0U && !*(const bool *)((uint8_t *)out + f->has))
+      return WL_CODEC_ERR_MISSING_REQUIRED_FIELD;
+  }
+  return WL_CODEC_OK;
+}

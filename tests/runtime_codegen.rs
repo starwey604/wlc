@@ -12,6 +12,43 @@ fn profile(source: &str, schema: &wlc::SemanticModel) -> wlc::BindingProfileMode
 }
 
 #[test]
+fn runtime_only_preserves_codec_validation_without_rendering_a_codec() {
+    for (source, module) in [
+        ("version 1; message Value @id(1) {}", ""),
+        (
+            "version 1; message SomeValue @id(1) {} message some_value @id(2) {}",
+            "sample",
+        ),
+        (
+            "version 1; message Sample @id(1) {} message SampleValue @id(2) {}",
+            "sample",
+        ),
+        (
+            "version 1; enum Names @id(1) { VALUE_MESSAGE_ID = 0; } message Value @id(2) {}",
+            "sample",
+        ),
+    ] {
+        let model = schema(source);
+        let message = model
+            .declarations
+            .iter()
+            .find_map(|symbol| match symbol {
+                wlc::semantic::Symbol::Message(message) => Some(&message.name),
+                _ => None,
+            })
+            .unwrap();
+        let binding = profile(
+            &format!("profile version 1; send {message} {{ delivery = unreliable; }}"),
+            &model,
+        );
+        let codec_error = wlc::generate_c(&model, module).unwrap_err();
+        let runtime_error =
+            generate_runtime_c_named(&model, &binding, module, "station").unwrap_err();
+        assert_eq!(runtime_error.0, codec_error.0);
+    }
+}
+
+#[test]
 fn runtime_namespace_rejects_schema_macro_type_and_service_collisions() {
     {
         let model = schema(
@@ -320,7 +357,7 @@ rpc Execute {
     assert!(runtime.header.contains("#include \"codec_api_bindings.h\""));
     assert!(runtime.header.contains("device_api_runtime_t"));
     assert!(runtime.header.contains("DEVICE_API_RUNTIME_OK"));
-    assert!(runtime.header.contains("codec_api_encode_scratch_t"));
+    assert!(!runtime.header.contains("canonical_request_scratch"));
     assert!(runtime.source.contains("codec_api_send_result_t sent"));
     assert!(runtime.source.contains("codec_api_request_send("));
     assert!(runtime.source.contains("CODEC_API_SEND_CODEC_ERROR"));

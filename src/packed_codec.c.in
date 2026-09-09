@@ -1,0 +1,54 @@
+/* Single fixed-array recipe: constant prefix/length, looped elements. */
+size_t @NAME@_encoded_size(const @NAME@_t *value) {
+  if (value == NULL || (@REQUIRED@ && !value->has_@FIELD@)) return SIZE_MAX;
+  return value->has_@FIELD@ ? @TOTAL@U : 0U;
+}
+wl_codec_status_t @NAME@_encode(const @NAME@_t *value, uint8_t *out,
+                               size_t capacity, size_t *length) {
+  if (value == NULL) return WL_CODEC_ERR_INVALID_VALUE;
+  if (@REQUIRED@ && !value->has_@FIELD@) return WL_CODEC_ERR_MISSING_REQUIRED_FIELD;
+  size_t n = value->has_@FIELD@ ? @TOTAL@U : 0U;
+  if (length == NULL || (n != 0U && out == NULL)) return WL_CODEC_ERR_INVALID_VALUE;
+  if (capacity < n) return WL_CODEC_ERR_CAPACITY;
+  if (value->has_@FIELD@) {
+    static const uint8_t header[] = {@HEADER@};
+    memcpy(out, header, sizeof(header));
+    uint8_t *cursor = out + @HEADER_LEN@U;
+    for (size_t i = 0U; i < @COUNT@U; ++i) {
+      uint@BITS@_t bits;
+      memcpy(&bits, &value->@FIELD@[i], sizeof(bits));
+      wlc_put@BITS@(&cursor, bits);
+    }
+  }
+  *length = n;
+  return WL_CODEC_OK;
+}
+wl_codec_status_t @NAME@_decode(const uint8_t *in, size_t n, @NAME@_t *out) {
+  if (out == NULL || (n != 0U && in == NULL)) return WL_CODEC_ERR_INVALID_VALUE;
+  @NAME@_clear(out);
+  for (size_t at = 0U; at < n;) {
+    uint64_t key, bytes;
+    wl_codec_status_t status = wlc_getv(in, n, &at, &key);
+    if (status != WL_CODEC_OK) return status;
+    uint64_t number = key >> 3U;
+    uint8_t wire = (uint8_t)(key & 7U);
+    if (number == 0U || number > 65535U ||
+        (wire != 0U && wire != 1U && wire != 2U && wire != 5U))
+      return WL_CODEC_ERR_MALFORMED;
+    if (number != @NUMBER@U) {
+      if ((status = wlc_skip(wire, in, n, &at)) != WL_CODEC_OK) return status;
+      continue;
+    }
+    if (wire != 2U) return WL_CODEC_ERR_WIRE_TYPE;
+    if (out->has_@FIELD@) return WL_CODEC_ERR_DUPLICATE_FIELD;
+    if ((status = wlc_getv(in, n, &at, &bytes)) != WL_CODEC_OK) return status;
+    if (bytes != sizeof(out->@FIELD@) || bytes > n - at) return WL_CODEC_ERR_MALFORMED;
+    for (size_t i = 0U; i < @COUNT@U; ++i) {
+      @READ_BITS@
+      memcpy(&out->@FIELD@[i], &bits, sizeof(bits));
+    }
+    out->has_@FIELD@ = true;
+  }
+  if (@REQUIRED@ && !out->has_@FIELD@) return WL_CODEC_ERR_MISSING_REQUIRED_FIELD;
+  return WL_CODEC_OK;
+}

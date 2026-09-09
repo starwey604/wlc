@@ -165,7 +165,6 @@ static assembly_runtime_config_t valid_config(void) {
   config.rpc_server_pending_timeout_ms = 100U;
   config.rpc_server_cache_ttl_ms = 200U;
   config.rpc_server_cache_policy = WL_RPC_CACHE_REJECT_NEW;
-  config.execute_canonical_request_capacity = 96U;
   config.execute_request_handler = execute;
   config.execute_user_data = (void *)(uintptr_t)0x1234U;
   return config;
@@ -199,13 +198,11 @@ int main(void) {
       defaults.rpc_client_enabled != 0U ||
       defaults.rpc_server_enabled != 0U ||
       defaults.rpc_client_response_capacity == 0U ||
-      defaults.execute_canonical_request_capacity != 0U ||
       assembly_runtime_config_enable_client(&defaults) != WL_OK ||
       defaults.rpc_client_enabled != 1U ||
       assembly_runtime_config_enable_server(&defaults) !=
-          WL_ERR_NOT_SUPPORTED)
+          WL_OK)
     return 30;
-  defaults.execute_canonical_request_capacity = 64U;
   if (assembly_runtime_config_enable_server(&defaults) != WL_OK ||
       defaults.rpc_server_enabled != 1U)
     return 31;
@@ -255,14 +252,8 @@ int main(void) {
           &instance.execute_scratch.response ||
       instance.runtime.rpc_encode_scratch != &instance.rpc_encode_scratch ||
       instance.runtime.execute.request_handler != execute ||
-      instance.runtime.execute.user_data != (void *)(uintptr_t)0x1234U ||
-      instance.runtime.execute.canonical_request_scratch.capacity != 96U)
+      instance.runtime.execute.user_data != (void *)(uintptr_t)0x1234U)
     return 6;
-  if ((uintptr_t)instance.runtime.execute.canonical_request_scratch.data <
-          (uintptr_t)arena.bytes ||
-      (uintptr_t)instance.runtime.execute.canonical_request_scratch.data + 96U >
-          (uintptr_t)arena.bytes + requirements.storage_size)
-    return 7;
   if (wl_latest_get_stats(&instance.state_latest, &latest_stats) != WL_OK ||
       latest_stats.generation != 41U ||
       wl_fifo_get_stats(&instance.alarm_fifo, &fifo_stats) != WL_OK ||
@@ -291,7 +282,7 @@ int main(void) {
       WL_ERR_INVALID_ARG)
     return 12;
   config = valid_config();
-  config.execute_canonical_request_capacity = 0U;
+  config.rpc_server_response_capacity = 0U;
   if (assembly_runtime_requirements(&config, &requirements) !=
       WL_ERR_INVALID_ARG)
     return 13;
@@ -301,7 +292,7 @@ int main(void) {
       WL_ERR_INVALID_ARG)
     return 14;
   config = valid_config();
-  config.execute_canonical_request_capacity = SIZE_MAX;
+  config.rpc_server_cache_ttl_ms = UINT32_C(0x80000000);
   if (assembly_runtime_requirements(&config, &requirements) !=
       WL_ERR_INVALID_ARG)
     return 15;
@@ -321,7 +312,6 @@ int main(void) {
   config.rpc_server_pending_slot_count = 0U;
   config.rpc_server_cache_slot_count = 0U;
   config.rpc_server_response_capacity = 0U;
-  config.execute_canonical_request_capacity = 0U;
   if (assembly_runtime_requirements(&config, &requirements) != WL_OK ||
       requirements.storage_size == 0U)
     return 17;

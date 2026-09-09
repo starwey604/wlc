@@ -43,7 +43,8 @@ static int32_t execute(void *context, const request_value_t *input, response_val
   return 0;
 }
 static int32_t download(void *context, const empty_value_t *input, large_value_t *output) {
-  (void)context; (void)input;
+  CHECK(context == &completions); /* Per-service override beats shared context. */
+  (void)input;
   output->has_data = true;
   output->data.length = sizeof(output->data.data);
   memset(output->data.data, 0xa5, output->data.length);
@@ -89,9 +90,14 @@ static void initialize(void) {
   CHECK(demo_endpoint_config_defaults(&config, test_environment_id(2, (wl_clock_t){0})) == WL_OK);
   config.environment.clock = (wl_clock_t){read_clock, NULL};
   config.on_execute = execute;
-  config.execute_user_data = &handlers;
+  config.user_data = &handlers;
   config.on_download = download;
+  config.download_user_data = &completions;
   CHECK(demo_endpoint_init_config(&server, &config) == WL_OK);
+  {
+    demo_runtime_t *runtime = demo_endpoint_runtime(&server);
+    CHECK((void *)runtime->execute.request_scratch == (void *)runtime->download.response_scratch);
+  }
   CHECK(wl_loopback_connect(&cable, demo_endpoint_handle(&client), demo_endpoint_handle(&server)) == WL_OK);
 }
 static void step(void) {

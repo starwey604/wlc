@@ -99,6 +99,7 @@ static void sync_initialize(void) {
   config.environment.clock = (wl_clock_t){read_clock, NULL};
   config.on_execute = sync_execute;
   config.on_download = download;
+  config.download_user_data = &completions;
   CHECK(demo_endpoint_init_config(&sync_server, &config) == WL_OK);
   CHECK(wl_loopback_init(&sync_cable, wl_endpoint_link(demo_endpoint_handle(sync_client)),
       wl_endpoint_link(demo_endpoint_handle(&sync_server))) == WL_OK);

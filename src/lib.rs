@@ -7,6 +7,7 @@ pub mod identity;
 mod lexer;
 mod managed_rpc_codegen;
 pub mod manifest;
+mod packed_codegen;
 mod parser;
 pub mod profile;
 pub mod profile_semantic;
@@ -23,7 +24,9 @@ pub use manifest::{
 };
 pub use parser::{ParseError, parse_schema};
 pub use profile::{BindingProfile, ProfileParseError, parse_binding_profile};
-pub use profile_semantic::{BindingProfileModel, ProfileSemanticErrors, analyze_binding_profile};
+pub use profile_semantic::{
+    BindingProfileModel, ProfileSemanticErrors, analyze_binding_profile, compose_binding_profiles,
+};
 pub use runtime_codegen::{
     GeneratedRuntimeC, RuntimeCodegenError, generate_runtime_c, generate_runtime_c_named,
 };

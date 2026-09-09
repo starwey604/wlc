@@ -1,5 +1,5 @@
     case @REQ_ID@: {
-      wl_rpc_request_identity_t identity = {0};
+      wl_rpc_request_identity_t identity = {.request_fingerprint = @M@_rpc_fingerprint_seed};
       wl_rpc_server_request_t server_request = {0};
       wl_rpc_server_response_t replay = {0};
       @M@_@S@_request_token_t token;
@@ -26,8 +26,7 @@
         result.domain = @P@_RUNTIME_RPC_ERROR;
         break;
       }
-      if (runtime->@S@.request_scratch == NULL ||
-          runtime->@S@.canonical_request_scratch.data == NULL) {
+      if (runtime->@S@.request_scratch == NULL) {
         result.domain = @P@_RUNTIME_MISSING_SCRATCH;
         break;
       }
@@ -37,9 +36,8 @@
         result.domain = @P@_RUNTIME_CODEC_ERROR;
         break;
       }
-      result.detail.rpc.codec_status = @REQ@_encode(runtime->@S@.request_scratch,
-          runtime->@S@.canonical_request_scratch.data,
-          runtime->@S@.canonical_request_scratch.capacity, &canonical_length);
+      result.detail.rpc.codec_status = @REQ@_wlc_detail_fingerprint(runtime->@S@.request_scratch,
+          &identity.request_fingerprint, &canonical_length);
       if (result.detail.rpc.codec_status != WL_CODEC_OK) {
         result.domain = @P@_RUNTIME_CODEC_ERROR;
         break;
@@ -57,8 +55,6 @@
       identity.operation_id = result.detail.rpc.operation_id;
       identity.request_message_id = @REQ_ID@;
       identity.response_message_id = @RES_ID@;
-      identity.request_fingerprint = @M@_rpc_request_fingerprint(
-          runtime->@S@.canonical_request_scratch.data, canonical_length);
       identity.peer_session_id = session;
       result.detail.rpc.payload_length = canonical_length + 20U;
       result.detail.rpc.rpc_result = wl_rpc_server_begin(runtime->rpc_server,
@@ -82,13 +78,9 @@
               result.domain = @P@_RUNTIME_MISSING_SCRATCH;
               break;
             }
-            result.detail.rpc.codec_status = @REQ@_value_from_view(
+            /* The view was decoded and has not crossed an application callback. */
+            @REQ@_wlc_detail_value_copy(
                 runtime->@S@.request_scratch, runtime->@S@.request_value);
-            if (result.detail.rpc.codec_status != WL_CODEC_OK) {
-              (void)wl_rpc_server_abandon(runtime->rpc_server, &server_request);
-              result.domain = @P@_RUNTIME_CODEC_ERROR;
-              break;
-            }
             @RES@_value_clear(runtime->@S@.response_value);
             status = runtime->@S@.value_handler(runtime->@S@.value_user_data,
                 runtime->@S@.request_value, runtime->@S@.response_value);

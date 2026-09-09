@@ -289,8 +289,7 @@ static int init_runtime(rpc_fixture_runtime_t *runtime,
                         wl_rpc_server_t *server,
                         rpc_fixture_runtime_rpc_encode_scratch_t *encode_scratch,
                         compute_request_t *request_scratch,
-                        compute_response_t *response_scratch,
-                        uint8_t *canonical, size_t canonical_size) {
+                        compute_response_t *response_scratch) {
   static wl_rpc_client_slot_t client_slots[2];
   static uint8_t client_responses[2][64];
   static wl_rpc_server_pending_slot_t pending[4];
@@ -325,8 +324,6 @@ static int init_runtime(rpc_fixture_runtime_t *runtime,
   runtime->rpc_encode_scratch = encode_scratch;
   runtime->compute.request_scratch = request_scratch;
   runtime->compute.response_scratch = response_scratch;
-  runtime->compute.canonical_request_scratch =
-      (rpc_fixture_encode_scratch_t){canonical, canonical_size};
   runtime->compute.request_handler = handle_compute;
   return 0;
 }
@@ -795,7 +792,6 @@ int main(void) {
   rpc_fixture_runtime_rpc_encode_scratch_t encode_scratch = {0};
   compute_request_t request_scratch = {0};
   compute_response_t response_scratch = {0};
-  uint8_t canonical[64];
   rpc_fixture_runtime_pump_t pump;
   wl_pump_hooks_t pump_hooks;
   wl_event_t unknown_event = {0};
@@ -845,7 +841,7 @@ int main(void) {
       diagnostic.field != NULL)
     return 10;
   if (init_runtime(&runtime, &client, &server, &encode_scratch, &request_scratch,
-                   &response_scratch, canonical, sizeof(canonical)) != 0)
+                   &response_scratch) != 0)
     return 2;
   if (rpc_fixture_runtime_pump_init(NULL, &runtime, NULL, NULL) !=
           WL_ERR_INVALID_ARG ||

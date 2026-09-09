@@ -59,11 +59,11 @@ pub(crate) fn assemble(
             .unwrap();
             writeln!(
                 handlers,
-                "  {module}_{s}_handler_fn on_{s};\n  void *{s}_user_data;"
+                "  {module}_{s}_handler_fn on_{s};\n  void *{s}_user_data; /* NULL inherits config.user_data. */"
             )
             .unwrap();
             writeln!(config, "  if (config->on_{s} != NULL && runtime_config.{s}_request_handler != NULL) return WL_ERR_INVALID_ARG;\n  if (config->on_{s} != NULL || runtime_config.{s}_request_handler != NULL) runtime_config.rpc_server_enabled = 1U;").unwrap();
-            writeln!(bind, "  endpoint->private_state.instance.runtime.{s}.value_handler = config->on_{s};\n  endpoint->private_state.instance.runtime.{s}.value_user_data = config->{s}_user_data;\n  endpoint->private_state.instance.runtime.{s}.request_value = &endpoint->private_state.values.{s}.request;\n  endpoint->private_state.instance.runtime.{s}.response_value = &endpoint->private_state.values.{s}.response;").unwrap();
+            writeln!(bind, "  endpoint->private_state.instance.runtime.{s}.value_handler = config->on_{s};\n  endpoint->private_state.instance.runtime.{s}.value_user_data = config->{s}_user_data != NULL ? config->{s}_user_data : config->user_data;\n  endpoint->private_state.instance.runtime.{s}.request_value = &endpoint->private_state.values.{s}.request;\n  endpoint->private_state.instance.runtime.{s}.response_value = &endpoint->private_state.values.{s}.response;").unwrap();
         }
         state.push_str("    } values;");
         defaults.push_str("  config->advanced.rpc_client_enabled = 1U;\n  config->advanced.rpc_client_slot_count = @P@_ENDPOINT_RPC_CAPACITY;\n  config->advanced.rpc_server_pending_slot_count = @P@_ENDPOINT_RPC_CAPACITY;\n  config->advanced.rpc_server_cache_slot_count = @P@_ENDPOINT_RPC_CAPACITY;\n  config->advanced.rpc_server_pending_timeout_ms = 1000U;\n  config->advanced.rpc_server_cache_ttl_ms = 10000U;\n  config->advanced.rpc_server_cache_policy = WL_RPC_CACHE_EVICT_OLDEST;");

@@ -20,6 +20,7 @@ pub struct BindingProfile {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BindingDeclaration {
+    Send(RouteBinding),
     Latest(RouteBinding),
     Fifo(RouteBinding),
     Rpc(Box<RpcBinding>),
@@ -252,13 +253,14 @@ impl Parser {
         while self.current().kind != TokenKind::End {
             let kind = self.word("binding kind")?;
             let binding = match kind.value.as_str() {
+                "send" => BindingDeclaration::Send(self.parse_route("send")?),
                 "latest" => BindingDeclaration::Latest(self.parse_route("latest")?),
                 "fifo" => BindingDeclaration::Fifo(self.parse_route("fifo")?),
                 "rpc" => BindingDeclaration::Rpc(Box::new(self.parse_rpc()?)),
                 _ => {
                     return Err(self.error(
                         kind.span,
-                        "binding must start with `latest`, `fifo`, or `rpc`",
+                        "binding must start with `send`, `latest`, `fifo`, or `rpc`",
                     ));
                 }
             };

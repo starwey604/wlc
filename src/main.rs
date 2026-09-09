@@ -23,9 +23,9 @@ enum Command {
         /// Check SCHEMA for compatibility with this predecessor.
         #[arg(long)]
         previous: Option<PathBuf>,
-        /// Resolve and validate PROFILE against SCHEMA.
+        /// Resolve PROFILE against SCHEMA; repeat to compose shared/local bindings.
         #[arg(long)]
-        profile: Option<PathBuf>,
+        profile: Vec<PathBuf>,
     },
     /// Generate C and a deterministic manifest; --profile also generates the application runtime.
     Compile {
@@ -36,16 +36,16 @@ enum Command {
         /// Check SCHEMA for compatibility with this predecessor.
         #[arg(long)]
         previous: Option<PathBuf>,
-        /// Resolve PROFILE and generate <module>_runtime.h/.c.
+        /// Resolve PROFILE and generate <module>_runtime.h/.c; repeat to compose bindings.
         #[arg(long)]
-        profile: Option<PathBuf>,
+        profile: Vec<PathBuf>,
     },
     /// Generate only one profile runtime against separately generated schema artifacts.
     CompileRuntime {
         schema: PathBuf,
-        /// Binding profile used to specialize the runtime.
-        #[arg(long)]
-        profile: PathBuf,
+        /// Binding profiles to compose; duplicates/conflicts are errors.
+        #[arg(long, required = true)]
+        profile: Vec<PathBuf>,
         /// Destination directory for generated artifacts.
         #[arg(long)]
         out_dir: PathBuf,
@@ -61,7 +61,7 @@ enum Command {
         schema: PathBuf,
         /// Print the resolved profile identity alongside the schema identity.
         #[arg(long)]
-        profile: Option<PathBuf>,
+        profile: Vec<PathBuf>,
     },
 }
 
@@ -108,7 +108,7 @@ fn main() -> Result<()> {
         } => (
             schema,
             previous,
-            Some(profile),
+            profile,
             Operation::CompileRuntime {
                 output: out_dir,
                 runtime_name,
@@ -148,7 +148,8 @@ fn main() -> Result<()> {
         })?;
         wlc::check_compatibility(&previous_model, &model).map_err(miette::Report::new)?;
     }
-    let profile_model = if let Some(profile_path) = &profile {
+    let mut fragments = Vec::new();
+    for profile_path in &profile {
         let profile_source = fs::read_to_string(profile_path)
             .into_diagnostic()
             .wrap_err_with(|| format!("could not read `{}`", profile_path.display()))?;
@@ -164,9 +165,25 @@ fn main() -> Result<()> {
                 profile_source,
             ))
         })?;
-        Some(profile_model)
-    } else {
+        fragments.push(profile_model);
+    }
+    let profile_model = if fragments.is_empty() {
         None
+    } else {
+        Some(
+            wlc::compose_binding_profiles(&fragments)
+                .map_err(miette::Report::new)
+                .wrap_err_with(|| {
+                    format!(
+                        "could not compose profiles: {}",
+                        profile
+                            .iter()
+                            .map(|path| path.display().to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                })?,
+        )
     };
     let identity_operation = matches!(operation, Operation::Identity);
     match operation {
@@ -319,14 +336,18 @@ fn main() -> Result<()> {
             }
         }
     }
-    if !identity_operation
-        && let (Some(profile_path), Some(profile_model)) = (&profile, &profile_model)
-    {
+    if !identity_operation && let Some(profile_model) = &profile_model {
         println!(
             "validated binding profile {} (version {}, {} binding(s))",
-            profile_path.display(),
+            profile
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
             profile_model.version,
-            profile_model.retained_routes.len() + profile_model.rpc_services.len()
+            profile_model.retained_routes.len()
+                + profile_model.send_routes.len()
+                + profile_model.rpc_services.len()
         );
     }
     Ok(())

@@ -5,8 +5,8 @@ use std::{collections::HashMap, fmt::Write};
 
 use crate::{
     ast::Cardinality,
-    codegen::{c_identifier, c_type, type_name, upper_snake},
-    semantic::{MessageSymbol, ResolvedType},
+    codegen::{c_identifier, c_type, field_descriptor_data, type_name, upper_snake},
+    semantic::{FieldDefault, FieldSymbol, MessageSymbol, ResolvedType},
 };
 
 pub(crate) fn header(
@@ -68,18 +68,19 @@ pub(crate) fn source(
             continue;
         }
         let name = type_name(&message.name);
-        // Copy only validated present fields. Absent fields retain schema defaults.
-        writeln!(out, "static void {name}_value_copy(const {name}_t *view, {name}_value_t *out) {{\n  memset(out, 0, sizeof(*out));").unwrap();
-        if message.fields.iter().any(|field| {
-            matches!(
-                field.cardinality,
-                Cardinality::Optional | Cardinality::Required
-            ) && !matches!(field.ty, ResolvedType::Message { .. })
-        }) {
-            writeln!(out, "  {name}_t defaults;\n  {name}_clear(&defaults);").unwrap();
+        // The outermost operation zeros storage once. Nested defaults/copies
+        // never clear the same subtree again or build a full temporary view.
+        writeln!(
+            out,
+            "static void {name}_value_defaults({name}_value_t *out) {{\n  (void)out;"
+        )
+        .unwrap();
+        for field in &message.fields {
+            emit_default(out, field);
         }
+        writeln!(out, "}}\n\nstatic void {name}_value_copy_fields(const {name}_t *view, {name}_value_t *out) {{").unwrap();
         if message.fields.is_empty() {
-            out.push_str("  (void)view;\n");
+            out.push_str("  (void)view; (void)out;\n");
         }
         for field in &message.fields {
             let f = c_identifier(&field.name);
@@ -94,24 +95,24 @@ pub(crate) fn source(
                 }
                 _ => match &field.ty {
                     ResolvedType::String | ResolvedType::Bytes => {
-                        // A clear view has valid defaults even when not present.
-                        // Arbitrary absent views may contain garbage: use a clear
-                        // view for absent fields instead of following its pointers.
-                        writeln!(out, "  {{\n    const {} *field = view->has_{f} ? &view->{f} : &defaults.{f};\n    out->{f}.length = field->length;\n    if (field->length != 0U) memcpy(out->{f}.data, field->data, field->length);\n  }}", c_type(&field.ty)).unwrap();
+                        writeln!(out, "  if (view->has_{f}) {{\n    out->{f}.length = view->{f}.length;\n    if (view->{f}.length != 0U) memcpy(out->{f}.data, view->{f}.data, view->{f}.length);\n  }} else {{").unwrap();
+                        emit_default(out, field);
+                        out.push_str("  }\n");
                     }
                     ResolvedType::Message { name: child, .. } => {
                         let child = type_name(child);
-                        writeln!(out, "  if (view->has_{f}) {child}_value_copy(&view->{f}, &out->{f});\n  else {child}_value_clear(&out->{f});").unwrap();
+                        writeln!(out, "  if (view->has_{f}) {child}_value_copy_fields(&view->{f}, &out->{f});\n  else {child}_value_defaults(&out->{f});").unwrap();
                     }
                     _ => writeln!(
                         out,
-                        "  out->{f} = view->has_{f} ? view->{f} : defaults.{f};"
+                        "  out->{f} = view->has_{f} ? view->{f} : {};",
+                        scalar_default(field)
                     )
                     .unwrap(),
                 },
             }
         }
-        writeln!(out, "}}\n\nvoid {name}_value_clear({name}_value_t *value) {{\n  {name}_t view;\n  if (value == NULL) return;\n  {name}_clear(&view);\n  {name}_value_copy(&view, value);\n}}\n\nwl_codec_status_t {name}_value_from_view(const {name}_t *view, {name}_value_t *out) {{\n  size_t size;\n  wl_codec_status_t status;\n  if (view == NULL || out == NULL) return WL_CODEC_ERR_INVALID_VALUE;\n  status = wlc_measure(&{name}_desc, view, &size);\n  if (status != WL_CODEC_OK) return status;\n  {name}_value_copy(view, out);\n  return WL_CODEC_OK;\n}}\n").unwrap();
+        writeln!(out, "}}\n\n/* Generator-private: input is an unmodified successful decode, or has been measured. */\nvoid {name}_wlc_detail_value_copy(const {name}_t *view, {name}_value_t *out) {{\n  memset(out, 0, sizeof(*out));\n  {name}_value_copy_fields(view, out);\n}}\n\nvoid {name}_value_clear({name}_value_t *value) {{\n  if (value == NULL) return;\n  memset(value, 0, sizeof(*value));\n  {name}_value_defaults(value);\n}}\n\nwl_codec_status_t {name}_value_from_view(const {name}_t *view, {name}_value_t *out) {{\n  size_t size;\n  wl_codec_status_t status;\n  if (view == NULL || out == NULL) return WL_CODEC_ERR_INVALID_VALUE;\n  status = wlc_measure(&{name}_desc, view, &size);\n  if (status != WL_CODEC_OK) return status;\n  {name}_wlc_detail_value_copy(view, out);\n  return WL_CODEC_OK;\n}}\n").unwrap();
         writeln!(out, "/* Private conversion does not re-validate each nested subtree. */\nstatic wl_codec_status_t {name}_value_borrow(const {name}_value_t *value, {name}_t *out) {{\n  {name}_clear(out);").unwrap();
         if message.fields.is_empty() {
             out.push_str("  (void)value;\n");
@@ -139,6 +140,48 @@ pub(crate) fn source(
             }
             out.push_str("  }\n");
         }
-        writeln!(out, "  return WL_CODEC_OK;\n}}\n\nwl_codec_status_t {name}_value_to_view(const {name}_value_t *value, {name}_t *out) {{\n  {name}_t view;\n  size_t size;\n  wl_codec_status_t status;\n  if (value == NULL || out == NULL) return WL_CODEC_ERR_INVALID_VALUE;\n  status = {name}_value_borrow(value, &view);\n  if (status == WL_CODEC_OK) status = wlc_measure(&{name}_desc, &view, &size);\n  if (status != WL_CODEC_OK) return status;\n  *out = view;\n  return WL_CODEC_OK;\n}}\n\nsize_t {name}_value_encoded_size(const {name}_value_t *value) {{\n  {name}_t view;\n  if (value == NULL || {name}_value_borrow(value, &view) != WL_CODEC_OK) return SIZE_MAX;\n  return {name}_encoded_size(&view);\n}}\n\nwl_codec_status_t {name}_value_encode(const {name}_value_t *value, uint8_t *out, size_t capacity, size_t *length) {{\n  {name}_t view;\n  wl_codec_status_t status;\n  if (value == NULL) return WL_CODEC_ERR_INVALID_VALUE;\n  status = {name}_value_borrow(value, &view);\n  return status == WL_CODEC_OK ? {name}_encode(&view, out, capacity, length) : status;\n}}\n\nwl_codec_status_t {name}_value_decode(const uint8_t *input, size_t length, {name}_value_t *out) {{\n  {name}_t view;\n  wl_codec_status_t status;\n  if (out == NULL) return WL_CODEC_ERR_INVALID_VALUE;\n  status = {name}_decode(input, length, &view);\n  if (status != WL_CODEC_OK) return status;\n  {name}_value_copy(&view, out);\n  return WL_CODEC_OK;\n}}\n").unwrap();
+        writeln!(out, "  return WL_CODEC_OK;\n}}\n\nwl_codec_status_t {name}_value_to_view(const {name}_value_t *value, {name}_t *out) {{\n  {name}_t view;\n  size_t size;\n  wl_codec_status_t status;\n  if (value == NULL || out == NULL) return WL_CODEC_ERR_INVALID_VALUE;\n  status = {name}_value_borrow(value, &view);\n  if (status == WL_CODEC_OK) status = wlc_measure(&{name}_desc, &view, &size);\n  if (status != WL_CODEC_OK) return status;\n  *out = view;\n  return WL_CODEC_OK;\n}}\n\nsize_t {name}_value_encoded_size(const {name}_value_t *value) {{\n  {name}_t view;\n  if (value == NULL || {name}_value_borrow(value, &view) != WL_CODEC_OK) return SIZE_MAX;\n  return {name}_encoded_size(&view);\n}}\n\nwl_codec_status_t {name}_value_encode(const {name}_value_t *value, uint8_t *out, size_t capacity, size_t *length) {{\n  {name}_t view;\n  wl_codec_status_t status;\n  if (value == NULL) return WL_CODEC_ERR_INVALID_VALUE;\n  status = {name}_value_borrow(value, &view);\n  return status == WL_CODEC_OK ? {name}_encode(&view, out, capacity, length) : status;\n}}\n\nwl_codec_status_t {name}_value_decode(const uint8_t *input, size_t length, {name}_value_t *out) {{\n  {name}_t view;\n  wl_codec_status_t status;\n  if (out == NULL) return WL_CODEC_ERR_INVALID_VALUE;\n  status = {name}_decode(input, length, &view);\n  if (status != WL_CODEC_OK) return status;\n  {name}_wlc_detail_value_copy(&view, out);\n  return WL_CODEC_OK;\n}}\n").unwrap();
+    }
+}
+
+fn scalar_default(field: &FieldSymbol) -> String {
+    let (_, signed, unsigned, _, _) = field_descriptor_data(field);
+    match field.ty {
+        ResolvedType::Int8
+        | ResolvedType::Int16
+        | ResolvedType::Int32
+        | ResolvedType::Int64
+        | ResolvedType::Enum { .. } => signed,
+        ResolvedType::Uint64 | ResolvedType::Fixed64 => format!("UINT64_C({unsigned})"),
+        ResolvedType::Uint32 | ResolvedType::Fixed32 => format!("UINT32_C({unsigned})"),
+        _ => unsigned,
+    }
+}
+
+// Called only on already-zeroed owned storage. Never follow an absent view's
+// pointers, and never clear a nested array a second time to apply its defaults.
+fn emit_default(out: &mut String, field: &FieldSymbol) {
+    if matches!(
+        field.cardinality,
+        Cardinality::Packed(_) | Cardinality::RequiredPacked(_)
+    ) {
+        return;
+    }
+    let f = c_identifier(&field.name);
+    match &field.ty {
+        ResolvedType::Message { name, .. } => {
+            writeln!(out, "  {}_value_defaults(&out->{f});", type_name(name)).unwrap();
+        }
+        ResolvedType::String => {
+            if let Some(FieldDefault::String(value)) = &field.default {
+                let (_, _, _, literal, _) = field_descriptor_data(field);
+                writeln!(out, "  out->{f}.length = {}U;", value.len()).unwrap();
+                if !value.is_empty() {
+                    writeln!(out, "  memcpy(out->{f}.data, {literal}, {}U);", value.len()).unwrap();
+                }
+            }
+        }
+        ResolvedType::Bytes => {}
+        _ => writeln!(out, "  out->{f} = {};", scalar_default(field)).unwrap(),
     }
 }

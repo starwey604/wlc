@@ -17,6 +17,8 @@ typedef struct {
 @RPC_HANDLERS@
   size_t event_budget;
   @M@_runtime_result_fn on_result;
+  /* Shared context for on_result and ordinary on_<rpc> handlers. Advanced
+   * deferred handlers and per-call completion contexts remain explicit. */
   void *user_data;
 } @M@_endpoint_config_t;
 

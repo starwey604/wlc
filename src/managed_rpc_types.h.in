@@ -27,7 +27,6 @@ typedef void (*@M@_@S@_completion_fn)(void *user_data,
 typedef struct {
   @REQ@_t *request_scratch;
   @RES@_t *response_scratch;
-  @CODEC@_encode_scratch_t canonical_request_scratch;
   @M@_@S@_rpc_request_handler_fn request_handler;
   void *user_data;
 #if @REQ_P@_HAS_VALUE && @RES_P@_HAS_VALUE

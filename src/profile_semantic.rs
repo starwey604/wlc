@@ -26,10 +26,19 @@ pub enum RetainedRouteKind {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BindingProfileModel {
     pub version: u32,
+    /// Outbound-only messages, sorted by message ID. No retained storage.
+    pub send_routes: Vec<SendRoute>,
     /// Canonically sorted by message ID and then route kind.
     pub retained_routes: Vec<RetainedRoute>,
     /// Canonically sorted by service name.
     pub rpc_services: Vec<RpcService>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SendRoute {
+    pub message_name: String,
+    pub message_id: u16,
+    pub delivery: DeliveryPolicy,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -142,7 +151,7 @@ pub fn analyze_binding_profile(
         let (kind, route) = match binding {
             BindingDeclaration::Latest(route) => (RetainedRouteKind::Latest, route),
             BindingDeclaration::Fifo(route) => (RetainedRouteKind::Fifo, route),
-            BindingDeclaration::Rpc(_) => continue,
+            BindingDeclaration::Rpc(_) | BindingDeclaration::Send(_) => continue,
         };
         let Some(message) = resolve_message(&route.message, schema, &messages, &mut errors) else {
             continue;
@@ -289,17 +298,143 @@ pub fn analyze_binding_profile(
         }
     }
 
+    let mut send_routes = Vec::new();
+    let mut send_ids = HashSet::new();
+    for binding in &profile.bindings {
+        let BindingDeclaration::Send(route) = binding else {
+            continue;
+        };
+        let Some(message) = resolve_message(&route.message, schema, &messages, &mut errors) else {
+            continue;
+        };
+        if !send_ids.insert(message.id) {
+            errors.push(ProfileSemanticError::new(
+                route.message.span,
+                format!("duplicate send binding for message `{}`", message.name),
+            ));
+        }
+        if rpc_roles.contains_key(&message.id) {
+            errors.push(ProfileSemanticError::new(
+                route.message.span,
+                format!(
+                    "RPC message `{}` cannot also use a plain send binding",
+                    message.name
+                ),
+            ));
+        }
+        if let Some(delivery) = resolve_delivery(&route.delivery, &mut errors) {
+            send_routes.push(SendRoute {
+                message_name: message.name.clone(),
+                message_id: message.id,
+                delivery,
+            });
+        }
+    }
     if !errors.is_empty() {
         return Err(ProfileSemanticErrors { errors });
     }
     retained_routes.sort_by_key(|route| (route.message_id, route.kind));
+    send_routes.sort_by_key(|route| route.message_id);
     rpc_services.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(BindingProfileModel {
         version: profile.version.value,
+        send_routes,
         retained_routes,
         rpc_services,
     })
 }
+
+/// Compose independently validated profile fragments. There are no overrides:
+/// duplicates and RPC/plain-message conflicts are errors, even across files.
+/// Fragment order and filenames do not affect the resulting identity.
+pub fn compose_binding_profiles(
+    profiles: &[BindingProfileModel],
+) -> Result<BindingProfileModel, ProfileCompositionError> {
+    if profiles.is_empty() {
+        return Err(ProfileCompositionError(
+            "at least one profile is required".into(),
+        ));
+    }
+    let mut merged = BindingProfileModel {
+        version: BINDING_PROFILE_VERSION,
+        send_routes: Vec::new(),
+        retained_routes: Vec::new(),
+        rpc_services: Vec::new(),
+    };
+    let mut send_ids = HashSet::new();
+    let mut retained_ids = HashSet::new();
+    let mut service_names = HashSet::new();
+    let mut rpc_ids = HashSet::new();
+    for profile in profiles {
+        if profile.version != BINDING_PROFILE_VERSION {
+            return Err(ProfileCompositionError(
+                "incompatible profile version".into(),
+            ));
+        }
+        for route in &profile.send_routes {
+            if !send_ids.insert(route.message_id) {
+                return Err(ProfileCompositionError(format!(
+                    "duplicate send binding for message `{}` across profiles",
+                    route.message_name
+                )));
+            }
+            merged.send_routes.push(route.clone());
+        }
+        for route in &profile.retained_routes {
+            if !retained_ids.insert(route.message_id) {
+                return Err(ProfileCompositionError(format!(
+                    "duplicate retained binding for message `{}` across profiles",
+                    route.message_name
+                )));
+            }
+            merged.retained_routes.push(route.clone());
+        }
+        for service in &profile.rpc_services {
+            if !service_names.insert(&service.name) {
+                return Err(ProfileCompositionError(format!(
+                    "duplicate RPC service `{}` across profiles",
+                    service.name
+                )));
+            }
+            for (id, name) in [
+                (service.request_id, &service.request_name),
+                (service.response_id, &service.response_name),
+            ] {
+                if !rpc_ids.insert(id) {
+                    return Err(ProfileCompositionError(format!(
+                        "message `{name}` is reused by multiple RPC roles across profiles"
+                    )));
+                }
+            }
+            merged.rpc_services.push(service.clone());
+        }
+    }
+    for service in &merged.rpc_services {
+        for (id, name) in [
+            (service.request_id, &service.request_name),
+            (service.response_id, &service.response_name),
+        ] {
+            if send_ids.contains(&id) || retained_ids.contains(&id) {
+                return Err(ProfileCompositionError(format!(
+                    "RPC message `{name}` also has a plain send/retained binding across profiles"
+                )));
+            }
+        }
+    }
+    merged.send_routes.sort_by_key(|route| route.message_id);
+    merged
+        .retained_routes
+        .sort_by_key(|route| (route.message_id, route.kind));
+    merged
+        .rpc_services
+        .sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(merged)
+}
+
+#[derive(Clone, Debug, Diagnostic, Error, Eq, PartialEq)]
+#[error("{0}")]
+#[diagnostic(code(wlc::profile_composition))]
+pub struct ProfileCompositionError(pub String);
 
 fn resolve_message<'a>(
     name: &Spanned<String>,

@@ -1,0 +1,37 @@
+/* Generator-private canonical sink. Only successful decode results enter here.
+ * The shared emitter orders known fields, drops unknowns, and preserves presence.
+ * Scalar bytes use the ordinary endian/varint writers; no raw-frame hashing. */
+typedef struct {
+  uint64_t hash;
+  size_t length;
+  wl_codec_status_t status;
+} wlc_hash_state_t;
+static wl_codec_status_t wlc_hash_emit_fields(const wlc_desc_t *, const void *, wlc_hash_state_t *);
+static inline void wlc_hash_copy_span(wlc_hash_state_t *out, const void *data, size_t length) {
+  const uint8_t *bytes = data;
+  if (out->status != WL_CODEC_OK) return;
+  out->status = wlc_add(&out->length, length);
+  if (out->status != WL_CODEC_OK) return;
+  uint64_t hash = out->hash;
+  for (size_t i = 0U; i < length; ++i)
+    hash = (hash ^ bytes[i]) * UINT64_C(0x100000001b3);
+  out->hash = hash;
+}
+static inline void wlc_hash_putv(wlc_hash_state_t *out, uint64_t value) {
+  uint8_t bytes[10], *cursor = bytes;
+  wlc_putv(&cursor, value);
+  wlc_hash_copy_span(out, bytes, (size_t)(cursor - bytes));
+}
+static inline void wlc_hash_put_key(wlc_hash_state_t *out, const wlc_field_t *f) {
+  wlc_hash_copy_span(out, f->key, f->key_size);
+}
+static inline void wlc_hash_put32(wlc_hash_state_t *out, uint32_t value) {
+  uint8_t bytes[4], *cursor = bytes;
+  wlc_put32(&cursor, value);
+  wlc_hash_copy_span(out, bytes, sizeof(bytes));
+}
+static inline void wlc_hash_put64(wlc_hash_state_t *out, uint64_t value) {
+  uint8_t bytes[8], *cursor = bytes;
+  wlc_put64(&cursor, value);
+  wlc_hash_copy_span(out, bytes, sizeof(bytes));
+}

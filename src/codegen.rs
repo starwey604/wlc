@@ -349,6 +349,19 @@ fn emit_bindings_source(module: &str, messages: &[&MessageSymbol]) -> String {
 
 fn emit_source(module: &str, messages: &[&MessageSymbol]) -> String {
     let mut source = COMMON_C.replace("@MODULE@", module);
+    source.push_str(EMIT_C);
+    source.push_str(CODEC_TAIL_C);
+    source.push_str(include_str!("fingerprint.c.in"));
+    // One canonical field traversal, specialized at generation time: no sink
+    // callback or per-byte mode branch on the ordinary encoder's hot path.
+    source.push_str(
+        &EMIT_C
+            .replace("wlc_emit", "wlc_hash_emit")
+            .replace("wlc_put", "wlc_hash_put")
+            .replace("wlc_copy_span", "wlc_hash_copy_span")
+            .replace("uint8_t **out", "wlc_hash_state_t *out")
+            .replace("wlc_measure(", "wlc_measure_validated("),
+    );
     for message in messages {
         source.push_str(&format!(
             "static const wlc_desc_t {}_desc;\n",
@@ -362,9 +375,14 @@ fn emit_source(module: &str, messages: &[&MessageSymbol]) -> String {
     for message in messages {
         let name = type_name(&message.name);
         source.push_str(&format!("void {name}_clear({name}_t *value) {{ if (value != NULL) wlc_clear(&{name}_desc, value); }}\n"));
-        source.push_str(&format!("size_t {name}_encoded_size(const {name}_t *value) {{ size_t size; return wlc_measure(&{name}_desc, value, &size) == WL_CODEC_OK ? size : SIZE_MAX; }}\n"));
-        source.push_str(&format!("wl_codec_status_t {name}_encode(const {name}_t *value, uint8_t *out, size_t cap, size_t *length) {{ return wlc_encode(&{name}_desc, value, out, cap, length); }}\n"));
-        source.push_str(&format!("wl_codec_status_t {name}_decode(const uint8_t *input, size_t length, {name}_t *out) {{ return wlc_decode(&{name}_desc, input, length, out); }}\n\n"));
+        if let Some(specialized) = crate::packed_codegen::source(message) {
+            source.push_str(&specialized);
+        } else {
+            source.push_str(&format!("size_t {name}_encoded_size(const {name}_t *value) {{ size_t size; return wlc_measure(&{name}_desc, value, &size) == WL_CODEC_OK ? size : SIZE_MAX; }}\n"));
+            source.push_str(&format!("wl_codec_status_t {name}_encode(const {name}_t *value, uint8_t *out, size_t cap, size_t *length) {{ return wlc_encode(&{name}_desc, value, out, cap, length); }}\n"));
+            source.push_str(&format!("wl_codec_status_t {name}_decode(const uint8_t *input, size_t length, {name}_t *out) {{ return wlc_decode(&{name}_desc, input, length, out); }}\n\n"));
+        }
+        source.push_str(&format!("/* Generator-private: value must be the unmodified result of successful decode.\n * hash supplies the caller domain seed; codec has no RPC identity policy. */\nwl_codec_status_t {name}_wlc_detail_fingerprint(const {name}_t *value, uint64_t *hash, size_t *length) {{\n  wlc_hash_state_t state = {{*hash, 0U, WL_CODEC_OK}};\n  wl_codec_status_t status = wlc_hash_emit_fields(&{name}_desc, value, &state);\n  if (status != WL_CODEC_OK) return status;\n  if (state.status != WL_CODEC_OK) return state.status;\n  *hash = state.hash;\n  *length = state.length;\n  return WL_CODEC_OK;\n}}\n\n"));
     }
     source
 }
@@ -373,7 +391,7 @@ fn emit_descriptor(output: &mut String, message: &MessageSymbol) {
     let name = type_name(&message.name);
     if message.fields.is_empty() {
         output.push_str(&format!(
-            "static const wlc_desc_t {name}_desc = {{ NULL, 0U }};\n\n"
+            "static const wlc_desc_t {name}_desc = {{ NULL, 0U, WLC_LOOKUP_LINEAR }};\n\n"
         ));
         return;
     }
@@ -425,13 +443,46 @@ fn emit_descriptor(output: &mut String, message: &MessageSymbol) {
             ),
         };
         let max_length = field.max_length.unwrap_or(0);
-        output.push_str(&format!("  {{ {}U, {cardinality}, {kind}, {required}, offsetof({name}_t, {field_name}), {has}, {count}, {capacity}, sizeof({}), {packed_count}U, {max_length}U, {signed_default}, {unsigned_default}ULL, {string_default}, {nested} }},\n", field.number, c_type(&field.ty)));
+        let wire = if matches!(
+            field.cardinality,
+            crate::ast::Cardinality::Packed(_) | crate::ast::Cardinality::RequiredPacked(_)
+        ) {
+            2
+        } else {
+            wire_type(&field.ty)
+        };
+        // A field number is at most 65535: its canonical key needs 1..=3 bytes.
+        // Store both the bytes and length in existing descriptor padding.
+        let mut key = (u64::from(field.number) << 3) | wire;
+        let key_size = varint_size(key);
+        let mut key_bytes = [0u8; 3];
+        for byte in key_bytes.iter_mut().take(key_size as usize) {
+            *byte = (key as u8 & 127) | if key >= 128 { 128 } else { 0 };
+            key >>= 7;
+        }
+        let [key0, key1, key2] = key_bytes;
+        output.push_str(&format!("  {{ {}U, {cardinality}, {kind}, {required}, {wire}U, {key_size}U, offsetof({name}_t, {field_name}), {has}, {count}, {capacity}, sizeof({}), {packed_count}U, {max_length}U, {{ {key0}U, {key1}U, {key2}U }}, {signed_default}, {unsigned_default}ULL, {string_default}, {nested} }},\n", field.number, c_type(&field.ty)));
     }
     output.push_str("};\n");
-    output.push_str(&format!("static const wlc_desc_t {name}_desc = {{ {name}_fields, sizeof({name}_fields) / sizeof({name}_fields[0]) }};\n\n"));
+    // Semantic analysis sorts fields once. Avoid a per-field density check or
+    // an index table; contiguous IDs permit direct descriptor indexing.
+    let lookup = if message.fields.len() <= 8 {
+        "WLC_LOOKUP_LINEAR"
+    } else if message
+        .fields
+        .windows(2)
+        .all(|pair| u32::from(pair[1].number) == u32::from(pair[0].number) + 1)
+    {
+        "WLC_LOOKUP_DENSE"
+    } else {
+        "WLC_LOOKUP_BINARY"
+    };
+    output.push_str(&format!("static const wlc_desc_t {name}_desc = {{ {name}_fields, sizeof({name}_fields) / sizeof({name}_fields[0]), {lookup} }};\n\n"));
 }
 
-fn field_descriptor_data(field: &FieldSymbol) -> (&'static str, String, String, String, String) {
+pub(crate) fn field_descriptor_data(
+    field: &FieldSymbol,
+) -> (&'static str, String, String, String, String) {
     let kind = match field.ty {
         ResolvedType::Bool => "WLC_BOOL",
         ResolvedType::Bytes => "WLC_BYTES",
@@ -524,15 +575,17 @@ enum {
 typedef struct wlc_desc wlc_desc_t;
 typedef struct {
   uint16_t number;
-  uint8_t card, kind, required;
+  uint8_t card, kind, required, wire, key_size;
   size_t value, has, count, capacity, element, packed_count;
   uint16_t max_length;
+  uint8_t key[3];
   int64_t signed_default;
   uint64_t unsigned_default;
   const char *string_default;
   const wlc_desc_t *nested;
 } wlc_field_t;
-struct wlc_desc { const wlc_field_t *fields; size_t count; };
+enum { WLC_LOOKUP_LINEAR, WLC_LOOKUP_DENSE, WLC_LOOKUP_BINARY };
+struct wlc_desc { const wlc_field_t *fields; size_t count; uint8_t lookup; };
 
 static inline wl_codec_status_t wlc_add(size_t *a, size_t b) {
   if (b > SIZE_MAX - *a) return WL_CODEC_ERR_OVERFLOW;
@@ -589,12 +642,7 @@ static bool wlc_utf8(const uint8_t *s, size_t n) {
   return true;
 }
 static inline uint8_t wlc_wire(const wlc_field_t *f) {
-  if (f->card == WLC_PACKED) return 2U;
-  if (f->kind == WLC_F64 || f->kind == WLC_FLOAT64) return 1U;
-  if (f->kind == WLC_F32 || f->kind == WLC_FLOAT32) return 5U;
-  if (f->kind == WLC_BYTES || f->kind == WLC_STRING || f->kind == WLC_MESSAGE)
-    return 2U;
-  return 0U;
+  return f->wire;
 }
 static inline uint64_t wlc_z32(int32_t v) {
   return ((uint32_t)v << 1U) ^ (uint32_t)-(uint32_t)(v < 0);
@@ -609,6 +657,7 @@ static inline int64_t wlc_uz64(uint64_t v) {
   return (int64_t)((v >> 1U) ^ (uint64_t)-(v & 1U));
 }
 static wl_codec_status_t wlc_measure(const wlc_desc_t *, const void *, size_t *);
+static wl_codec_status_t wlc_measure_impl(const wlc_desc_t *, const void *, size_t *, bool);
 static void wlc_clear(const wlc_desc_t *, void *);
 static wl_codec_status_t wlc_decode(const wlc_desc_t *, const uint8_t *, size_t,
                                     void *);
@@ -622,7 +671,7 @@ static wl_codec_status_t wlc_packed_bytes(const wlc_field_t *f, size_t *bytes) {
   return WL_CODEC_OK;
 }
 static wl_codec_status_t wlc_body(const wlc_field_t *f, const void *p,
-                                  size_t *n) {
+                                  size_t *n, bool validated) {
   *n = 0U;
   switch (f->kind) {
     case WLC_BOOL: {
@@ -658,14 +707,14 @@ static wl_codec_status_t wlc_body(const wlc_field_t *f, const void *p,
       if (f->max_length != 0U && v->length > (size_t)f->max_length)
         return WL_CODEC_ERR_INVALID_VALUE;
       if (v->length != 0U && v->data == NULL) return WL_CODEC_ERR_INVALID_VALUE;
-      if (!wlc_utf8((const uint8_t *)v->data, v->length)) return WL_CODEC_ERR_UTF8;
+      if (!validated && !wlc_utf8((const uint8_t *)v->data, v->length)) return WL_CODEC_ERR_UTF8;
       if (wlc_add(n, wlc_vsize(v->length)) != WL_CODEC_OK)
         return WL_CODEC_ERR_OVERFLOW;
       return wlc_add(n, v->length);
     }
     case WLC_MESSAGE: {
       size_t child;
-      wl_codec_status_t s = wlc_measure(f->nested, p, &child);
+      wl_codec_status_t s = wlc_measure_impl(f->nested, p, &child, validated);
       if (s != WL_CODEC_OK) return s;
       *n = wlc_vsize(child);
       return wlc_add(n, child);
@@ -673,8 +722,8 @@ static wl_codec_status_t wlc_body(const wlc_field_t *f, const void *p,
     default: return WL_CODEC_ERR_INVALID_VALUE;
   }
 }
-static wl_codec_status_t wlc_measure(const wlc_desc_t *d, const void *value,
-                                     size_t *out) {
+static wl_codec_status_t wlc_measure_impl(const wlc_desc_t *d, const void *value,
+                                     size_t *out, bool validated) {
   size_t n = 0U;
   if (d == NULL || value == NULL || out == NULL) return WL_CODEC_ERR_INVALID_VALUE;
   for (size_t i = 0U; i < d->count; ++i) {
@@ -688,7 +737,7 @@ static wl_codec_status_t wlc_measure(const wlc_desc_t *d, const void *value,
         continue;
       }
       if ((s = wlc_packed_bytes(f, &bytes)) != WL_CODEC_OK) return s;
-      if ((s = wlc_add(&n, wlc_vsize(((uint64_t)f->number << 3U) | 2U))) != WL_CODEC_OK ||
+      if ((s = wlc_add(&n, f->key_size)) != WL_CODEC_OK ||
           (s = wlc_add(&n, wlc_vsize(bytes))) != WL_CODEC_OK ||
           (s = wlc_add(&n, bytes)) != WL_CODEC_OK) return s;
       continue;
@@ -710,14 +759,20 @@ static wl_codec_status_t wlc_measure(const wlc_desc_t *d, const void *value,
       const void *p = f->card == WLC_REPEATED
                           ? *(const uint8_t *const *)(base + f->value) + j * f->element
                           : base + f->value;
-      wl_codec_status_t s = wlc_body(f, p, &body);
+      wl_codec_status_t s = wlc_body(f, p, &body, validated);
       if (s != WL_CODEC_OK) return s;
-      if ((s = wlc_add(&n, wlc_vsize(((uint64_t)f->number << 3U) | wlc_wire(f)))) != WL_CODEC_OK ||
+      if ((s = wlc_add(&n, f->key_size)) != WL_CODEC_OK ||
           (s = wlc_add(&n, body)) != WL_CODEC_OK) return s;
     }
   }
   *out = n;
   return WL_CODEC_OK;
+}
+static wl_codec_status_t wlc_measure(const wlc_desc_t *d, const void *value, size_t *out) {
+  return wlc_measure_impl(d, value, out, false);
+}
+static wl_codec_status_t wlc_measure_validated(const wlc_desc_t *d, const void *value, size_t *out) {
+  return wlc_measure_impl(d, value, out, true);
 }
 static void wlc_clear(const wlc_desc_t *d, void *value) {
   uint8_t *base = value;
@@ -771,6 +826,19 @@ static inline void wlc_put64(uint8_t **p, uint64_t v) {
   wlc_put32(p, (uint32_t)(v >> 32U));
   wlc_put32(p, (uint32_t)v);
 }
+static inline void wlc_copy_span(uint8_t **out, const void *data, size_t length) {
+  if (length != 0U) { memcpy(*out, data, length); *out += length; }
+}
+static inline void wlc_put_key(uint8_t **out, const wlc_field_t *f) {
+  *(*out)++ = f->key[0];
+  if (f->key_size > 1U) {
+    *(*out)++ = f->key[1];
+    if (f->key_size > 2U) *(*out)++ = f->key[2];
+  }
+}
+"#;
+
+const EMIT_C: &str = r#"
 static wl_codec_status_t wlc_emit_fixed(uint8_t kind, const void *value,
                                         uint8_t **out) {
   if (kind == WLC_F32) wlc_put32(out, *(const uint32_t *)value);
@@ -806,13 +874,13 @@ static wl_codec_status_t wlc_emit_value(const wlc_field_t *f, const void *p,
     case WLC_BYTES: {
       const wl_codec_bytes_t *v = p;
       wlc_putv(out, v->length);
-      if (v->length != 0U) { memcpy(*out, v->data, v->length); *out += v->length; }
+      wlc_copy_span(out, v->data, v->length);
       return WL_CODEC_OK;
     }
     case WLC_STRING: {
       const wl_codec_string_t *v = p;
       wlc_putv(out, v->length);
-      if (v->length != 0U) { memcpy(*out, v->data, v->length); *out += v->length; }
+      wlc_copy_span(out, v->data, v->length);
       return WL_CODEC_OK;
     }
     case WLC_MESSAGE: {
@@ -856,7 +924,7 @@ static wl_codec_status_t wlc_emit_fields(const wlc_desc_t *d, const void *value,
     if (f->card == WLC_PACKED) {
       wl_codec_status_t s;
       if (!*(const bool *)(base + f->has)) continue;
-      wlc_putv(out, ((uint64_t)f->number << 3U) | 2U);
+      wlc_put_key(out, f);
       if ((s = wlc_emit_packed(f, base + f->value, out)) != WL_CODEC_OK) return s;
       continue;
     }
@@ -868,13 +936,16 @@ static wl_codec_status_t wlc_emit_fields(const wlc_desc_t *d, const void *value,
                           ? *(const uint8_t *const *)(base + f->value) + j * f->element
                           : base + f->value;
       wl_codec_status_t s;
-      wlc_putv(out, ((uint64_t)f->number << 3U) | wlc_wire(f));
+      wlc_put_key(out, f);
       if ((s = wlc_emit_value(f, p, out)) != WL_CODEC_OK) return s;
     }
   }
   return WL_CODEC_OK;
 }
-static wl_codec_status_t wlc_encode(const wlc_desc_t *d, const void *value,
+"#;
+
+const CODEC_TAIL_C: &str = r#"
+static inline wl_codec_status_t wlc_encode(const wlc_desc_t *d, const void *value,
                                     uint8_t *out, size_t cap, size_t *length) {
   size_t n;
   wl_codec_status_t s = wlc_measure(d, value, &n);
@@ -1006,29 +1077,53 @@ static wl_codec_status_t wlc_read_packed(const wlc_field_t *f,
   }
   return WL_CODEC_OK;
 }
+static const wlc_field_t *wlc_find_field(const wlc_desc_t *d, uint16_t number) {
+  if (d->lookup == WLC_LOOKUP_DENSE) {
+    size_t index = (size_t)number - (size_t)d->fields[0].number;
+    return index < d->count ? &d->fields[index] : NULL;
+  }
+  if (d->lookup == WLC_LOOKUP_BINARY) {
+    size_t lo = 0U, hi = d->count;
+    while (lo < hi) {
+      size_t mid = lo + (hi - lo) / 2U;
+      uint16_t candidate = d->fields[mid].number;
+      if (candidate == number) return &d->fields[mid];
+      if (candidate < number) lo = mid + 1U;
+      else hi = mid;
+    }
+    return NULL;
+  }
+  for (size_t i = 0U; i < d->count; ++i)
+    if (d->fields[i].number == number) return &d->fields[i];
+  return NULL;
+}
 static wl_codec_status_t wlc_decode(const wlc_desc_t *d, const uint8_t *in,
                                     size_t n, void *out) {
   if (d == NULL || out == NULL || (n != 0U && in == NULL))
     return WL_CODEC_ERR_INVALID_VALUE;
   wlc_clear(d, out);
+  // A hint only: missing, unknown or reordered fields still use exact lookup.
+  // Each recursive decode owns its cursor; empty schemas avoid NULL arithmetic.
+  const wlc_field_t *next = d->fields;
+  const wlc_field_t *end = d->count == 0U ? next : next + d->count;
   for (size_t at = 0U; at < n;) {
     uint64_t key;
     wl_codec_status_t s = wlc_getv(in, n, &at, &key);
     if (s != WL_CODEC_OK) return s;
-    uint64_t number = key >> 3U;
+    uint64_t raw_number = key >> 3U;
     uint8_t wire = (uint8_t)(key & 7U);
-    if (number == 0U || number > 65535U ||
+    if (raw_number == 0U || raw_number > 65535U ||
         (wire != 0U && wire != 1U && wire != 2U && wire != 5U))
       return WL_CODEC_ERR_MALFORMED;
-    const wlc_field_t *f = NULL;
-    for (size_t i = 0U; i < d->count; ++i) {
-      if (d->fields[i].number == number) { f = &d->fields[i]; break; }
-    }
+    uint16_t number = (uint16_t)raw_number;
+    const wlc_field_t *f = next != end && next->number == number
+                               ? next : wlc_find_field(d, number);
     if (f == NULL) {
       if ((s = wlc_skip(wire, in, n, &at)) != WL_CODEC_OK) return s;
       continue;
     }
     if (wire != wlc_wire(f)) return WL_CODEC_ERR_WIRE_TYPE;
+    next = f->card == WLC_REPEATED ? f : f + 1;
     uint8_t *base = out;
     if (f->card == WLC_PACKED) {
       if (*(bool *)(base + f->has)) return WL_CODEC_ERR_DUPLICATE_FIELD;
