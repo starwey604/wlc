@@ -172,6 +172,19 @@ static @M@_runtime_result_t @M@_@S@_server_finish(@M@_runtime_t *runtime,
   return result;
 }
 
+wl_rpc_err_t @M@_@S@_request_inspect(@M@_runtime_t *runtime,
+    const @M@_@S@_request_token_t *token, wl_rpc_server_request_t *out_request) {
+  if (runtime == NULL || token == NULL || out_request == NULL)
+    return WL_RPC_ERR_INVALID_ARG;
+  if (token->private_state.owner != runtime ||
+      token->private_state.incarnation != runtime->rpc_incarnation ||
+      token->private_state.request.identity.request_message_id != @REQ_ID@ ||
+      token->private_state.request.identity.response_message_id != @RES_ID@)
+    return WL_RPC_ERR_NOT_FOUND;
+  *out_request = token->private_state.request;
+  return WL_RPC_OK;
+}
+
 @M@_runtime_result_t @M@_@S@_server_complete(@M@_runtime_t *runtime,
     const @M@_@S@_request_token_t *token, const @RES@_t *response, wl_time_ms_t now_ms) {
   return @M@_@S@_server_finish(runtime, token, 0, response, now_ms, false);

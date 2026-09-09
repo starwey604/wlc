@@ -33,7 +33,7 @@ pub(crate) fn fragments(envelope: EndpointEnvelope, prefix: &str) -> Vec<(&'stat
         "0U"
     };
     let capacity = format!(
-        "#define @P@_ENDPOINT_UNIT_CAPACITY {unit}\n#define @P@_ENDPOINT_CONTROL_CAPACITY {control}\n#define @P@_ENDPOINT_RX_FIFO_CAPACITY {fifo}"
+        "#define @P@_ENDPOINT_UNIT_CAPACITY {unit}\n#define @P@_ENDPOINT_CONTROL_CAPACITY {control}\n#ifndef @P@_ENDPOINT_RX_FIFO_CAPACITY\n#define @P@_ENDPOINT_RX_FIFO_CAPACITY {fifo}\n#endif"
     );
     let validate = if envelope == EndpointEnvelope::Any {
         String::new()

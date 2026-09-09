@@ -3,7 +3,7 @@
   "compiler": {
     "name": "wlc",
     "version": "0.5.0",
-    "codegen_abi": 30
+    "codegen_abi": 31
   },
   "module": "business",
   "identity": {

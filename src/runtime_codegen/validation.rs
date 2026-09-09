@@ -20,6 +20,7 @@ pub(super) fn validate_runtime_names(
         "rpc_client".to_owned(),
         "rpc_encode_scratch".to_owned(),
         "rpc_server".to_owned(),
+        "rpc_retiring_tx".to_owned(),
     ]);
     if profile.rpc_services.iter().any(RpcService::is_managed) {
         member_names.insert("rpc_incarnation".to_owned());
@@ -189,6 +190,7 @@ pub(super) fn validate_runtime_names(
         }
         for suffix in [
             "request_token_t",
+            "request_inspect",
             "call_t",
             "result_t",
             "handler_fn",

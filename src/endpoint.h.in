@@ -218,6 +218,7 @@ static inline wl_endpoint_driver_t @M@_endpoint_driver(@M@_endpoint_t *endpoint)
   driver.context = endpoint;
   driver.step = @M@_endpoint_driver_step;
   driver.close = @M@_endpoint_driver_close;
+  driver.readiness_complete = 1U;
   return driver;
 }
 

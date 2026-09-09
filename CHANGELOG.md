@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased — generated ABI 31
+
+Regenerate and rebuild consumers with the matching development Wirelink. The
+released v0.5.0 compiler remains ABI 30; this work does not publish a new tag.
+
+- Allow a target-wide COBS receive FIFO capacity override for generated endpoints.
+- Mark generated driver readiness as complete so consumed events alone do not
+  cause another host owner pass.
+- Add advanced typed request-token inspection for product deadline tables,
+  without transferring ownership or promising that a request is still pending.
+- Retire cancelled old-peer response handles, including physically in-flight
+  sends, so a peer restart cannot permanently block the next reliable response.
+
+These generator changes do not change wire framing or RPC metadata. The FCI arm
+consumer's separate mapped-to-managed migration must be deployed on both peers.
+
 ## 0.5.0 — 2026-09-09
 
 This pre-1.0 release advances generated C API/layout compatibility from the

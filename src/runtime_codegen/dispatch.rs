@@ -48,7 +48,7 @@ pub(super) fn emit_source(
         }
         write!(
             output,
-            "static void {module}_runtime_cancel_peer_tx(void *context, wl_tx_handle_t handle) {{\n  if (context != NULL) (void)wl_tx_cancel((wl_ctx_t *)context, handle);\n}}\n\n"
+            "typedef struct {{ wl_ctx_t *link; {module}_runtime_t *runtime; }} {module}_peer_cancel_context_t;\nstatic void {module}_runtime_cancel_peer_tx(void *context, wl_tx_handle_t handle) {{\n  {module}_peer_cancel_context_t *cancel = context;\n  wl_tx_result_t ignored;\n  if (cancel == NULL) return;\n  (void)wl_tx_cancel(cancel->link, handle);\n  /* A cancelled transaction need not emit a terminal event. Take it now, or\n   * retain just its handle until the adapter releases physical TX storage. */\n  if (wl_tx_take(cancel->link, handle, &ignored) == WL_ERR_INVALID_STATE)\n    cancel->runtime->rpc_retiring_tx = handle;\n}}\n\n"
         )
         .unwrap();
     }

@@ -139,6 +139,52 @@ static int inject_response(uint16_t id, const uint8_t *data, size_t length,
   return inject(&a, id, data, length, RESPONSE_RELIABLE != 0, expected);
 }
 
+#if RESPONSE_RELIABLE
+static wl_io_token_t retiring_token;
+static bool retiring_async;
+static wl_sink_result_t retiring_sink(void *context, wl_io_token_t token,
+    const uint8_t *data, size_t length) {
+  (void)context; (void)data; (void)length;
+  retiring_token = token;
+  return retiring_async ? WL_SINK_STARTED : WL_SINK_BUSY;
+}
+
+static int test_peer_response_retirement(void) {
+  for (unsigned mode = 0U; mode < 2U; ++mode) {
+    demo_execute_call_t pending;
+    response_t response = {.has_output = true, .output = 8};
+    wl_rpc_peer_observation_t observation;
+    wl_rpc_server_request_t identity;
+    wl_tx_handle_t next;
+    wl_tx_result_t ignored;
+    CHECK(init() == 0);
+    CHECK(call(7, 1000U, &pending) == 0);
+    CHECK(demo_execute_request_inspect(demo_endpoint_runtime(&b), &tokens[0], &identity) == WL_RPC_OK);
+    CHECK(identity.identity.operation_id != 0U && identity.generation != 0U);
+    CHECK(demo_execute_request_inspect(demo_endpoint_runtime(&a), &tokens[0], &identity) == WL_RPC_ERR_NOT_FOUND);
+    retiring_async = mode != 0U;
+    CHECK(wl_set_sink(wl_endpoint_link(demo_endpoint_handle(&b)), retiring_sink, NULL) == WL_OK);
+    CHECK(demo_endpoint_execute_complete(&b, &tokens[0], &response) == WL_RPC_OK);
+    CHECK(demo_endpoint_step(&b) == WL_OK);
+    CHECK(demo_runtime_peer_observe(wl_endpoint_link(demo_endpoint_handle(&b)),
+        demo_endpoint_runtime(&b), 999U, &observation) == WL_RPC_OK);
+    if (retiring_async) {
+      CHECK(wl_tx_complete(wl_endpoint_link(demo_endpoint_handle(&b)), retiring_token, WL_OK) == WL_OK);
+    }
+    CHECK(demo_endpoint_step(&b) == WL_OK);
+    retiring_async = false;
+    /* No terminal event is needed to retire a cancelled peer response. */
+    CHECK(wl_send_reliable(wl_endpoint_link(demo_endpoint_handle(&b)), 999U,
+        NULL, 0U, now, &next) == WL_OK);
+    CHECK(wl_tx_cancel(wl_endpoint_link(demo_endpoint_handle(&b)), next) == WL_OK);
+    CHECK(wl_tx_take(wl_endpoint_link(demo_endpoint_handle(&b)), next, &ignored) == WL_OK);
+    demo_endpoint_close(&a);
+    demo_endpoint_close(&b);
+  }
+  return 0;
+}
+#endif
+
 int main(void) {
   demo_execute_call_t first, second, saved;
   demo_execute_result_t result;
@@ -287,5 +333,8 @@ int main(void) {
   CHECK(demo_endpoint_auxiliary_release(&a, &wrong_service) == WL_RPC_OK);
   demo_endpoint_close(&a);
   demo_endpoint_close(&b);
+#if RESPONSE_RELIABLE
+  CHECK(test_peer_response_retirement() == 0);
+#endif
   return 0;
 }

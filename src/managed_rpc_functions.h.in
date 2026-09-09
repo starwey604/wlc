@@ -16,6 +16,12 @@ wl_rpc_err_t @M@_@S@_client_release(@M@_runtime_t *runtime, uint32_t operation_i
 @M@_runtime_result_t @M@_@S@_server_reject(@M@_runtime_t *runtime,
     const @M@_@S@_request_token_t *token, int32_t application_status,
     wl_time_ms_t now_ms);
+
+/* Advanced scheduling/diagnostics: inspect a token from this runtime incarnation.
+ * Not a liveness test: complete/reject still validate the pending reservation.
+ * Does not grant permission to reconstruct tokens or extend their lifetime. */
+wl_rpc_err_t @M@_@S@_request_inspect(@M@_runtime_t *runtime,
+    const @M@_@S@_request_token_t *token, wl_rpc_server_request_t *out_request);
 #if @REQ_P@_HAS_VALUE && @RES_P@_HAS_VALUE
 /* Generator-owned snapshot/response helpers. Prefer endpoint operations. */
 wl_err_t @M@_@S@_encode_submission(const void *request, uint32_t operation_id, uint64_t session,

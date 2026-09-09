@@ -178,7 +178,7 @@ pub(super) fn emit_header(
     if !profile.rpc_services.is_empty() {
         writeln!(
             output,
-            "  wl_rpc_client_t *rpc_client;\n  wl_rpc_server_t *rpc_server;\n  wl_rpc_peer_t rpc_peer;\n  wl_rpc_peer_observation_t rpc_peer_observation;"
+            "  wl_rpc_client_t *rpc_client;\n  wl_rpc_server_t *rpc_server;\n  wl_rpc_peer_t rpc_peer;\n  wl_rpc_peer_observation_t rpc_peer_observation;\n  wl_tx_handle_t rpc_retiring_tx;"
         )
         .unwrap();
         if profile.rpc_services.iter().any(RpcService::is_managed) {

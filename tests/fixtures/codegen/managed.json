@@ -3,7 +3,7 @@
   "compiler": {
     "name": "wlc",
     "version": "0.5.0",
-    "codegen_abi": 30
+    "codegen_abi": 31
   },
   "module": "business",
   "identity": {
@@ -25,7 +25,7 @@
     {"path": "business_values.h", "size": 5252, "digest": "0xc9909e0a175fed55"},
     {"path": "station_advanced.h", "size": 13819, "digest": "0xfaac9fbb2dc6cc35"},
     {"path": "station_endpoint.h", "size": 398, "digest": "0xbaffac443d555187"},
-    {"path": "station_runtime.c", "size": 76061, "digest": "0xc37adb2977f50398"},
-    {"path": "station_runtime.h", "size": 53995, "digest": "0xa05926ab4c14d57c"}
+    {"path": "station_runtime.c", "size": 78043, "digest": "0x129673de8420ec8f"},
+    {"path": "station_runtime.h", "size": 54916, "digest": "0x6b0258495f8a49d4"}
   ]
 }
