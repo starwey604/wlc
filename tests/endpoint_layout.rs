@@ -96,6 +96,16 @@ fn role_layouts_also_compile_for_mapped_and_unbounded_expert_runtimes() {
             let profile =
                 analyze_binding_profile(&parse_binding_profile(&text).unwrap(), &schema).unwrap();
             let generated = generate_runtime_c_named(&schema, &profile, "business", role).unwrap();
+            let dispatch = generated
+                .source
+                .split("_runtime_dispatch_event(wl_ctx_t")
+                .nth(1)
+                .unwrap()
+                .split("release_event:")
+                .next()
+                .unwrap();
+            assert_eq!(dispatch.contains("request_decode("), role != "client");
+            assert_eq!(dispatch.contains("response_decode("), role != "server");
             for (suffix, text) in [
                 ("runtime.h", generated.header),
                 ("runtime.c", generated.source),

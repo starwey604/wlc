@@ -137,6 +137,35 @@ static void close_pair(void) {
   assert(client_endpoint_close(&client) == WL_OK);
   assert(server_endpoint_close(&server) == WL_OK);
 }
+
+static void omitted_role_diagnostics(void) {
+  /* Synthetic events have no RX lease. Normal traffic below tests real RX
+   * ownership; here verify the precise diagnostics before any payload decode. */
+  wl_event_t event = {0};
+  event.type = WL_EVT_RELIABLE_RX;
+  event.message_id = REQUEST_MESSAGE_ID;
+  client_runtime_result_t c = client_runtime_dispatch_event(
+      wl_endpoint_link(client_endpoint_handle(&client)), &event,
+      client_endpoint_runtime(&client), tick);
+  assert(c.domain == CLIENT_RUNTIME_MISSING_ROUTE);
+  assert(c.detail_kind == CLIENT_RUNTIME_DETAIL_RPC && c.event_consumed == 1);
+  assert(c.detail.rpc.operation_id == 0);
+  event.type = WL_EVT_UNRELIABLE_RX;
+  c = client_runtime_dispatch_event(wl_endpoint_link(client_endpoint_handle(&client)),
+      &event, client_endpoint_runtime(&client), tick);
+  assert(c.domain == CLIENT_RUNTIME_DELIVERY_MISMATCH && c.event_consumed == 1);
+  event.message_id = RESPONSE_MESSAGE_ID;
+  server_runtime_result_t s = server_runtime_dispatch_event(
+      wl_endpoint_link(server_endpoint_handle(&server)), &event,
+      server_endpoint_runtime(&server), tick);
+  assert(s.domain == SERVER_RUNTIME_DELIVERY_MISMATCH && s.event_consumed == 1);
+  event.type = WL_EVT_RELIABLE_RX;
+  s = server_runtime_dispatch_event(wl_endpoint_link(server_endpoint_handle(&server)),
+      &event, server_endpoint_runtime(&server), tick);
+  assert(s.domain == SERVER_RUNTIME_MISSING_ROUTE);
+  assert(s.detail_kind == SERVER_RUNTIME_DETAIL_RPC && s.event_consumed == 1);
+  assert(s.detail.rpc.operation_id == 0);
+}
 int main(void) {
   assert(sizeof(client) < sizeof(both));
   assert(sizeof(server) < sizeof(both));
@@ -161,6 +190,7 @@ int main(void) {
   }
   for (unsigned pass = 0; pass < 2; ++pass) {
     initialize();
+    omitted_role_diagnostics();
     expected = WL_RPC_SUCCESS;
     request_value_t request;
     request_value_clear(&request);

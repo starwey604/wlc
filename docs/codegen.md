@@ -20,6 +20,7 @@ schema/profile syntax and generated API are not defined by the module layout.
 | Runtime declarations and static storage assembly | `runtime_codegen/header.rs`, `runtime_codegen/assembly.rs` |
 | Retained routes, RPC, dispatch, pump | Matching files in `runtime_codegen/` |
 | Default endpoint and managed RPC glue | `endpoint_codegen.rs`, `rpc_endpoint_codegen.rs`, `managed_rpc_codegen.rs` |
+| Shared managed request admission and response completion | `managed_rpc_server.c.in` |
 | Local role/envelope capabilities and transport bounds | `endpoint_layout.rs`, `endpoint_transport_codegen.rs` |
 
 `CModel` performs codec-side validation and computes bounds once per generation
@@ -35,6 +36,20 @@ generation. Keep disabled-role checks in both endpoint and advanced runtime
 initialization. Generated capability macros describe a fixed layout; they are
 not user overrides. Test memory bounds by executing all envelope/role variants,
 not by asserting only that a field disappeared.
+
+Dispatch must honor the same role capabilities. Keep tiny known-message error
+cases for omitted roles, retaining delivery validation and exactly-once RX
+release. Do not turn an omitted role into a decode path or an unknown message.
+For managed requests, observe a changed peer only after successful business
+decode and canonical fingerprinting. Admission helpers must distinguish new,
+pending duplicate, replay, conflict, and failure before entering application
+callbacks. Response completion uses correctly typed codec adapters, never
+function-pointer casts. Public token ownership/incarnation checks stay intact.
+
+`tests/rpc_flash.rs` measures a 24-service Cortex-M7 runtime at `-O2`, without
+LTO. Count extracted helpers and typed completion adapters along with dispatch;
+moving bytes to another symbol is not a footprint improvement. See
+[RPC Flash](rpc-flash.md) for the full application measurement and limitations.
 
 ## Templates are literal fragments
 

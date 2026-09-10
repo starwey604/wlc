@@ -145,6 +145,15 @@ fn managed_generated_names_cannot_shadow_schema_or_runtime_members() {
 }
 
 #[test]
+fn managed_helpers_do_not_reserve_the_rpc_service_name() {
+    let schema = analyze_schema(&parse_schema(SCHEMA).unwrap()).unwrap();
+    let source = PROFILE.replace("rpc Execute", "rpc Rpc");
+    let profile =
+        analyze_binding_profile(&parse_binding_profile(&source).unwrap(), &schema).unwrap();
+    assert!(generate_runtime_c(&schema, &profile, "demo").is_ok());
+}
+
+#[test]
 fn managed_rpc_runs_real_core_and_shared_codec_for_all_deliveries() {
     let root = std::env::var_os("WIRELINK_SOURCE_DIR")
         .map(PathBuf::from)

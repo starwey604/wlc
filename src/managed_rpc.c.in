@@ -111,14 +111,21 @@ wl_rpc_err_t @M@_@S@_client_release(@M@_runtime_t *runtime, uint32_t operation_i
   return result == WL_RPC_OK ? wl_rpc_client_release(runtime->rpc_client, operation_id) : result;
 }
 
+static wl_codec_status_t @M@_@S@_encode_response(const void *response,
+    uint8_t *out, size_t capacity, size_t *length, bool owned) {
+#if @REQ_P@_HAS_VALUE && @RES_P@_HAS_VALUE
+  if (owned) return @RES@_value_encode(response, out, capacity, length);
+#else
+  (void)owned;
+#endif
+  return @RES@_encode(response, out, capacity, length);
+}
+
 static @M@_runtime_result_t @M@_@S@_server_finish(@M@_runtime_t *runtime,
     const @M@_@S@_request_token_t *token, int32_t application_status,
     const void *response, wl_time_ms_t now_ms, bool owned) {
   @M@_runtime_result_t result = @M@_runtime_result(NULL);
-  wl_rpc_server_response_buffer_t buffer = {0};
-  wl_rpc_server_response_t cached = {0};
   const wl_rpc_server_request_t *request;
-  size_t encoded_length = 0U;
   result.message_id = @RES_ID@;
   result.detail_kind = @P@_RUNTIME_DETAIL_RPC;
   result.detail.rpc.application_result = application_status;
@@ -129,46 +136,8 @@ static @M@_runtime_result_t @M@_@S@_server_finish(@M@_runtime_t *runtime,
   request = &token->private_state.request;
   if (request->identity.request_message_id != @REQ_ID@ ||
       request->identity.response_message_id != @RES_ID@) return result;
-  result.detail.rpc.operation_id = request->identity.operation_id;
-  result.detail.rpc.rpc_result = wl_rpc_server_response_prepare(runtime->rpc_server, request, &buffer);
-  if (result.detail.rpc.rpc_result != WL_RPC_OK) {
-    result.domain = @P@_RUNTIME_RPC_ERROR;
-    return result;
-  }
-  if (buffer.capacity < 20U) {
-    result.detail.rpc.rpc_result = WL_RPC_ERR_RESPONSE_TOO_LARGE;
-    result.domain = @P@_RUNTIME_RPC_ERROR;
-    return result;
-  }
-  @M@_rpc_header_write(buffer.data, 2U, request->identity.operation_id, application_status,
-      request->identity.peer_session_id);
-  if (application_status == 0) {
-#if @REQ_P@_HAS_VALUE && @RES_P@_HAS_VALUE
-    if (owned) {
-      result.detail.rpc.codec_status = @RES@_value_encode(response, buffer.data + 20U,
-          buffer.capacity - 20U, &encoded_length);
-    } else
-#else
-    (void)owned;
-#endif
-    {
-    result.detail.rpc.codec_status = @RES@_encode(response, buffer.data + 20U,
-        buffer.capacity - 20U, &encoded_length);
-    }
-    if (result.detail.rpc.codec_status != WL_CODEC_OK) {
-      result.domain = @P@_RUNTIME_CODEC_ERROR;
-      return result;
-    }
-  }
-  result.detail.rpc.rpc_result = wl_rpc_server_response_commit(runtime->rpc_server,
-      &buffer, application_status, encoded_length + 20U, now_ms, &cached);
-  if (result.detail.rpc.rpc_result != WL_RPC_OK) {
-    result.domain = @P@_RUNTIME_RPC_ERROR;
-    return result;
-  }
-  result.detail.rpc.server_response = cached;
-  result.detail.rpc.payload_length = cached.response_length;
-  result.domain = @P@_RUNTIME_OK;
+  @M@_rpc_finish_response(runtime, request, application_status, response, now_ms,
+      owned, @M@_@S@_encode_response, &result);
   return result;
 }
 

@@ -100,6 +100,12 @@ client 初始化就绪，注册 handler 自动提供 server 能力。
 TTL 是最长保留而非保留窗口承诺。统一构建定义 `<PREFIX>_ENDPOINT_RPC_CAPACITY`
 可缩小静态容量，运行时 count 不得更大。
 
+`endpoint { rpc_role = server; }` / `client` 也裁剪接收分发中的对侧 RPC 路径。
+已知但角色不支持的消息仍报告 delivery mismatch / missing route，并释放 RX，
+不执行 codec。managed RPC 的请求校验、去重/重放和响应完成共用私有实现，
+不改变业务 codec、公共布局或 ABI 32，也不需要开启 `-Os`。
+测量和回归门槛见 [RPC Flash](docs/rpc-flash.md)。
+
 `config.advanced` 保留手动角色、容量和缓存策略；原 call/token 是高级路径。
 需要手动 endpoint call/inspect/release、complete/reject 助手时显式包含
 `<runtime>_advanced.h`；普通端点入口不包含这些助手。

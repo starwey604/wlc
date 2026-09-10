@@ -33,11 +33,13 @@ pub(super) fn emit_source(
             .fold(0xcbf29ce484222325_u64, |hash, byte| {
                 (hash ^ u64::from(*byte)).wrapping_mul(0x00000100000001b3)
             });
-        writeln!(
-            output,
-            "static const uint64_t {module}_rpc_fingerprint_seed = UINT64_C({seed:#018x});"
-        )
-        .unwrap();
+        if profile.has_rpc_server() {
+            writeln!(
+                output,
+                "static const uint64_t {module}_rpc_fingerprint_seed = UINT64_C({seed:#018x});"
+            )
+            .unwrap();
+        }
         let mut requests = HashSet::new();
         for service in &profile.rpc_services {
             let name = type_name(&service.request_name);
@@ -83,8 +85,26 @@ pub(super) fn emit_source(
         super::direct::emit_case(&mut output, &prefix, route);
     }
     for service in &profile.rpc_services {
-        emit_rpc_request_case(&mut output, module, &prefix, service);
-        emit_rpc_response_case(&mut output, module, &prefix, service);
+        if profile.has_rpc_server() {
+            emit_rpc_request_case(&mut output, module, &prefix, service);
+        } else {
+            emit_disabled_rpc_case(
+                &mut output,
+                &prefix,
+                service.request_id,
+                service.request_delivery,
+            );
+        }
+        if profile.has_rpc_client() {
+            emit_rpc_response_case(&mut output, module, &prefix, service);
+        } else {
+            emit_disabled_rpc_case(
+                &mut output,
+                &prefix,
+                service.response_id,
+                service.response_delivery,
+            );
+        }
     }
     write!(
         output,
@@ -109,6 +129,18 @@ pub(super) fn emit_source(
     output.push('\n');
     emit_pump_implementation(&mut output, profile, module);
     output
+}
+
+// Preserve diagnostics and RX ownership for known messages in an omitted role.
+// Do not decode them or retain references to the opposite role's codecs.
+fn emit_disabled_rpc_case(
+    output: &mut String,
+    prefix: &str,
+    message_id: u16,
+    delivery: crate::profile_semantic::DeliveryPolicy,
+) {
+    let event = super::rpc::delivery_event(delivery);
+    writeln!(output, "    case {message_id}U:\n      result.detail_kind = {prefix}_RUNTIME_DETAIL_RPC;\n      result.domain = event->type == {event} ? {prefix}_RUNTIME_MISSING_ROUTE : {prefix}_RUNTIME_DELIVERY_MISMATCH;\n      break;").unwrap();
 }
 
 pub(super) fn emit_result_str_implementation(output: &mut String, module: &str, prefix: &str) {

@@ -168,6 +168,16 @@ pub(super) fn validate_runtime_names(
     ] {
         runtime_names.insert(format!("{prefix}_RUNTIME_{suffix}"));
     }
+    if profile.rpc_services.iter().any(RpcService::is_managed) {
+        for suffix in [
+            "rpc_response_encoder_fn",
+            "rpc_request_prepare",
+            "rpc_request_begin",
+            "rpc_finish_response",
+        ] {
+            runtime_names.insert(format!("{module}_{suffix}"));
+        }
+    }
     for service in &profile.rpc_services {
         let name = c_identifier(&service.name);
         if name.is_empty() {
@@ -227,6 +237,7 @@ pub(super) fn validate_runtime_names(
             "completion_fn",
             "server_complete_value",
             "encode_submission",
+            "encode_response",
             "sync_state_t",
         ] {
             let symbol = format!("{module}_{name}_{suffix}");

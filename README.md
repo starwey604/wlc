@@ -458,6 +458,12 @@ the selected envelope. CRC32C bounds still permit smaller checksums, and the
 existing build-wide `*_ENDPOINT_RPC_CAPACITY` controls slots. Layout choices enter
 profile identity without changing codec/schema identity or payload format.
 
+Receive dispatch also honors the selected RPC role: omitted-role messages keep
+their delivery-mismatch/missing-route diagnostics and are released without
+decoding. Managed request admission and response-cache completion share private
+control flow across services, with typed codec adapters and unchanged public
+layouts. See [RPC Flash measurements](docs/rpc-flash.md); no `-Os` is required.
+
 Application routing policy lives in a separate, versioned sidecar rather than
 the frozen `.wl` wire-schema grammar. A profile currently describes retained
 `LATEST`/`FIFO` routes and RPC message/field mappings:

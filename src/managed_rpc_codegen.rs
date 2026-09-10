@@ -77,7 +77,12 @@ pub(crate) fn header_functions(module: &str, service: &RpcService) -> String {
     expand(include_str!("managed_rpc_functions.h.in"), module, service)
 }
 pub(crate) fn helpers(module: &str) -> String {
+    let prefix = upper_snake(module);
     render(include_str!("managed_rpc_helpers.c.in"), &[("M", module)])
+        + &render(
+            include_str!("managed_rpc_server.c.in"),
+            &[("M", module), ("P", &prefix)],
+        )
 }
 pub(crate) fn request_case(module: &str, service: &RpcService) -> String {
     expand(include_str!("managed_rpc_request.c.in"), module, service)

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.7.0-dev — unreleased
+
+- Trim RPC receive dispatch to the composed endpoint's client/server role,
+  preserving missing-route/delivery diagnostics and RX release behavior.
+- Share managed request metadata/session checks, peer observation, replay
+  admission, and response-cache completion across services. Codec calls remain
+  type-safe; no heap or persistent storage is added.
+- Add a 24-service Cortex-M7 `-O2` text regression gate covering dispatch,
+  shared helpers, typed adapters, and completion wrappers together.
+
+This optimization keeps generated ABI **32**, public layouts, schema/profile
+identities, business codecs, and wire formats unchanged. Regenerate runtime
+sources to obtain the size improvement; existing codecs remain compatible.
+
 ## 0.6.0 — 2026-09-09
 
 This release advances generated compatibility to **ABI 31**. Regenerate and
