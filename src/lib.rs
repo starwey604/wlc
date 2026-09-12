@@ -15,6 +15,7 @@ pub mod profile;
 pub mod profile_semantic;
 mod rpc_endpoint_codegen;
 pub mod runtime_codegen;
+pub mod sdk_codegen;
 pub mod semantic;
 mod template;
 mod value_codegen;
@@ -33,5 +34,8 @@ pub use profile_semantic::{
 };
 pub use runtime_codegen::{
     GeneratedRuntimeC, RuntimeCodegenError, generate_runtime_c, generate_runtime_c_named,
+};
+pub use sdk_codegen::{
+    BINDING_API_VERSION, GeneratedSdk, SdkCodegenError, SdkOptions, generate_sdk,
 };
 pub use semantic::{SemanticErrors, SemanticModel, analyze_schema, check_compatibility};

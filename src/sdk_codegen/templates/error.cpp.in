@@ -1,0 +1,10 @@
+  nb::class_<wirelink::Error>(module, "Error")
+      .def_prop_ro("kind", [](const wirelink::Error& e) { return wirelink::error_kind_name(e.kind); })
+      .def_prop_ro("status", [](const wirelink::Error& e) { return e.completion.status; })
+      .def_prop_ro("rejection", [](const wirelink::Error& e) { return e.completion.rejection; })
+      .def_prop_ro("local_error", [](const wirelink::Error& e) { return e.completion.local_error; })
+      .def_prop_ro("transport_error", [](const wirelink::Error& e) { return e.completion.transport_error; })
+      .def_prop_ro("runtime_error", [](const wirelink::Error& e) { return e.completion.runtime_error; })
+      .def_prop_ro("codec_error", [](const wirelink::Error& e) { return e.completion.codec_error; })
+      .def_prop_ro("os_error", [](const wirelink::Error& e) { return e.system_error.value(); })
+      .def_prop_ro("os_message", [](const wirelink::Error& e) { return e.system_error.message(); });

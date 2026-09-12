@@ -7,6 +7,32 @@ payload codecs plus optional typed Wirelink bindings.
 A Chinese review version is available in [`README-cn.md`](README-cn.md). This
 English document and the generated/public interfaces remain normative.
 
+## C++ / Python SDK generation (preview)
+
+```sh
+wlc sdk calculator.wl --profile calculator.bind.wl --out-dir sdk \
+  --name calculator --package-version 0.1.0.dev1
+```
+
+This produces an installable C++20 package and typed Python package with a
+nanobind extension, generated C codec/runtime, CMake exports, wheel/sdist build
+configuration and license notices. No bridge code needs to be handwritten.
+Schema imports and repeated `--profile` work as in `compile`. The library entry
+is `generate_sdk(&schema, &profile, &SdkOptions { name, package_version })`;
+it returns sorted relative paths and contents without writing files.
+
+The initial target is managed synchronous RPC over UDP with bounded owned
+messages, including strings/bytes, optional fields/defaults, open enums, fixed
+packed numeric arrays and nested messages. C codecs remain the only wire
+implementation; generated C ABI stays 32. Binding source API revision 1 is
+recorded independently in `wlc-sdk-info.json` and the Python module.
+
+Build native SDKs against a matching Wirelink 0.7.0 development installation
+with `WIRELINK_BUILD_CPP_BINDINGS` and `WIRELINK_BUILD_PLATFORM` enabled. Source
+wheel builds require static PIC native libraries plus C++/CMake/Python build
+tools; generated C ships in the sdist so WLC/Rust is unnecessary there. Wheel
+users only install the matching wheel. See [SDK contracts and build workflow](docs/sdk.md).
+
 ## Codec implementation planning
 
 For compiler changes, follow the [generator source map and correctness gates](docs/codegen.md).

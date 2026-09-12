@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: Apache-2.0
+from typing import Any
+
+core_version: str
+codegen_abi: int
+binding_api: int
+
+class Error:
+    kind: str
+    status: int
+    rejection: int
+    local_error: int
+    transport_error: int
+    runtime_error: int
+    codec_error: int
+    os_error: int
+    os_message: str
+
+def connect(peer_address: str, peer_port: int, bind_address: str, bind_port: int) -> tuple[Client | None, Error | None]: ...
+
+class Client:
+    def close(self) -> None: ...
+    @property
+    def is_open(self) -> bool: ...
+    @property
+    def local_port(self) -> int: ...

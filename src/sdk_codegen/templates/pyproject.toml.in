@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+[build-system]
+requires = ["scikit-build-core>=1.0,<2", "nanobind>=3.0,<4"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "@DISTRIBUTION@"
+version = "@VERSION@"
+description = "Generated synchronous Python/C++ SDK for @NAME@"
+readme = "README.md"
+requires-python = ">=3.10"
+license-files = ["LICENSE", "licenses/*"]
+
+[tool.scikit-build]
+minimum-version = "build-system.requires"
+build-dir = "build/{wheel_tag}"
+wheel.packages = ["python/@PY_PACKAGE@"]
+install.components = ["python"]
+sdist.include = ["generated/**", "python/**", "include/**", "src/**", "cmake/**", "tests/**", "licenses/**", "CMakeLists.txt", "README.md", "LICENSE", "pyproject.toml", "wlc-sdk-*.json", "wlc-sdk-name.txt"]
+sdist.exclude = ["build/**", "dist/**", ".pytest_cache/**", "**/__pycache__/**"]
+
+[tool.scikit-build.cmake.define]
+@UPPER@_BUILD_PYTHON = "ON"
+BUILD_TESTING = "OFF"

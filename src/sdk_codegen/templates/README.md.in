@@ -1,0 +1,97 @@
+# @CMAKE_PACKAGE@
+
+Generated C++20 / Python 3.10+ SDK for `@NAME@`, version `@VERSION@`.
+The preview source API is binding revision @BINDING_API@. It supports managed,
+synchronous RPC over UDP. Connecting opens local I/O without a peer handshake.
+
+## Python users
+
+Install a matching wheel provided by your SDK maintainer:
+
+```sh
+python -m pip install /path/to/@DISTRIBUTION@-VERSION-PYTHON-ABI-PLATFORM.whl
+```
+
+```python
+from @PY_PACKAGE@ import Client, Udp
+
+with Client.connect(Udp(peer=("127.0.0.1", 49101))) as device:
+    # Call a schema service with device.<service>(field=value, timeout=1.0),
+    # or device.<service>_request(Request(...), timeout=1.0).
+    print(device.local_port)
+```
+
+Wheel users do not need Wirelink, WLC, Rust, CMake, nanobind or a compiler.
+Wheels contain private static native dependencies and a separate nanobind domain.
+Use a different SDK name for each independently distributed schema package.
+
+## SDK maintainers
+
+Build/install the matching Wirelink 0.7.0 development checkout with
+`WIRELINK_BUILD_CPP_BINDINGS=ON`, `WIRELINK_BUILD_PLATFORM=ON`,
+`WIRELINK_BUILD_EXAMPLES=OFF`, `BUILD_SHARED_LIBS=OFF` and
+`CMAKE_POSITION_INDEPENDENT_CODE=ON`. Provide standalone Asio headers through
+`WIRELINK_ASIO_INCLUDE_DIR`. These are source-build prerequisites, including when
+building from an sdist; pre-generated C is included so WLC/Rust is unnecessary.
+
+```sh
+cmake -S . -B build/native -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_PREFIX_PATH=/absolute/path/to/wirelink-install \
+  -DCMAKE_INSTALL_PREFIX=/absolute/path/to/sdk-install
+cmake --build build/native --config Release --parallel
+cmake --install build/native --config Release
+
+python -m pip install build
+python -m build --outdir dist \
+  -Ccmake.define.CMAKE_PREFIX_PATH=/absolute/path/to/wirelink-install
+```
+
+The build verifies the paired WLC C ABI using the included manifest. A local
+Linux wheel still needs a supported manylinux build/repair before broad release.
+No package is published by generation or building. License notices for bundled
+native dependencies are included; retain them when distributing wheels.
+
+## C++ users
+
+```cmake
+find_package(@CMAKE_PACKAGE@ CONFIG REQUIRED)
+target_link_libraries(my_app PRIVATE @CMAKE_PACKAGE@::client)
+```
+
+Include `<@NAME@/client.hpp>` and use `@NAME@::Client::connect(UdpOptions)`.
+Connect and RPC return `wirelink::Result<T>`. The handle is move-only; calls and
+close are safe from multiple threads. Moving/destroying a handle requires
+exclusive access to the handle; keep request objects unchanged during calls.
+The installed C++ package requires the matching native Wirelink development package.
+
+## Values and compatibility
+
+- All responses own their strings, bytes, arrays and nested messages, including
+  after close. Python dataclasses are frozen and arrays normalize to tuples.
+- Optional fields use `std::optional<T>` / `T | None`. An absent value stays
+  absent on re-encoding. For explicit schema defaults, `<field>_or_default()`
+  in C++ / `<field>_or_default` in Python reads the default without changing presence.
+- Strings are UTF-8, bounded in bytes, and may contain NUL. Bytes normalize to
+  immutable `bytes` in Python. Packed arrays have an exact schema length.
+- Enums preserve unknown signed 32-bit values. Python enums are open `IntEnum`s;
+  C++ uses an enum class with `int32_t` storage.
+- Public types use PascalCase; fields/services use snake_case. Language keywords
+  and `self`/`timeout`/`session` gain a trailing underscore. Collisions, unsupported
+  profiles and unbounded messages fail generation. Required Python fields precede
+  optional fields in positional constructors; prefer keywords for evolving schemas.
+- Python failures retain status/rejection/local/transport/runtime/codec/OS details.
+  Parameter validation raises TypeError/ValueError; native RPC errors have distinct
+  classes. Blocking native operations release the GIL.
+
+This preview does not provide asyncio, subscriptions, Serial/USB, Bulk, dynamic
+schemas, free-threaded Python, subinterpreters, or a stable C++ binary ABI.
+Multiple independent wheels can coexist. Linking SDKs with overlapping generated
+C symbol names into one C++ executable needs shared codec composition and is not
+provided by this standalone package generator.
+
+`wlc-sdk-manifest.json` records deterministic provenance for this project; its
+artifact digests are diagnostic, not cryptographic authentication. Regenerate into
+a dedicated directory. `--overwrite` replaces generated files only, keeps other
+files, and requires the same SDK name. Keep hand-maintained tests/custom build
+integration outside generated files; `tests/CMakeLists.txt`, if present, is loaded
+when `BUILD_TESTING` is enabled.

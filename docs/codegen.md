@@ -21,6 +21,7 @@ schema/profile syntax and generated API are not defined by the module layout.
 | Retained routes, RPC, dispatch, pump | Matching files in `runtime_codegen/` |
 | Default endpoint and managed RPC glue | `endpoint_codegen.rs`, `rpc_endpoint_codegen.rs`, `managed_rpc_codegen.rs` |
 | Shared managed request admission and response completion | `managed_rpc_server.c.in` |
+| Host SDK validation, owned C++/Python types, C endpoint bridge and package templates | `sdk_codegen/` (see [SDK contracts](sdk.md)) |
 | Local role/envelope capabilities and transport bounds | `endpoint_layout.rs`, `endpoint_transport_codegen.rs` |
 
 `CModel` performs codec-side validation and computes bounds once per generation

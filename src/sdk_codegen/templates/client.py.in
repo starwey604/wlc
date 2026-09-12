@@ -1,0 +1,40 @@
+
+
+class Client:
+    """Owns a UDP connection. Calls and close may run from multiple threads.
+
+    Connecting starts local I/O without a peer handshake. Responses own all data.
+    """
+
+    def __init__(self, native_client: _native.Client) -> None:
+        if not isinstance(native_client, _native.Client):
+            raise TypeError("create a Client using Client.connect(Udp(...))")
+        self._client = native_client
+
+    @_builtins.classmethod
+    def connect(cls, transport: Udp) -> Client:
+        if not isinstance(transport, Udp):
+            raise TypeError("transport must be Udp")
+        native, error = _native.connect(*transport.peer, *transport.bind)
+        if error is not None:
+            _runtime._raise(error)
+        assert native is not None
+        return cls(native)
+
+    @_builtins.property
+    def is_open(self) -> bool:
+        return self._client.is_open
+
+    @_builtins.property
+    def local_port(self) -> int:
+        return self._client.local_port
+
+    def close(self) -> None:
+        self._client.close()
+
+    def __enter__(self) -> Client:
+        return self
+
+    def __exit__(self, kind: type[BaseException] | None, error: BaseException | None,
+                 traceback: _TracebackType | None) -> None:
+        self.close()

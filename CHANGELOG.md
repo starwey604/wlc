@@ -2,6 +2,17 @@
 
 ## 0.7.0-dev — unreleased
 
+- Add `wlc sdk` and the `generate_sdk` library API for deterministic standalone
+  C++20 / typed Python SDK projects, reusing the existing C codec/runtime.
+- Generate managed synchronous UDP Clients, bounded owned values, optional
+  presence/default accessors, open enums, packed arrays and nested conversions.
+- Emit CMake install/export, nanobind bridge/stubs, scikit-build-core wheel/sdist
+  projects and dependency notices. Validate target names, unsupported profiles
+  and sizes before writing; protect existing outputs unless `--overwrite` is explicit.
+- Preserve C ABI **32**, schema/profile identities and all existing C output.
+  The separate binding source API is preview revision **1**; this is not a
+  release of prebuilt SDK wheels, a stable C++ binary ABI, or an async API.
+
 - Trim RPC receive dispatch to the composed endpoint's client/server role,
   preserving missing-route/delivery diagnostics and RX release behavior.
 - Share managed request metadata/session checks, peer observation, replay

@@ -1,0 +1,77 @@
+# SPDX-License-Identifier: Apache-2.0
+cmake_minimum_required(VERSION 3.21)
+project(@CMAKE_PACKAGE@ VERSION @CMAKE_VERSION@ LANGUAGES C CXX)
+include(CTest)
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+find_package(Wirelink 0.7.0 EXACT CONFIG REQUIRED)
+foreach(dependency cpp_host platform)
+  if(NOT TARGET Wirelink::${dependency})
+    message(FATAL_ERROR "Install Wirelink with CPP_BINDINGS and PLATFORM enabled")
+  endif()
+endforeach()
+
+# Checked-in C artifacts make the source distribution independent of a WLC
+# checkout/compiler. Verify the paired ABI before compiling any generated C.
+set(WIRELINK_WLC_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/generated/@NAME@_manifest.json")
+set(WIRELINK_WLC_EXPECTED_VERSION "${WIRELINK_WLC_VERSION}")
+set(WIRELINK_WLC_EXPECTED_ABI "${WIRELINK_WLC_CODEGEN_ABI}")
+include("${Wirelink_DIR}/WirelinkWlcVerifyManifest.cmake")
+
+add_library(@NAME@_client STATIC src/client.cpp src/endpoint.c generated/@NAME@.c
+  generated/@NAME@_bindings.c generated/@NAME@_runtime.c)
+add_library(@CMAKE_PACKAGE@::client ALIAS @NAME@_client)
+set_target_properties(@NAME@_client PROPERTIES EXPORT_NAME client
+  POSITION_INDEPENDENT_CODE ON C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO
+  CXX_VISIBILITY_PRESET hidden C_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+target_compile_features(@NAME@_client PUBLIC cxx_std_20)
+target_include_directories(@NAME@_client PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+  PRIVATE generated)
+target_link_libraries(@NAME@_client PUBLIC Wirelink::cpp_host PRIVATE Wirelink::platform)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+  target_compile_options(@NAME@_client PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+install(TARGETS @NAME@_client EXPORT @CMAKE_PACKAGE@Targets
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT development)
+install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR} COMPONENT development)
+install(EXPORT @CMAKE_PACKAGE@Targets NAMESPACE @CMAKE_PACKAGE@::
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/@CMAKE_PACKAGE@ COMPONENT development)
+configure_package_config_file(cmake/@CMAKE_PACKAGE@Config.cmake.in
+  "${CMAKE_CURRENT_BINARY_DIR}/@CMAKE_PACKAGE@Config.cmake"
+  INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/@CMAKE_PACKAGE@)
+write_basic_package_version_file("${CMAKE_CURRENT_BINARY_DIR}/@CMAKE_PACKAGE@ConfigVersion.cmake"
+  VERSION ${PROJECT_VERSION} COMPATIBILITY SameMinorVersion)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/@CMAKE_PACKAGE@Config.cmake"
+  "${CMAKE_CURRENT_BINARY_DIR}/@CMAKE_PACKAGE@ConfigVersion.cmake"
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/@CMAKE_PACKAGE@ COMPONENT development)
+
+option(@UPPER@_BUILD_PYTHON "Build the @NAME@ Python extension" OFF)
+if(@UPPER@_BUILD_PYTHON)
+  find_package(Python 3.10 REQUIRED COMPONENTS Interpreter Development.Module)
+  execute_process(COMMAND "${Python_EXECUTABLE}" -m nanobind --cmake_dir
+    OUTPUT_VARIABLE _nanobind_dir OUTPUT_STRIP_TRAILING_WHITESPACE
+    COMMAND_ERROR_IS_FATAL ANY)
+  find_package(nanobind 3 CONFIG REQUIRED PATHS "${_nanobind_dir}")
+  foreach(dependency wirelink host asio_udp platform cpp_host)
+    get_target_property(_type Wirelink::${dependency} TYPE)
+    if(NOT _type STREQUAL "STATIC_LIBRARY")
+      message(FATAL_ERROR "The self-contained SDK wheel requires static Wirelink::${dependency}")
+    endif()
+  endforeach()
+  nanobind_add_module(@NAME@_native NB_STATIC NB_DOMAIN @PY_PACKAGE@ src/python.cpp)
+  set_target_properties(@NAME@_native PROPERTIES OUTPUT_NAME _native)
+  target_link_libraries(@NAME@_native PRIVATE @CMAKE_PACKAGE@::client)
+  if(UNIX AND NOT APPLE)
+    # Do not expose static Wirelink/WLC symbols to other independently built SDKs.
+    target_link_options(@NAME@_native PRIVATE "LINKER:--exclude-libs,ALL")
+  endif()
+  install(TARGETS @NAME@_native LIBRARY DESTINATION @PY_PACKAGE@ COMPONENT python
+    RUNTIME DESTINATION @PY_PACKAGE@ COMPONENT python)
+endif()
+
+if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/CMakeLists.txt")
+  add_subdirectory(tests)
+endif()

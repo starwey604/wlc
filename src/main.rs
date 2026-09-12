@@ -15,6 +15,24 @@ struct Arguments {
 
 #[derive(clap::Subcommand)]
 enum Command {
+    /// Generate a complete synchronous UDP C++ / Python SDK project.
+    Sdk {
+        schema: PathBuf,
+        #[arg(long, required = true)]
+        profile: Vec<PathBuf>,
+        #[arg(long)]
+        out_dir: PathBuf,
+        /// C++ namespace; Python package is <name>_sdk. Defaults to the schema stem.
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long, default_value = "0.1.0.dev1")]
+        package_version: String,
+        #[arg(long)]
+        previous: Option<PathBuf>,
+        /// Replace generated files in an existing project with the same SDK name.
+        #[arg(long)]
+        overwrite: bool,
+    },
     /// Print the generated C API/layout revision for build-tool compatibility checks.
     CodegenAbi,
     /// Print canonical transitive schema inputs, one path per line.
@@ -68,6 +86,12 @@ enum Command {
 }
 
 enum Operation {
+    Sdk {
+        output: PathBuf,
+        name: Option<String>,
+        package_version: String,
+        overwrite: bool,
+    },
     Validate,
     Compile(PathBuf),
     CompileRuntime {
@@ -86,6 +110,25 @@ fn is_portable_c_identifier(value: &str) -> bool {
 fn main() -> Result<()> {
     let arguments = Arguments::parse();
     let (schema_path, previous, profile, operation) = match arguments.command {
+        Command::Sdk {
+            schema,
+            profile,
+            out_dir,
+            name,
+            package_version,
+            previous,
+            overwrite,
+        } => (
+            schema,
+            previous,
+            profile,
+            Operation::Sdk {
+                output: out_dir,
+                name,
+                package_version,
+                overwrite,
+            },
+        ),
         Command::Dependencies { schema } => {
             for path in wlc::load_schema(&schema)?.dependencies {
                 println!("{}", path.display());
@@ -180,6 +223,63 @@ fn main() -> Result<()> {
     };
     let identity_operation = matches!(operation, Operation::Identity);
     match operation {
+        Operation::Sdk {
+            output,
+            name,
+            package_version,
+            overwrite,
+        } => {
+            let name = name.unwrap_or_else(|| {
+                schema_path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("sdk")
+                    .to_owned()
+            });
+            let generated = wlc::generate_sdk(
+                &model,
+                profile_model.as_ref().expect("sdk requires profiles"),
+                &wlc::SdkOptions {
+                    name,
+                    package_version,
+                },
+            )
+            .map_err(miette::Report::new)?;
+            // Preflight every path before touching an existing project. Invalid
+            // schemas/options and accidental edits never cause partial generation.
+            let marker = output.join("wlc-sdk-name.txt");
+            if marker.exists()
+                && fs::read_to_string(&marker).into_diagnostic()?
+                    != generated.files["wlc-sdk-name.txt"]
+            {
+                return Err(miette::miette!(
+                    "SDK name changed: choose a fresh output directory"
+                ));
+            }
+            for (path, contents) in &generated.files {
+                let destination = output.join(path);
+                if destination.exists() {
+                    let existing = fs::read(&destination).into_diagnostic()?;
+                    if existing != contents.as_bytes() && !overwrite {
+                        return Err(miette::miette!(
+                            "refusing to overwrite `{}`; regenerate into a fresh directory or pass --overwrite",
+                            destination.display()
+                        ));
+                    }
+                }
+            }
+            for (path, contents) in &generated.files {
+                let destination = output.join(path);
+                fs::create_dir_all(destination.parent().expect("project path has parent"))
+                    .into_diagnostic()?;
+                fs::write(destination, contents).into_diagnostic()?;
+            }
+            println!(
+                "generated C++ / Python SDK ({} files) in {}",
+                generated.files.len(),
+                output.display()
+            );
+        }
         Operation::Compile(output) => {
             fs::create_dir_all(&output).into_diagnostic()?;
             let stem = schema_path

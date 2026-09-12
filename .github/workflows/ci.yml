@@ -63,3 +63,6 @@ jobs:
 
       - name: Run portable CLI tests
         run: cargo test --locked --test cli
+
+      - name: Run portable SDK generator tests
+        run: cargo test --locked --test sdk -- --skip cpp_values_round_trip_through_the_real_c_codec

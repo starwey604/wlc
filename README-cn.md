@@ -1,5 +1,17 @@
 # wlc 中文指南
 
+## C++ / Python SDK 生成预览
+
+`wlc sdk calculator.wl --profile calculator.bind.wl --out-dir sdk --name calculator`
+可生成 C++20 Client、拥有数据的消息类型、带类型提示的 Python 包、nanobind 桥接和
+CMake／wheel／sdist 工程。无需手写桥接代码。此轮支持 UDP 上的托管同步 RPC，
+包括有界字符串／bytes、可选字段及默认值、未知 enum、固定 packed 数组和嵌套消息。
+可选值保留缺失状态，显式默认值通过 `<field>_or_default` 读取。
+
+源码构建需安装匹配的 Wirelink 0.7.0 开发包并启用 CPP_BINDINGS／PLATFORM；wheel
+用户无需 WLC、Rust 或 C++ 编译器。输出目录重复生成内容相同时可直接执行；替换已有生成文件
+须显式指定 `--overwrite`，修改 SDK 名称须使用新目录。详见 [英文 SDK 契约](docs/sdk.md)。
+
 `wlc` 是 Wirelink schema compiler：解析/验证 `.wl` schema、对照前一 revision 检查
 兼容性，并生成无动态分配的 C11 payload codec 及可选 typed binding/runtime。
 
