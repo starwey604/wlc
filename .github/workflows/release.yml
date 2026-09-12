@@ -6,6 +6,20 @@ on:
       - "v[0-9]+.[0-9]+.[0-9]+"
       - "v[0-9]+.[0-9]+.[0-9]+-*"
 
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to rebuild from canonical source
+        required: true
+        type: string
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+
+concurrency:
+  group: wlc-release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -14,6 +28,9 @@ jobs:
     name: Verify release source
     runs-on: ubuntu-24.04
     steps:
+      - name: Preserve canonical source line endings
+        run: git config --global core.autocrlf false
+
       - name: Check out Wirelink test dependency
         uses: actions/checkout@v7
         with:
@@ -25,6 +42,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           path: wirelink/wlc
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -36,7 +54,7 @@ jobs:
         shell: bash
         run: |
           crate_version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[0].version')"
-          test "v${crate_version}" = "${GITHUB_REF_NAME}"
+          test "v${crate_version}" = "${RELEASE_TAG}"
 
       - name: Check source and tests
         working-directory: wirelink/wlc
@@ -74,8 +92,13 @@ jobs:
             archive: tar.gz
     runs-on: ${{ matrix.os }}
     steps:
+      - name: Preserve canonical source line endings
+        run: git config --global core.autocrlf false
+
       - name: Check out wlc
         uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Install Rust target
         uses: dtolnay/rust-toolchain@stable
@@ -94,7 +117,7 @@ jobs:
         shell: bash
         run: |
           binary="target/${{ matrix.target }}/release/wlc"
-          test "$(${binary} --version)" = "wlc ${GITHUB_REF_NAME#v}"
+          test "$(${binary} --version)" = "wlc ${RELEASE_TAG#v}"
           "${binary}" compile tests/fixtures/release_smoke.wl \
             --profile tests/fixtures/release_smoke.bind.wl \
             --out-dir target/release-smoke
@@ -106,7 +129,7 @@ jobs:
         shell: pwsh
         run: |
           $binary = "target/${{ matrix.target }}/release/wlc.exe"
-          if ((& $binary --version) -ne "wlc $($env:GITHUB_REF_NAME.TrimStart('v'))") {
+          if ((& $binary --version) -ne "wlc $($env:RELEASE_TAG.TrimStart('v'))") {
             throw "release binary version does not match tag"
           }
           & $binary compile tests/fixtures/release_smoke.wl `
@@ -123,7 +146,7 @@ jobs:
           binary="target/${{ matrix.target }}/release/wlc${{ runner.os == 'Windows' && '.exe' || '' }}"
           "${binary}" sdk tests/fixtures/sdk/device.wl \
             --profile tests/fixtures/sdk/device.bind.wl \
-            --name device --package-version "${GITHUB_REF_NAME#v}" \
+            --name device --package-version "${RELEASE_TAG#v}" \
             --out-dir target/release-sdk
           test -f target/release-sdk/python/device_sdk/__init__.py
           test -f target/release-sdk/src/endpoint.c
@@ -161,8 +184,13 @@ jobs:
     needs: package
     runs-on: ubuntu-24.04
     steps:
+      - name: Preserve canonical source line endings
+        run: git config --global core.autocrlf false
+
       - name: Check out wlc
         uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Download packages
         uses: actions/download-artifact@v8
@@ -180,9 +208,13 @@ jobs:
         shell: bash
         run: |
           release_options=()
-          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+          if [[ "${RELEASE_TAG}" == *-* ]]; then
             release_options+=(--prerelease --latest=false)
           fi
-          gh release create "${GITHUB_REF_NAME}" dist/* \
-            --verify-tag --generate-notes --title "wlc ${GITHUB_REF_NAME}" \
-            "${release_options[@]}"
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" dist/* --clobber
+          else
+            gh release create "${RELEASE_TAG}" dist/* \
+              --verify-tag --generate-notes --title "wlc ${RELEASE_TAG}" \
+              "${release_options[@]}"
+          fi
