@@ -105,6 +105,7 @@ impl<'a> Plan<'a> {
         let mut types = BTreeSet::from_iter(
             [
                 "Client",
+                "AsyncClient",
                 "Udp",
                 "WirelinkError",
                 "ClosedError",
@@ -122,6 +123,14 @@ impl<'a> Plan<'a> {
             .map(str::to_owned),
         );
         for symbol in &schema.declarations {
+            if c_identifier(symbol.name()) == format!("{name}_sdk")
+                || c_identifier(symbol.name()).starts_with(&format!("{name}_sdk_"))
+            {
+                return Err(error(format!(
+                    "{}: binding name collision with reserved native bridge prefix `{name}_sdk_`",
+                    symbol.name()
+                )));
+            }
             insert(&mut types, type_name(symbol.name()), symbol.name())?;
         }
         for message in &c.messages {
@@ -178,10 +187,30 @@ impl<'a> Plan<'a> {
         }
         let mut methods =
             BTreeSet::from_iter(["connect", "close", "is_open", "local_port"].map(str::to_owned));
+        let mut bridge = BTreeSet::from_iter(
+            [
+                "endpoint_size",
+                "endpoint_alignment",
+                "endpoint_init",
+                "endpoint_close",
+                "cancel",
+                "call_t",
+            ]
+            .map(str::to_owned),
+        );
         for rpc in &profile.rpc_services {
             let method = identifier(&rpc.name);
+            let c_method = c_identifier(&rpc.name);
+            for symbol in [
+                c_method.clone(),
+                format!("{c_method}_submit"),
+                format!("{c_method}_done"),
+            ] {
+                insert(&mut bridge, symbol, &format!("{} native bridge", rpc.name))?;
+            }
             insert(&mut methods, method.clone(), &rpc.name)?;
             insert(&mut methods, format!("{method}_request"), &rpc.name)?;
+            insert(&mut methods, format!("{method}_async"), &rpc.name)?;
             for id in [rpc.request_id, rpc.response_id] {
                 if c.maxima[&id]
                     .unwrap()

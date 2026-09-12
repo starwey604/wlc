@@ -49,3 +49,7 @@ message Numbers @id(7) {
   optional bool flag @id(17) [default = true];
   optional string<16> text @id(18) [default = "a\"@NAME@"];
 }
+
+// Public response names must not collide with local C++ operation machinery.
+message CallRequest @id(100) {}
+message Call @id(101) {}

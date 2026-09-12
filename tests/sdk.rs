@@ -106,6 +106,26 @@ fn rejects_unbounded_and_oversized_messages_with_a_diagnostic() {
 fn rejects_public_names_that_collide_after_mapping() {
     for (schema, profile) in [
         (
+            "version 1; enum DeviceSdkCall @id(7) { X = 0; } message Request @id(1) {} message Response @id(2) {}",
+            RPC,
+        ),
+        (
+            SIMPLE,
+            "profile version 1; rpc Cancel { request = Request; response = Response; }",
+        ),
+        (
+            "version 1; message Request @id(1) {} message Response @id(2) {} message Notice @id(3) {} message Reply @id(4) {}",
+            "profile version 1; rpc Call { request = Request; response = Response; } rpc CallSubmit { request = Notice; response = Reply; }",
+        ),
+        (
+            "version 1; message AsyncClient @id(3) {} message Request @id(1) {} message Response @id(2) {}",
+            RPC,
+        ),
+        (
+            "version 1; message Request @id(1) {} message Response @id(2) {} message Notice @id(3) {} message Reply @id(4) {}",
+            "profile version 1; rpc Call { request = Request; response = Response; } rpc CallAsync { request = Notice; response = Reply; }",
+        ),
+        (
             "version 1; message Client @id(3) {} message Request @id(1) {} message Response @id(2) {}",
             RPC,
         ),
@@ -235,7 +255,52 @@ fn cpp_values_round_trip_through_the_real_c_codec() {
             ]);
         }
     }
-    for command in [&mut cc, &mut cxx, &mut Command::new(&executable)] {
+    // Compile the actual sync/async facade and C-only callback bridge too. This
+    // fixture includes names such as Mode and catches C/C++ namespace mistakes.
+    let mut bridge = Command::new("cc");
+    bridge
+        .args([
+            "-std=c11",
+            "-Wall",
+            "-Wextra",
+            "-Wpedantic",
+            "-Werror",
+            "-c",
+        ])
+        .arg(directory.path().join("src/endpoint.c"))
+        .arg("-o")
+        .arg(directory.path().join("endpoint.o"));
+    let mut client = Command::new("c++");
+    client
+        .args([
+            "-std=c++20",
+            "-Wall",
+            "-Wextra",
+            "-Wpedantic",
+            "-Werror",
+            "-c",
+        ])
+        .arg(directory.path().join("src/client.cpp"))
+        .arg("-o")
+        .arg(directory.path().join("client.o"));
+    for command in [&mut bridge, &mut client] {
+        for include in [
+            root.join("include"),
+            root.join("bindings/cpp/include"),
+            root.join("runtime/host/include"),
+            directory.path().join("include"),
+            directory.path().join("generated"),
+        ] {
+            command.arg("-I").arg(include);
+        }
+    }
+    for command in [
+        &mut cc,
+        &mut cxx,
+        &mut bridge,
+        &mut client,
+        &mut Command::new(&executable),
+    ] {
         let result = command.output().unwrap();
         assert!(
             result.status.success(),

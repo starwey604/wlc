@@ -1,0 +1,38 @@
+
+
+class AsyncClient(_runtime.AsyncConnection):
+    """An asyncio connection bound to the event loop used by connect().
+
+    Use async with or await close(). RPC cancellation is local and cannot undo
+    work already performed by the peer. Responses own all their data.
+    """
+
+    def __init__(self, native_client: _native.Client) -> None:
+        if not isinstance(native_client, _native.Client):
+            raise TypeError("create an AsyncClient using AsyncClient.connect(Udp(...))")
+        super().__init__(native_client)
+
+    @_builtins.classmethod
+    def connect(cls, transport: Udp) -> AsyncClient:
+        _runtime.asyncio.get_running_loop()
+        if not isinstance(transport, Udp):
+            raise TypeError("transport must be Udp")
+        native, error = _native.connect(*transport.peer, *transport.bind)
+        if error is not None:
+            _runtime._raise(error)
+        assert native is not None
+        try:
+            return cls(native)
+        except BaseException:
+            native.close()
+            raise
+
+    async def __aenter__(self) -> AsyncClient:
+        self._check_loop()
+        if self._closing:
+            _runtime._raise(_native.closed_error())
+        return self
+
+    async def __aexit__(self, kind: type[BaseException] | None,
+                        error: BaseException | None, traceback: _TracebackType | None) -> None:
+        await self.close()

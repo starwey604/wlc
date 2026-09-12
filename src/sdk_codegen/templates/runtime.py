@@ -168,3 +168,142 @@ def timeout_ms(timeout: float) -> int:
     if not 0 < timeout <= (2**31 - 1) / 1000 or not math.isfinite(timeout):
         raise ValueError("timeout must be positive and at most 2147483.647 seconds")
     return math.ceil(timeout * 1000)
+
+
+# Exactly one notification thread per AsyncClient, independent of RPC count.
+# The native owner only signals a condition variable; it never acquires the GIL.
+import asyncio
+import threading
+import weakref
+from collections.abc import Callable
+from typing import TypeVar
+
+_Response = TypeVar("_Response")
+
+
+def _drain_weak(owner: weakref.ReferenceType[AsyncConnection]) -> None:
+    connection = owner()
+    if connection is not None:
+        connection._drain()
+
+
+def _finish_close_weak(owner: weakref.ReferenceType[AsyncConnection]) -> None:
+    connection = owner()
+    if connection is not None:
+        # The worker has finished native close; only its return remains. Join
+        # before publishing closure so no notification thread escapes close().
+        connection._worker.join()
+        connection._drain()
+        if connection._closed is not None and not connection._closed.done():
+            connection._closed.set_result(None)
+
+
+def _completion_pump(signal: _native.CompletionSignal,
+                     loop: asyncio.AbstractEventLoop,
+                     owner: weakref.ReferenceType[AsyncConnection],
+                     client: _native.Client) -> None:
+    try:
+        while signal.wait():  # Native wait releases the GIL; no polling timer.
+            try:
+                loop.call_soon_threadsafe(_drain_weak, owner)
+            except RuntimeError:  # Event loop already closed by its application.
+                break
+    finally:
+        # Stop the native owner on this existing thread, without blocking the
+        # event loop or depending on its default executor for connection close.
+        client.close()
+        try:
+            loop.call_soon_threadsafe(_finish_close_weak, owner)
+        except RuntimeError:
+            pass
+
+
+class AsyncConnection:
+    # Include finished-but-undelivered calls in this bound. Even when the loop
+    # stalls, neither Python-owned results nor scheduled notifications can grow
+    # without bound. Native RPC admission may report a smaller endpoint limit.
+    _capacity = 8
+
+    def __init__(self, native_client: _native.Client) -> None:
+        self._loop = asyncio.get_running_loop()
+        self._client = native_client
+        self._pending: dict[int, tuple[Any, asyncio.Future[Any], Callable[..., Any]]] = {}
+        self._sequence = 0
+        self._closing = False
+        self._closed: asyncio.Future[None] | None = None
+        self._signal = _native.CompletionSignal()
+        self._worker = threading.Thread(
+            target=_completion_pump,
+            args=(self._signal, self._loop, weakref.ref(self), native_client),
+            name="wirelink-completions", daemon=True,
+        )
+        self._worker.start()
+
+    def _check_loop(self) -> None:
+        if asyncio.get_running_loop() is not self._loop:
+            raise RuntimeError("AsyncClient belongs to a different event loop")
+
+    @property
+    def is_open(self) -> bool:
+        return not self._closing and self._client.is_open
+
+    @property
+    def local_port(self) -> int:
+        return self._client.local_port
+
+    async def _invoke(self, submit: Callable[..., Any], request: tuple[Any, ...],
+                      decode: Callable[..., _Response], timeout: int) -> _Response:
+        self._check_loop()
+        if self._closing:
+            _raise(_native.closed_error())
+        if len(self._pending) >= self._capacity:
+            _raise(_native.queue_full_error())
+        operation, error = submit(request, timeout)
+        if error is not None:
+            _raise(error)
+        future: asyncio.Future[_Response] = self._loop.create_future()
+        self._sequence += 1
+        key = self._sequence
+        self._pending[key] = operation, future, decode
+        # Registration handles completion before this point, without a lost wake.
+        operation.notify_on_completion(self._signal)
+        try:
+            return await future
+        except asyncio.CancelledError:
+            operation.cancel()
+            raise
+
+    def _drain(self) -> None:
+        for key, (operation, future, decode) in tuple(self._pending.items()):
+            if not operation.done:
+                continue
+            del self._pending[key]
+            if future.done():
+                continue
+            try:
+                value, error = operation.result()
+                if error is not None:
+                    _raise(error)
+                future.set_result(decode(value))
+            except Exception as error:
+                future.set_exception(error)
+
+    async def close(self) -> None:
+        self._check_loop()
+        if self._closed is None:
+            self._closing = True
+            self._closed = self._loop.create_future()
+            self._signal.stop()
+        # Cancelling one waiter does not interrupt connection cleanup.
+        await asyncio.shield(self._closed)
+
+    def __del__(self) -> None:
+        # The worker holds a weak reference, so an unused connection can be
+        # collected. Deterministic cleanup remains async with / await close().
+        signal = getattr(self, "_signal", None)
+        if signal is not None:
+            signal.stop()
+        worker = getattr(self, "_worker", None)
+        client = getattr(self, "_client", None)
+        if client is not None and (worker is None or worker.ident is None):
+            client.close()  # Construction failed before starting the pump.

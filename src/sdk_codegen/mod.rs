@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Generate an owned C++20 / typed Python synchronous UDP SDK project.
+//! Generate an owned C++20 / typed Python synchronous/asynchronous UDP SDK project.
 use std::collections::BTreeMap;
 
 use miette::Diagnostic;
@@ -16,7 +16,7 @@ mod plan;
 mod python;
 
 /// Host source API revision, independent of the generated C layout ABI.
-pub const BINDING_API_VERSION: u32 = 1;
+pub const BINDING_API_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SdkOptions {

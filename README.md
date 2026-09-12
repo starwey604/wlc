@@ -21,10 +21,10 @@ Schema imports and repeated `--profile` work as in `compile`. The library entry
 is `generate_sdk(&schema, &profile, &SdkOptions { name, package_version })`;
 it returns sorted relative paths and contents without writing files.
 
-The initial target is managed synchronous RPC over UDP with bounded owned
+The target is managed synchronous and asynchronous RPC over UDP with bounded owned
 messages, including strings/bytes, optional fields/defaults, open enums, fixed
 packed numeric arrays and nested messages. C codecs remain the only wire
-implementation; generated C ABI stays 32. Binding source API revision 1 is
+implementation; generated C ABI stays 32. Binding source API revision 2 is
 recorded independently in `wlc-sdk-info.json` and the Python module.
 
 Build native SDKs against a matching Wirelink 0.7.0 development installation

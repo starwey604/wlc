@@ -15,7 +15,7 @@ struct Arguments {
 
 #[derive(clap::Subcommand)]
 enum Command {
-    /// Generate a complete synchronous UDP C++ / Python SDK project.
+    /// Generate a complete UDP C++ / Python SDK with sync and async clients.
     Sdk {
         schema: PathBuf,
         #[arg(long, required = true)]

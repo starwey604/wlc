@@ -2,6 +2,12 @@
 
 ## 0.7.0-dev — unreleased
 
+- Generate cancellable C++ operations and typed Python `AsyncClient` methods from
+  managed RPC profiles. Emit C-compiled async callbacks and a native-only signal
+  bridge; Python resolves bounded completions on its creating event loop.
+  Add async API collision diagnostics and advance binding source API to revision
+  **2**, retaining synchronous entry points and unchanged C artifacts/ABI 32.
+
 - Add `wlc sdk` and the `generate_sdk` library API for deterministic standalone
   C++20 / typed Python SDK projects, reusing the existing C codec/runtime.
 - Generate managed synchronous UDP Clients, bounded owned values, optional
@@ -10,8 +16,8 @@
   projects and dependency notices. Validate target names, unsupported profiles
   and sizes before writing; protect existing outputs unless `--overwrite` is explicit.
 - Preserve C ABI **32**, schema/profile identities and all existing C output.
-  The separate binding source API is preview revision **1**; this is not a
-  release of prebuilt SDK wheels, a stable C++ binary ABI, or an async API.
+  The separate binding source API is preview revision **2**; this is not a
+  release of prebuilt SDK wheels, or a stable C++ binary ABI.
 
 - Trim RPC receive dispatch to the composed endpoint's client/server role,
   preserving missing-route/delivery diagnostics and RX release behavior.
