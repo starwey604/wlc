@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
 
 permissions:
   contents: write
@@ -97,8 +98,8 @@ jobs:
           "${binary}" compile tests/fixtures/release_smoke.wl \
             --profile tests/fixtures/release_smoke.bind.wl \
             --out-dir target/release-smoke
-          test "$(${binary} codegen-abi)" = "31"
-          test "$(jq -r '.compiler.codegen_abi' target/release-smoke/release_smoke_manifest.json)" = "31"
+          test "$(${binary} codegen-abi)" = "32"
+          test "$(jq -r '.compiler.codegen_abi' target/release-smoke/release_smoke_manifest.json)" = "32"
 
       - name: Smoke-test release binary
         if: runner.os == 'Windows'
@@ -165,9 +166,12 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh release create "${GITHUB_REF_NAME}"
-          dist/*
-          --verify-tag
-          --generate-notes
-          --title "wlc ${GITHUB_REF_NAME}"
+        shell: bash
+        run: |
+          release_options=()
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            release_options+=(--prerelease --latest=false)
+          fi
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --verify-tag --generate-notes --title "wlc ${GITHUB_REF_NAME}" \
+            "${release_options[@]}"

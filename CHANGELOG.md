@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.7.0-dev — unreleased
+## 0.7.0-rc.1 — 2026-09-12
+
+First published ABI **32** compiler, paired with Wirelink v0.7.0-rc.1.
+Static schema imports and borrowed direct routes require consumers to regenerate
+and rebuild together. This prerelease preserves the development ABI 32 layouts
+and wire formats and publishes checksummed host packages for all five platforms.
 
 - Generate cancellable C++ operations and typed Python `AsyncClient` methods from
   managed RPC profiles. Emit C-compiled async callbacks and a native-only signal
