@@ -2,15 +2,18 @@
 
 ## C++ / Python SDK 生成
 
-`wlc sdk calculator.wl --profile calculator.bind.wl --out-dir sdk --name calculator`
-可生成 C++20 Client、拥有数据的消息类型、带类型提示的 Python 包、nanobind 桥接和
-CMake／wheel／sdist 工程。无需手写桥接代码。此轮支持 UDP 上的托管同步 RPC，
-包括有界字符串／bytes、可选字段及默认值、未知 enum、固定 packed 数组和嵌套消息。
-可选值保留缺失状态，显式默认值通过 `<field>_or_default` 读取。
+```sh
+wlc sdk calculator.wl --profile calculator.bind.wl --out-dir sdk \
+  --name calculator --package-version 1.0.0
+```
 
-源码构建需安装匹配的 Wirelink 0.8.0 开发包并启用 CPP_BINDINGS／PLATFORM；wheel
-用户无需 WLC、Rust 或 C++ 编译器。输出目录重复生成内容相同时可直接执行；替换已有生成文件
-须显式指定 `--overwrite`，修改 SDK 名称须使用新目录。详见 [英文 SDK 契约](docs/sdk.md)。
+此命令生成可安装的 C++20 SDK 和带类型注解的 Python 包，包含拥有数据的消息类型、nanobind 桥接、CMake 导出及 wheel/sdist 构建配置。支持 UDP 上的 managed RPC，包括同步调用、可取消的 C++ `Operation<T>` 和 Python `AsyncClient`。
+
+业务值支持有界字符串和字节串、可选字段及默认值、保留未知值的枚举、固定长度 packed 数组和嵌套消息。可选值保留缺失状态，显式默认值通过 `<field>_or_default` 读取。响应数据在关闭连接后仍可使用。
+
+源码构建需安装匹配的 Wirelink 0.8.0 开发包，启用 `WIRELINK_BUILD_CPP_BINDINGS`、`WIRELINK_BUILD_PLATFORM` 和静态 PIC 构建，并提供 standalone Asio 头文件。wheel 用户无需 WLC、Rust 或 C++ 编译器。生成包版本由 SDK 维护者自行决定。
+
+重复生成相同内容可直接执行；替换已有生成文件须显式指定 `--overwrite`，修改 SDK 名称须使用新目录。Binding source API revision 为 2，生成 C ABI 为 32；不承诺跨编译器的稳定 C++ 二进制 ABI。暂不提供订阅、Python 服务端、Serial/USB、Bulk、动态 schema、free-threaded Python 或子解释器支持。详见 [SDK 契约](docs/sdk.md)。
 
 `wlc` 是 Wirelink schema compiler：解析/验证 `.wl` schema、对照前一 revision 检查
 兼容性，并生成无动态分配的 C11 payload codec 及可选 typed binding/runtime。
