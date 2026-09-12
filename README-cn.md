@@ -28,7 +28,7 @@ compiler version 与 generated-code ABI 是两个兼容轴。`wlc --version` 报
 manifest 的 `compiler.codegen_abi` 记录生成 ABI；build 必须同时 pin 两者，不能跟随 branch
 或自动使用最新版。
 
-当前开发版为 `0.7.0-dev`，`wlc codegen-abi` 输出 32（未发布）；核心和所有生成
+当前预发布版为 `0.7.0-rc.1`，`wlc codegen-abi` 输出 32；发布包提供五个平台的主机工具和 SHA256SUMS。核心和所有生成
 消费者必须配套重建。此轮支持根 schema 的 `import "arm.wl";` 静态组合，以及
 profile 的 `direct BulkChunk { delivery = reliable; }` 借用式接收路由。
 导入相对当前文件解析，共享文件去重，循环与全局 ID/名称冲突在编译期拒绝；根版本

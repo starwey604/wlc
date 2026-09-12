@@ -2,7 +2,7 @@
   "format": "wirelink-codegen-manifest-v1",
   "compiler": {
     "name": "wlc",
-    "version": "0.7.0-dev",
+    "version": "0.7.0-rc.1",
     "codegen_abi": 32
   },
   "module": "business",
