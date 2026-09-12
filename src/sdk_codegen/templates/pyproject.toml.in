@@ -6,7 +6,7 @@ build-backend = "scikit_build_core.build"
 [project]
 name = "@DISTRIBUTION@"
 version = "@VERSION@"
-description = "Generated synchronous Python/C++ SDK for @NAME@"
+description = "Generated synchronous and asynchronous Python/C++ SDK for @NAME@"
 readme = "README.md"
 requires-python = ">=3.10"
 license-files = ["LICENSE", "licenses/*"]

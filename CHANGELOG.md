@@ -1,28 +1,27 @@
 # Changelog
 
+## 0.8.0 — 2026-09-13
+
+- Add `wlc sdk` and the `generate_sdk` API for deterministic standalone C++20 /
+  typed Python SDK projects, reusing the C codec and managed UDP runtime.
+- Generate owning synchronous clients, cancellable C++ operations and Python
+  `AsyncClient`, bounded completion delivery, typed exceptions and package metadata.
+- Support bounded strings/bytes, optional fields/defaults, open enums, fixed arrays
+  and nested values. Reject unsupported profiles and generated-name collisions.
+- Emit installable CMake packages, nanobind bridges, stubs, wheels/sdists and
+  dependency notices. Require matching Wirelink 0.8.0 native development packages.
+- Binding source API is revision **2**; C codegen ABI stays **32** and protocol v1
+  is unchanged. No stable cross-compiler C++ binary ABI is promised.
+- Reduce generated RPC dispatch size with role-aware shared control flow and a
+  Cortex-M7 text-size regression gate.
+- Retain verified host compiler archives for all five release platforms.
+
 ## 0.7.0-rc.1 — 2026-09-12
 
 First published ABI **32** compiler, paired with Wirelink v0.7.0-rc.1.
 Static schema imports and borrowed direct routes require consumers to regenerate
 and rebuild together. This prerelease preserves the development ABI 32 layouts
 and wire formats and publishes checksummed host packages for all five platforms.
-
-- Generate cancellable C++ operations and typed Python `AsyncClient` methods from
-  managed RPC profiles. Emit C-compiled async callbacks and a native-only signal
-  bridge; Python resolves bounded completions on its creating event loop.
-  Add async API collision diagnostics and advance binding source API to revision
-  **2**, retaining synchronous entry points and unchanged C artifacts/ABI 32.
-
-- Add `wlc sdk` and the `generate_sdk` library API for deterministic standalone
-  C++20 / typed Python SDK projects, reusing the existing C codec/runtime.
-- Generate managed synchronous UDP Clients, bounded owned values, optional
-  presence/default accessors, open enums, packed arrays and nested conversions.
-- Emit CMake install/export, nanobind bridge/stubs, scikit-build-core wheel/sdist
-  projects and dependency notices. Validate target names, unsupported profiles
-  and sizes before writing; protect existing outputs unless `--overwrite` is explicit.
-- Preserve C ABI **32**, schema/profile identities and all existing C output.
-  The separate binding source API is preview revision **2**; this is not a
-  release of prebuilt SDK wheels, or a stable C++ binary ABI.
 
 - Trim RPC receive dispatch to the composed endpoint's client/server role,
   preserving missing-route/delivery diagnostics and RX release behavior.

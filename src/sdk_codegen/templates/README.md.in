@@ -1,7 +1,7 @@
 # @CMAKE_PACKAGE@
 
 Generated C++20 / Python 3.10+ SDK for `@NAME@`, version `@VERSION@`.
-The preview source API is binding revision @BINDING_API@. It supports managed,
+The source API is binding revision @BINDING_API@. It supports managed,
 synchronous and asynchronous RPC over UDP. Connecting opens local I/O without a peer handshake.
 
 ## Python users
@@ -41,7 +41,7 @@ Use a different SDK name for each independently distributed schema package.
 
 ## SDK maintainers
 
-Build/install the matching Wirelink 0.7.0 development checkout with
+Build/install the matching Wirelink 0.8.0 checkout with
 `WIRELINK_BUILD_CPP_BINDINGS=ON`, `WIRELINK_BUILD_PLATFORM=ON`,
 `WIRELINK_BUILD_EXAMPLES=OFF`, `BUILD_SHARED_LIBS=OFF` and
 `CMAKE_POSITION_INDEPENDENT_CODE=ON`. Provide standalone Asio headers through
@@ -104,7 +104,7 @@ The installed C++ package requires the matching native Wirelink development pack
   Parameter validation raises TypeError/ValueError; native RPC errors have distinct
   classes. Blocking native operations release the GIL.
 
-This preview does not provide subscriptions, Serial/USB, Bulk, dynamic
+This SDK does not provide subscriptions, Serial/USB, Bulk, dynamic
 schemas, free-threaded Python, subinterpreters, or a stable C++ binary ABI.
 Multiple independent wheels can coexist. Linking SDKs with overlapping generated
 C symbol names into one C++ executable needs shared codec composition and is not

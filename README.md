@@ -7,7 +7,7 @@ payload codecs plus optional typed Wirelink bindings.
 A Chinese review version is available in [`README-cn.md`](README-cn.md). This
 English document and the generated/public interfaces remain normative.
 
-## C++ / Python SDK generation (preview)
+## C++ / Python SDK generation
 
 ```sh
 wlc sdk calculator.wl --profile calculator.bind.wl --out-dir sdk \
@@ -27,7 +27,7 @@ packed numeric arrays and nested messages. C codecs remain the only wire
 implementation; generated C ABI stays 32. Binding source API revision 2 is
 recorded independently in `wlc-sdk-info.json` and the Python module.
 
-Build native SDKs against a matching Wirelink 0.7.0 development installation
+Build native SDKs against a matching Wirelink 0.8.0 installation
 with `WIRELINK_BUILD_CPP_BINDINGS` and `WIRELINK_BUILD_PLATFORM` enabled. Source
 wheel builds require static PIC native libraries plus C++/CMake/Python build
 tools; generated C ships in the sdist so WLC/Rust is unnecessary there. Wheel
@@ -61,8 +61,8 @@ The compiler version and generated-code ABI are separate compatibility axes.
 records `compiler.codegen_abi`. Build integrations should pin both rather than
 following a branch or the newest release.
 
-`wlc codegen-abi` prints this revision without requiring a schema. WLC 0.7.0-rc.1
-generates ABI 32 and pairs with Wirelink 0.7.0-rc.1. The v0.7.0-rc.1 prerelease
+`wlc codegen-abi` prints this revision without requiring a schema. WLC 0.8.0
+generates ABI 32 and pairs with Wirelink 0.8.0. The v0.8.0 release
 publishes verified host packages and a pinned source archive. Regenerate all codec/runtime artifacts
 and use the matching Wirelink core. `<module>_values.h` supplies bounded self-owning
 business values. `<runtime>_endpoint.h` is the ordinary endpoint entry; it

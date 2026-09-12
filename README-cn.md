@@ -1,6 +1,6 @@
 # wlc 中文指南
 
-## C++ / Python SDK 生成预览
+## C++ / Python SDK 生成
 
 `wlc sdk calculator.wl --profile calculator.bind.wl --out-dir sdk --name calculator`
 可生成 C++20 Client、拥有数据的消息类型、带类型提示的 Python 包、nanobind 桥接和
@@ -8,7 +8,7 @@ CMake／wheel／sdist 工程。无需手写桥接代码。此轮支持 UDP 上�
 包括有界字符串／bytes、可选字段及默认值、未知 enum、固定 packed 数组和嵌套消息。
 可选值保留缺失状态，显式默认值通过 `<field>_or_default` 读取。
 
-源码构建需安装匹配的 Wirelink 0.7.0 开发包并启用 CPP_BINDINGS／PLATFORM；wheel
+源码构建需安装匹配的 Wirelink 0.8.0 开发包并启用 CPP_BINDINGS／PLATFORM；wheel
 用户无需 WLC、Rust 或 C++ 编译器。输出目录重复生成内容相同时可直接执行；替换已有生成文件
 须显式指定 `--overwrite`，修改 SDK 名称须使用新目录。详见 [英文 SDK 契约](docs/sdk.md)。
 
@@ -40,7 +40,7 @@ compiler version 与 generated-code ABI 是两个兼容轴。`wlc --version` 报
 manifest 的 `compiler.codegen_abi` 记录生成 ABI；build 必须同时 pin 两者，不能跟随 branch
 或自动使用最新版。
 
-当前预发布版为 `0.7.0-rc.1`，`wlc codegen-abi` 输出 32；发布包提供五个平台的主机工具和 SHA256SUMS。核心和所有生成
+当前正式版为 `0.8.0`，`wlc codegen-abi` 输出 32；发布包提供五个平台的主机工具和 SHA256SUMS。核心和所有生成
 消费者必须配套重建。此轮支持根 schema 的 `import "arm.wl";` 静态组合，以及
 profile 的 `direct BulkChunk { delivery = reliable; }` 借用式接收路由。
 导入相对当前文件解析，共享文件去重，循环与全局 ID/名称冲突在编译期拒绝；根版本
