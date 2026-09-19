@@ -16,7 +16,7 @@ pub(super) fn emit(plan: &Plan<'_>, files: &mut BTreeMap<String, String>) {
     );
     files.insert(format!("python/{package}/py.typed"), String::new());
     let mut py = format!(
-        "# SPDX-License-Identifier: Apache-2.0\n\"\"\"Generated Wirelink SDK with synchronous and asyncio clients. Message data outlives the connection.\"\"\"\nfrom __future__ import annotations\n\nimport builtins as _builtins\nfrom dataclasses import dataclass as _dataclass\nfrom types import TracebackType as _TracebackType\nfrom typing import Any as _Any\nfrom . import _native, _runtime\nfrom ._runtime import (Udp, WirelinkError, ClosedError, RpcTimeoutError, CancelledError,\n    RejectedError, QueueFullError, TransportError, CodecError, InvalidArgumentError)\n\n__version__ = {}\ncore_version: str = _native.core_version\ncodegen_abi: int = _native.codegen_abi\nbinding_api: int = _native.binding_api\n",
+        "# SPDX-License-Identifier: Apache-2.0\n\"\"\"Generated Wirelink SDK with synchronous and asyncio clients. Message data outlives the connection.\"\"\"\nfrom __future__ import annotations\n\nimport builtins as _builtins\nfrom dataclasses import dataclass as _dataclass\nfrom types import TracebackType as _TracebackType\nfrom typing import Any as _Any\nfrom . import _native, _runtime\nfrom ._runtime import (Udp, WirelinkError, ClosedError, RpcTimeoutError, CancelledError,\n    RejectedError, QueueFullError, TransportError, CodecError, InvalidArgumentError)\n\n__version__ = {}\ncore_version: str = _native.core_version\ncodegen_contract: str = _native.codegen_contract\nbinding_api: int = _native.binding_api\n",
         python_string(&plan.options.package_version)
     );
     for enumeration in &plan.enums {
@@ -147,7 +147,7 @@ pub(super) fn emit(plan: &Plan<'_>, files: &mut BTreeMap<String, String>) {
         }
         writeln!(py, "        ), timeout=timeout)\n\n    async def {method}_request(self, request: {req}, *, timeout: float = 1.0) -> {resp}:\n        if not isinstance(request, {req}):\n            raise TypeError(\"request must be {req}\")\n        return await self._invoke(self._client.{method}_async, request._to_native(),\n                                  {resp}._from_native, _runtime.timeout_ms(timeout))").unwrap();
     }
-    py.push_str("\n\n__all__ = [\n    \"Client\", \"AsyncClient\", \"Udp\", \"WirelinkError\", \"ClosedError\", \"RpcTimeoutError\", \"CancelledError\",\n    \"RejectedError\", \"QueueFullError\", \"TransportError\", \"CodecError\", \"InvalidArgumentError\",\n    \"core_version\", \"codegen_abi\", \"binding_api\", \"__version__\",\n");
+    py.push_str("\n\n__all__ = [\n    \"Client\", \"AsyncClient\", \"Udp\", \"WirelinkError\", \"ClosedError\", \"RpcTimeoutError\", \"CancelledError\",\n    \"RejectedError\", \"QueueFullError\", \"TransportError\", \"CodecError\", \"InvalidArgumentError\",\n    \"core_version\", \"codegen_contract\", \"binding_api\", \"__version__\",\n");
     for ty in plan
         .enums
         .iter()
@@ -198,7 +198,7 @@ pub(super) fn emit(plan: &Plan<'_>, files: &mut BTreeMap<String, String>) {
         native.push_str("  );\n}\n\n");
     }
     native.push_str("} // namespace\n\nNB_MODULE(_native, module) {\n  module.attr(\"core_version\") = WIRELINK_VERSION_STRING;\n");
-    writeln!(native, "  module.attr(\"codegen_abi\") = {};\n  module.attr(\"binding_api\") = {BINDING_API_VERSION};", crate::CODEGEN_ABI_VERSION).unwrap();
+    writeln!(native, "  module.attr(\"codegen_contract\") = \"{}.{}\";\n  module.attr(\"binding_api\") = {BINDING_API_VERSION};", crate::CODEGEN_CONTRACT_MAJOR, crate::CODEGEN_CONTRACT_MINOR).unwrap();
     native.push_str(include_str!("templates/error.cpp.in"));
 
     native.push_str("  module.def(\"closed_error\", [] { return wirelink::Error::local(WL_ERR_NOT_INITIALIZED); });\n  module.def(\"queue_full_error\", [] { return wirelink::Error::local(WL_ERR_QUEUE_FULL); });\n  nb::class_<wlc_python_signal_handle>(module, \"CompletionSignal\")\n      .def(nb::init<>())\n      .def(\"wait\", &wlc_python_signal_handle::wait, nb::call_guard<nb::gil_scoped_release>())\n      .def(\"stop\", &wlc_python_signal_handle::stop);\n");

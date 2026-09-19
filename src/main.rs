@@ -33,8 +33,8 @@ enum Command {
         #[arg(long)]
         overwrite: bool,
     },
-    /// Print the generated C API/layout revision for build-tool compatibility checks.
-    CodegenAbi,
+    /// Print the generated-code contract version for build-tool compatibility checks.
+    CodegenContract,
     /// Print canonical transitive schema inputs, one path per line.
     Dependencies { schema: PathBuf },
     /// Validate a schema and optionally check it against its predecessor.
@@ -135,8 +135,12 @@ fn main() -> Result<()> {
             }
             return Ok(());
         }
-        Command::CodegenAbi => {
-            println!("{}", wlc::CODEGEN_ABI_VERSION);
+        Command::CodegenContract => {
+            println!(
+                "{}.{}",
+                wlc::CODEGEN_CONTRACT_MAJOR,
+                wlc::CODEGEN_CONTRACT_MINOR
+            );
             return Ok(());
         }
         Command::Validate {

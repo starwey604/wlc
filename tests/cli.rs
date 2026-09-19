@@ -4,13 +4,17 @@ use assert_cmd::Command;
 use tempfile::tempdir;
 
 #[test]
-fn codegen_abi_is_queryable_without_a_schema() {
+fn codegen_contract_is_queryable_without_a_schema() {
     Command::cargo_bin("wlc")
         .unwrap()
-        .arg("codegen-abi")
+        .arg("codegen-contract")
         .assert()
         .success()
-        .stdout(format!("{}\n", wlc::CODEGEN_ABI_VERSION));
+        .stdout(format!(
+            "{}.{}\n",
+            wlc::CODEGEN_CONTRACT_MAJOR,
+            wlc::CODEGEN_CONTRACT_MINOR
+        ));
 }
 
 #[test]

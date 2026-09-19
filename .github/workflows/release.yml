@@ -121,8 +121,9 @@ jobs:
           "${binary}" compile tests/fixtures/release_smoke.wl \
             --profile tests/fixtures/release_smoke.bind.wl \
             --out-dir target/release-smoke
-          test "$(${binary} codegen-abi)" = "32"
-          test "$(jq -r '.compiler.codegen_abi' target/release-smoke/release_smoke_manifest.json)" = "32"
+          test "$(${binary} codegen-contract)" = "0.8"
+          test "$(jq -r '.compiler.codegen_contract.major' target/release-smoke/release_smoke_manifest.json)" = "0"
+          test "$(jq -r '.compiler.codegen_contract.minor' target/release-smoke/release_smoke_manifest.json)" = "8"
 
       - name: Smoke-test release binary
         if: runner.os == 'Windows'
@@ -137,8 +138,8 @@ jobs:
             --out-dir target/release-smoke
           if ($LASTEXITCODE -ne 0) { throw "release compiler smoke test failed" }
           $manifest = Get-Content target/release-smoke/release_smoke_manifest.json | ConvertFrom-Json
-          if ((& $binary codegen-abi) -ne "32") { throw "unexpected compiler ABI" }
-          if ($manifest.compiler.codegen_abi -ne 32) { throw "unexpected manifest ABI" }
+          if ((& $binary codegen-contract) -ne "0.8") { throw "unexpected compiler contract" }
+          if ("$($manifest.compiler.codegen_contract.major).$($manifest.compiler.codegen_contract.minor)" -ne "0.8") { throw "unexpected manifest contract" }
 
       - name: Smoke-test SDK generation from the release binary
         shell: bash

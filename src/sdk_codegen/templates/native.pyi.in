@@ -2,7 +2,7 @@
 from typing import Any
 
 core_version: str
-codegen_abi: int
+codegen_contract: str
 binding_api: int
 
 class Error:

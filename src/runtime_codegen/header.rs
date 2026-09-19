@@ -4,7 +4,7 @@ use super::retained::{emit_retained_header_functions, emit_retained_header_type}
 use super::rpc::{emit_rpc_header_functions, emit_rpc_header_types};
 use crate::codegen::{c_identifier, type_name, upper_snake};
 use crate::identity::{IDENTITY_ALGORITHM, binding_profile_identity, schema_identity};
-use crate::manifest::CODEGEN_ABI_VERSION;
+use crate::manifest::{CODEGEN_CONTRACT_MAJOR, CODEGEN_CONTRACT_MINOR};
 use crate::profile_semantic::{BindingProfileModel, RetainedRouteKind, RpcService};
 use crate::semantic::SemanticModel;
 use std::collections::HashMap;
@@ -22,7 +22,7 @@ pub(super) fn emit_header(
     let prefix = upper_snake(module);
     let guard = format!("WIRELINK_GENERATED_{prefix}_RUNTIME_H");
     let mut output = format!(
-        "#ifndef {guard}\n#define {guard}\n\n#include \"{codec_module}_bindings.h\"\n#include <wirelink/pump.h>\n#include <wirelink/endpoint.h>\n#include <wirelink/allocator.h>\n#include <wirelink/frame.h>\n#include <string.h>\n"
+        "#ifndef {guard}\n#define {guard}\n\n#include \"{codec_module}_bindings.h\"\n#include <wirelink/pump.h>\n#include <wirelink/endpoint.h>\n#include <wirelink/allocator.h>\n#include <wirelink/frame.h>\n#include <wirelink/version.h>\n#include <string.h>\n"
     );
     if profile
         .retained_routes
@@ -70,7 +70,17 @@ pub(super) fn emit_header(
     .unwrap();
     writeln!(
         output,
-        "#define {prefix}_RUNTIME_CODEGEN_ABI_VERSION {CODEGEN_ABI_VERSION}U\n"
+        "#define {prefix}_CODEGEN_CONTRACT_MAJOR {CODEGEN_CONTRACT_MAJOR}U"
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "#define {prefix}_CODEGEN_CONTRACT_MINOR {CODEGEN_CONTRACT_MINOR}U"
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "#if !WIRELINK_CODEGEN_CONTRACT_ACCEPTS({prefix}_CODEGEN_CONTRACT_MAJOR, {prefix}_CODEGEN_CONTRACT_MINOR)\n#  error \"Generated code requires an incompatible Wirelink core; regenerate with a matching WLC.\"\n#endif\n"
     )
     .unwrap();
     writeln!(output, "/* Generated capabilities, not application overrides. */\n#define {prefix}_RUNTIME_HAS_RPC_CLIENT {}\n#define {prefix}_RUNTIME_HAS_RPC_SERVER {}\n", u8::from(profile.has_rpc_client()), u8::from(profile.has_rpc_server())).unwrap();

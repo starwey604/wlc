@@ -39,11 +39,11 @@ schema 属性或稳定阈值，不改变 codec 的线上字节。
 tagged release 为 Windows x86-64、Linux x86-64/aarch64（static musl）和 macOS
 x86-64/Apple Silicon 发布 host tool。使用前以 release 的 `SHA256SUMS` 校验 archive。
 
-compiler version 与 generated-code ABI 是两个兼容轴。`wlc --version` 报告 release，
-manifest 的 `compiler.codegen_abi` 记录生成 ABI；build 必须同时 pin 两者，不能跟随 branch
+compiler version 与生成契约是两个兼容轴。`wlc --version` 报告 release，
+manifest 的 `compiler.codegen_contract` 记录生成契约；build 必须同时 pin 两者，不能跟随 branch
 或自动使用最新版。
 
-当前正式版为 `0.8.0`，`wlc codegen-abi` 输出 32；发布包提供五个平台的主机工具和 SHA256SUMS。核心和所有生成
+当前正式版为 `0.8.0`，`wlc codegen-contract` 输出 0.8；发布包提供五个平台的主机工具和 SHA256SUMS。核心和所有生成
 消费者必须配套重建。此轮支持根 schema 的 `import "arm.wl";` 静态组合，以及
 profile 的 `direct BulkChunk { delivery = reliable; }` 借用式接收路由。
 导入相对当前文件解析，共享文件去重，循环与全局 ID/名称冲突在编译期拒绝；根版本
@@ -88,7 +88,7 @@ required、presence 与默认值不变，解码失败不修改输出。
 得到的视图仍借用原值，不能比原值活得更久。普通 RPC 直接消费自持值，
 不需要业务手工做这些转换。
 
-## 默认 RPC 端点（ABI 29）
+## 默认 RPC 端点
 
 有默认静态存储配方的 RPC profile 解码暂存跨服务共用。ABI 29 边遍历规范化编码
 边计算指纹，删除规范化请求缓冲及容量配置。含无界消息的高级 runtime 保留逐服务解码对象，
@@ -343,9 +343,8 @@ tagged union 组成。只在匹配 tag 时通过生成 accessor 读取 detail；
 dispatch release RX 或 reclaim 匹配 TX handle 后设置 `event_consumed`，owner fallback 只能在
 其为零时执行。
 
-当前固定宏为 `<MODULE>_RUNTIME_CODEGEN_ABI_VERSION 26`；`wlc codegen-abi` 可直接查询。
-ABI 改变时所有 runtime
-source 和字段访问一起更新。pump helper 共用一次 `now_ms`，最多 service 一个 response，
+生成头用 `<MODULE>_CODEGEN_CONTRACT_MAJOR` 和 `<MODULE>_CODEGEN_CONTRACT_MINOR` 声明契约；
+`wlc codegen-contract` 可直接查询。契约不匹配时生成头在编译期报错。pump helper 共用一次 `now_ms`，最多 service 一个 response，
 合并 RPC deadline，并可把借用 diagnostic result 交给 observer。
 
 ABI 19 在 runtime 头文件中增加默认端点 `*_endpoint_t`：自动组合连接缓冲区、
@@ -404,7 +403,7 @@ model 哈希，不受空白/声明顺序影响，但不是 cryptographic hash。
 而非 compatibility-aware；profile identity 依赖具体 schema。诊断时一起报告
 `(algorithm, schema identity, profile identity)`。
 
-manifest 记录 compiler release、codegen ABI、identity，以及排序后的 artifact byte size 和
+manifest 记录 compiler release、生成契约、identity，以及排序后的 artifact byte size 和
 domain-tagged FNV digest；省略 timestamp、绝对路径和 host 信息，所以相同输入/版本在不同
 workspace 产生 byte-identical manifest。digest 用于诊断完整性，不是签名。
 

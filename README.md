@@ -56,19 +56,19 @@ Tagged releases publish host tools for Windows x86-64, Linux x86-64/aarch64
 contains the `wlc` executable and this README. Verify an archive against the
 release's `SHA256SUMS` before using it in a build or CMake download cache.
 
-The compiler version and generated-code ABI are separate compatibility axes.
-`wlc --version` reports the release version, while every generated manifest
-records `compiler.codegen_abi`. Build integrations should pin both rather than
-following a branch or the newest release.
+The compiler version and the generated-code contract are separate compatibility
+axes. `wlc --version` reports the release version, while every generated manifest
+records `compiler.codegen_contract`. Build integrations should pin both rather
+than following a branch or the newest release.
 
-`wlc codegen-abi` prints this revision without requiring a schema. WLC 0.8.0
-generates ABI 32 and pairs with Wirelink 0.8.0. The v0.8.0 release
+`wlc codegen-contract` prints this contract without requiring a schema. WLC 0.8.0
+declares contract 0.8 and pairs with Wirelink 0.8.0. The v0.8.0 release
 publishes verified host packages and a pinned source archive. Regenerate all codec/runtime artifacts
 and use the matching Wirelink core. `<module>_values.h` supplies bounded self-owning
 business values. `<runtime>_endpoint.h` is the ordinary endpoint entry; it
 transitively includes runtime declarations for static layout, not an opaque ABI.
 
-### Static product composition (ABI 32)
+### Static product composition
 
 A root schema can compose independently maintained service schemas:
 
@@ -615,9 +615,10 @@ TX handle; owner loops may apply their fallback action only while it is zero. In
 `result.detail.rpc` only for `*_RUNTIME_DETAIL_RPC`; `*_RUNTIME_DETAIL_NONE`
 has no domain payload. A retained-only profile therefore does not carry the
 larger RPC result fields. Generated runtime headers likewise include only the
-LATEST, FIFO, and RPC public headers selected by that profile. The fixed
-`<MODULE>_RUNTIME_CODEGEN_ABI_VERSION` macro is `26` for this surface; regenerate
-all runtime sources and update field access together when that value changes.
+LATEST, FIFO, and RPC public headers selected by that profile. The generated
+`<MODULE>_CODEGEN_CONTRACT_MAJOR` and `<MODULE>_CODEGEN_CONTRACT_MINOR` macros
+declare the contract for this surface; the header rejects an incompatible core at
+compile time.
 
 Every generated result exposes `*_runtime_result_ok()` for the common success
 check and `*_runtime_result_str()` for diagnostic text. Profiles emit checked
@@ -812,7 +813,7 @@ For profiled output, treat `(identity algorithm, schema identity, binding
 profile identity)` as one diagnostic tuple. The profile identity is resolved
 against a schema and is not meaningful alone. Compatible schema revisions may
 have different exact identities. `wlc --version` reports the compiler package
-release. The generated manifest records that release, the codegen ABI, both
+release. The generated manifest records that release, the codegen contract, both
 available identities, and a sorted list of artifact byte sizes and
 domain-tagged FNV digests. It deliberately omits timestamps, absolute source
 paths, host details, and output-directory paths, so identical inputs and WLC

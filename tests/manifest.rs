@@ -1,6 +1,7 @@
 use wlc::{
-    ARTIFACT_DIGEST_ALGORITHM, CODEGEN_ABI_VERSION, CODEGEN_MANIFEST_FORMAT, COMPILER_VERSION,
-    ManifestArtifact, analyze_schema, generate_codegen_manifest, parse_schema, schema_identity,
+    ARTIFACT_DIGEST_ALGORITHM, CODEGEN_CONTRACT_MAJOR, CODEGEN_CONTRACT_MINOR,
+    CODEGEN_MANIFEST_FORMAT, COMPILER_VERSION, ManifestArtifact, analyze_schema,
+    generate_codegen_manifest, parse_schema, schema_identity,
 };
 
 fn schema(source: &str) -> wlc::SemanticModel {
@@ -34,7 +35,9 @@ fn manifest_is_order_independent_and_records_exact_provenance() {
     assert_eq!(first, second);
     assert!(first.starts_with(&format!("{{\n  \"format\": \"{CODEGEN_MANIFEST_FORMAT}\"")));
     assert!(first.contains(&format!("\"version\": \"{COMPILER_VERSION}\"")));
-    assert!(first.contains(&format!("\"codegen_abi\": {CODEGEN_ABI_VERSION}")));
+    assert!(first.contains(&format!(
+        "\"codegen_contract\": {{\"major\": {CODEGEN_CONTRACT_MAJOR}, \"minor\": {CODEGEN_CONTRACT_MINOR}}}"
+    )));
     assert!(first.contains(&format!(
         "\"schema\": \"0x{:016x}\"",
         schema_identity(&schema)

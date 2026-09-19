@@ -24,8 +24,9 @@ pub use codegen::{GeneratedC, generate_c};
 pub use identity::{IDENTITY_ALGORITHM, binding_profile_identity, schema_identity};
 pub use loader::{LoadedSchema, load_schema};
 pub use manifest::{
-    ARTIFACT_DIGEST_ALGORITHM, CODEGEN_ABI_VERSION, CODEGEN_MANIFEST_FORMAT, COMPILER_NAME,
-    COMPILER_VERSION, ManifestArtifact, generate_codegen_manifest,
+    ARTIFACT_DIGEST_ALGORITHM, CODEGEN_CONTRACT_MAJOR, CODEGEN_CONTRACT_MINOR,
+    CODEGEN_MANIFEST_FORMAT, COMPILER_NAME, COMPILER_VERSION, ManifestArtifact,
+    generate_codegen_manifest,
 };
 pub use parser::{ParseError, parse_schema};
 pub use profile::{BindingProfile, ProfileParseError, parse_binding_profile};

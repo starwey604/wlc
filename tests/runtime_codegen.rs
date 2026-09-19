@@ -239,11 +239,8 @@ message State = 1 { optional uint32 sequence = 1; }
     assert!(first.header.contains("STABLE_API_SCHEMA_IDENTITY"));
     assert!(first.header.contains("STABLE_API_BINDING_PROFILE_IDENTITY"));
     assert!(first.header.contains("STABLE_API_IDENTITY_ALGORITHM"));
-    assert!(
-        first
-            .header
-            .contains("STABLE_API_RUNTIME_CODEGEN_ABI_VERSION")
-    );
+    assert!(first.header.contains("STABLE_API_CODEGEN_CONTRACT_MAJOR"));
+    assert!(first.header.contains("STABLE_API_CODEGEN_CONTRACT_MINOR"));
     assert!(first.header.contains("#include <wirelink/fifo.h>"));
     assert!(first.header.contains("#include <wirelink/pump.h>"));
     assert!(!first.header.contains("#include <wirelink/latest.h>"));

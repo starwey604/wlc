@@ -7,8 +7,10 @@ use crate::{
     semantic::{ResolvedType, SemanticModel, Symbol},
 };
 
-/// Semantic revision of generated C APIs and layouts.
-pub const CODEGEN_ABI_VERSION: u32 = 32;
+/// Generated-code contract major revision; mirrors the compiler major version.
+pub const CODEGEN_CONTRACT_MAJOR: u16 = version_component(COMPILER_VERSION, 0);
+/// Generated-code contract minor revision; mirrors the compiler minor version.
+pub const CODEGEN_CONTRACT_MINOR: u16 = version_component(COMPILER_VERSION, 1);
 /// Stable JSON manifest format identifier.
 pub const CODEGEN_MANIFEST_FORMAT: &str = "wirelink-codegen-manifest-v1";
 /// Diagnostic, non-cryptographic artifact digest algorithm.
@@ -17,6 +19,33 @@ pub const ARTIFACT_DIGEST_ALGORITHM: &str = "fnv1a64-domain-bytes-v1";
 pub const COMPILER_NAME: &str = "wlc";
 /// Cargo package version embedded in generated provenance.
 pub const COMPILER_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Read one dotted numeric component of a `MAJOR.MINOR.PATCH` version.
+const fn version_component(version: &str, component: usize) -> u16 {
+    let bytes = version.as_bytes();
+    let mut index = 0;
+    let mut current = 0;
+    let mut value: u16 = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        index += 1;
+        if byte == b'.' {
+            if current == component {
+                break;
+            }
+            current += 1;
+            value = 0;
+            continue;
+        }
+        if byte < b'0' || byte > b'9' {
+            break;
+        }
+        if current == component {
+            value = value * 10 + (byte - b'0') as u16;
+        }
+    }
+    value
+}
 
 const FNV1A_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV1A_PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -54,7 +83,7 @@ pub fn generate_codegen_manifest(
     push_json_string(&mut output, COMPILER_VERSION);
     writeln!(
         output,
-        ",\n    \"codegen_abi\": {CODEGEN_ABI_VERSION}\n  }},"
+        ",\n    \"codegen_contract\": {{\"major\": {CODEGEN_CONTRACT_MAJOR}, \"minor\": {CODEGEN_CONTRACT_MINOR}}}\n  }},"
     )
     .unwrap();
     output.push_str("  \"module\": ");

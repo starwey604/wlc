@@ -15,7 +15,7 @@ mod package;
 mod plan;
 mod python;
 
-/// Host source API revision, independent of the generated C layout ABI.
+/// Host source API revision, independent of the generated-code contract.
 pub const BINDING_API_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq)]

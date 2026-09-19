@@ -12,10 +12,12 @@ foreach(dependency cpp_host platform)
 endforeach()
 
 # Checked-in C artifacts make the source distribution independent of a WLC
-# checkout/compiler. Verify the paired ABI before compiling any generated C.
+# checkout/compiler. Verify the paired compiler and codegen contract before
+# compiling any generated C.
 set(WIRELINK_WLC_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/generated/@NAME@_manifest.json")
 set(WIRELINK_WLC_EXPECTED_VERSION "${WIRELINK_WLC_VERSION}")
-set(WIRELINK_WLC_EXPECTED_ABI "${WIRELINK_WLC_CODEGEN_ABI}")
+set(WIRELINK_WLC_EXPECTED_CONTRACT_MAJOR "${WIRELINK_WLC_CODEGEN_CONTRACT_MAJOR}")
+set(WIRELINK_WLC_EXPECTED_CONTRACT_MINOR "${WIRELINK_WLC_CODEGEN_CONTRACT_MINOR}")
 include("${Wirelink_DIR}/WirelinkWlcVerifyManifest.cmake")
 
 add_library(@NAME@_client STATIC src/client.cpp src/endpoint.c generated/@NAME@.c
