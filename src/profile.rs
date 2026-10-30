@@ -38,6 +38,7 @@ pub enum BindingDeclaration {
 pub struct RouteBinding {
     pub message: Spanned<String>,
     pub delivery: Spanned<String>,
+    pub codec: Option<Spanned<String>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -50,6 +51,8 @@ pub struct RpcBinding {
     pub response_status: Option<Spanned<String>>,
     pub request_delivery: Spanned<String>,
     pub response_delivery: Spanned<String>,
+    pub guarantee: Option<Spanned<String>>,
+    pub codec: Option<Spanned<String>>,
 }
 
 #[derive(Clone, Debug, Diagnostic, Error, Eq, PartialEq)]
@@ -331,12 +334,39 @@ impl Parser {
     fn parse_route(&mut self, kind: &str) -> Result<RouteBinding, ProfileParseError> {
         let message = self.word(&format!("message name after `{kind}`"))?;
         self.expect_symbol(TokenKind::LeftBrace, "`{` before route properties")?;
-        self.expect_word("delivery")?;
-        self.expect_symbol(TokenKind::Equal, "`=` after `delivery`")?;
-        let delivery = self.word("delivery value")?;
-        self.expect_symbol(TokenKind::Semicolon, "`;` after delivery")?;
-        self.expect_symbol(TokenKind::RightBrace, "`}` after route binding")?;
-        Ok(RouteBinding { message, delivery })
+        let mut delivery = None;
+        let mut codec = None;
+        while self.current().kind != TokenKind::RightBrace {
+            let property = self.word("route property name")?;
+            self.expect_symbol(TokenKind::Equal, "`=` after route property")?;
+            let value = self.word("route property value")?;
+            self.expect_symbol(TokenKind::Semicolon, "`;` after route property")?;
+            let target = match property.value.as_str() {
+                "delivery" => &mut delivery,
+                "codec" => &mut codec,
+                _ => {
+                    return Err(self.error(
+                        property.span,
+                        format!("unknown route property `{}`", property.value),
+                    ));
+                }
+            };
+            if target.replace(value).is_some() {
+                return Err(self.error(
+                    property.span,
+                    format!("duplicate route property `{}`", property.value),
+                ));
+            }
+        }
+        let closing_span = self.current().span;
+        self.advance();
+        let delivery = delivery
+            .ok_or_else(|| self.error(closing_span, "missing route property `delivery`"))?;
+        Ok(RouteBinding {
+            message,
+            delivery,
+            codec,
+        })
     }
 
     fn parse_rpc(&mut self) -> Result<RpcBinding, ProfileParseError> {
@@ -349,6 +379,8 @@ impl Parser {
         let mut response_status = None;
         let mut request_delivery = None;
         let mut response_delivery = None;
+        let mut guarantee = None;
+        let mut codec = None;
 
         while self.current().kind != TokenKind::RightBrace {
             if self.current().kind == TokenKind::End {
@@ -388,6 +420,8 @@ impl Parser {
                 "response_status" => &mut response_status,
                 "request_delivery" => &mut request_delivery,
                 "response_delivery" => &mut response_delivery,
+                "guarantee" => &mut guarantee,
+                "codec" => &mut codec,
                 _ => {
                     return Err(self.error(
                         property.span,
@@ -412,6 +446,8 @@ impl Parser {
             request_operation_id,
             response_operation_id,
             response_status,
+            guarantee,
+            codec,
             request_delivery: request_delivery.unwrap_or_else(|| Spanned {
                 value: "reliable".to_owned(),
                 span: closing_span,

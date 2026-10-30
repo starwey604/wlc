@@ -60,13 +60,15 @@ typedef struct {
 /* Config descriptors can be temporary; callbacks/user_data must outlive use.
  * Ordinary client capability and registered server handlers are assembled by init. */
 static inline wl_err_t @M@_endpoint_config_defaults(
-    @M@_endpoint_config_t *config, wl_environment_t environment) {
+    @M@_endpoint_config_t *config, wl_environment_t environment,
+    wl_link_defaults_t defaults) {
   int result;
   if (config == NULL) return WL_ERR_INVALID_ARG;
   memset(config, 0, sizeof(*config));
   config->link.max_payload_len = @P@_ENDPOINT_MAX_PAYLOAD;
   config->link.envelope = @DEFAULT_ENVELOPE@;
-  config->link.integrity = WL_INTEGRITY_CRC32C;
+  result = wl_config_apply_link_defaults(&config->link, defaults);
+  if (result != WL_OK) return result;
   config->environment = environment;
   config->link.ack_timeout_ms = 100U;
   config->link.max_retries = 4U;
@@ -151,6 +153,10 @@ static inline wl_err_t @M@_endpoint_init_config(
 @TRANSPORT_BIND@
   storage.data = endpoint->private_state.arena.bytes;
   storage.size = sizeof(endpoint->private_state.arena.bytes);
+#if @P@_RUNTIME_HAS_RPC_CLIENT
+  storage.rpc_results = endpoint->private_state.rpc_results;
+  storage.rpc_result_count = sizeof(endpoint->private_state.rpc_results) / sizeof(endpoint->private_state.rpc_results[0]);
+#endif
   result = @M@_runtime_init(&endpoint->private_state.instance, &runtime_config, &storage);
   if (result != WL_OK) return result;
 @RPC_INCARNATION@
@@ -173,9 +179,10 @@ static inline wl_err_t @M@_endpoint_init_config(
 }
 
 static inline wl_err_t @M@_endpoint_init(@M@_endpoint_t *endpoint,
-                                        wl_environment_t environment) {
+                                        wl_environment_t environment,
+                                        wl_link_defaults_t defaults) {
   @M@_endpoint_config_t config;
-  int result = @M@_endpoint_config_defaults(&config, environment);
+  int result = @M@_endpoint_config_defaults(&config, environment, defaults);
   return result == WL_OK ? @M@_endpoint_init_config(endpoint, &config) : result;
 }
 
@@ -222,7 +229,6 @@ static inline wl_endpoint_driver_t @M@_endpoint_driver(@M@_endpoint_t *endpoint)
   driver.context = endpoint;
   driver.step = @M@_endpoint_driver_step;
   driver.close = @M@_endpoint_driver_close;
-  driver.readiness_complete = 1U;
   return driver;
 }
 

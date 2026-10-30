@@ -83,6 +83,12 @@ enum Command {
         #[arg(long)]
         profile: Vec<PathBuf>,
     },
+    /// Print static codec/RPC resources; does not claim unsupported execution paths.
+    Plan {
+        schema: PathBuf,
+        #[arg(long, required = true)]
+        profile: Vec<PathBuf>,
+    },
 }
 
 enum Operation {
@@ -99,6 +105,7 @@ enum Operation {
         runtime_name: Option<String>,
     },
     Identity,
+    Plan,
 }
 
 fn is_portable_c_identifier(value: &str) -> bool {
@@ -170,6 +177,7 @@ fn main() -> Result<()> {
             },
         ),
         Command::Identity { schema, profile } => (schema, None, profile, Operation::Identity),
+        Command::Plan { schema, profile } => (schema, None, profile, Operation::Plan),
     };
     let loaded = wlc::load_schema(&schema_path)?;
     let model = wlc::analyze_schema(&loaded.schema).map_err(|error| {
@@ -225,7 +233,7 @@ fn main() -> Result<()> {
                 })?,
         )
     };
-    let identity_operation = matches!(operation, Operation::Identity);
+    let identity_operation = matches!(operation, Operation::Identity | Operation::Plan);
     match operation {
         Operation::Sdk {
             output,
@@ -285,12 +293,15 @@ fn main() -> Result<()> {
             );
         }
         Operation::Compile(output) => {
-            fs::create_dir_all(&output).into_diagnostic()?;
             let stem = schema_path
                 .file_stem()
                 .and_then(|value| value.to_str())
                 .unwrap_or("wirelink_generated");
-            let generated = wlc::generate_c(&model, stem).map_err(miette::Report::new)?;
+            let generated = match &profile_model {
+                Some(profile) => wlc::generate_c_for_profile(&model, profile, stem),
+                None => wlc::generate_c(&model, stem),
+            }
+            .map_err(miette::Report::new)?;
             let generated_runtime = profile_model
                 .as_ref()
                 .map(|profile| wlc::generate_runtime_c(&model, profile, stem))
@@ -329,6 +340,7 @@ fn main() -> Result<()> {
                 profile_model.as_ref().map(wlc::binding_profile_identity),
                 &manifest_artifacts,
             );
+            fs::create_dir_all(&output).into_diagnostic()?;
             for (path, contents) in artifacts {
                 fs::write(output.join(path), contents).into_diagnostic()?;
             }
@@ -358,7 +370,6 @@ fn main() -> Result<()> {
             output,
             runtime_name,
         } => {
-            fs::create_dir_all(&output).into_diagnostic()?;
             let codec_module = schema_path
                 .file_stem()
                 .and_then(|value| value.to_str())
@@ -400,6 +411,7 @@ fn main() -> Result<()> {
                 Some(wlc::binding_profile_identity(profile)),
                 &manifest_artifacts,
             );
+            fs::create_dir_all(&output).into_diagnostic()?;
             for (path, contents) in artifacts {
                 fs::write(output.join(path), contents).into_diagnostic()?;
             }
@@ -431,6 +443,16 @@ fn main() -> Result<()> {
                     wlc::binding_profile_identity(profile_model)
                 );
             }
+        }
+        Operation::Plan => {
+            print!(
+                "{}",
+                wlc::plan_manifest::generate_binding_plan_manifest(
+                    &model,
+                    profile_model.as_ref().expect("plan requires profiles")
+                )
+                .into_diagnostic()?
+            );
         }
     }
     if !identity_operation && let Some(profile_model) = &profile_model {

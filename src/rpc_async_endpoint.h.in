@@ -5,14 +5,8 @@ static inline void @M@_endpoint_@S@_prepare(void *context,
   wl_rpc_completion_t *result = &endpoint->private_state.completion;
   wl_rpc_async_completion(client, result);
   if (result->status == WL_RPC_SUCCESS) {
-    if (client->response_length < 20U) {
-      result->status = WL_RPC_FAILED;
-      result->runtime_error = WL_RPC_ERR_MALFORMED_METADATA;
-      return;
-    }
-    result->codec_error = @RES@_value_decode(client->response_data + 20U,
-        client->response_length - 20U, &endpoint->private_state.values.@S@.response);
-    if (result->codec_error != WL_CODEC_OK) result->status = WL_RPC_FAILED;
+    endpoint->private_state.completion_value.@S@ =
+        endpoint->private_state.instance.runtime.rpc_results[client->result_index].@S@;
   }
 }
 static inline void @M@_endpoint_@S@_notify(void *context,
@@ -20,7 +14,7 @@ static inline void @M@_endpoint_@S@_notify(void *context,
   @M@_endpoint_t *endpoint = (@M@_endpoint_t *)context;
   ((@M@_@S@_completion_fn)callback)(user_data, &endpoint->private_state.completion,
       endpoint->private_state.completion.status == WL_RPC_SUCCESS
-          ? &endpoint->private_state.values.@S@.response : NULL);
+          ? &endpoint->private_state.completion_value.@S@ : NULL);
 }
 
 /* Snapshot and accept a call; callback is delivered by step or orderly close.

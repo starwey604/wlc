@@ -1,6 +1,7 @@
 //! Wirelink schema parsing and validation.
 
 pub mod ast;
+pub mod codec_plan;
 pub mod codegen;
 mod endpoint_codegen;
 pub mod endpoint_layout;
@@ -11,16 +12,18 @@ mod loader;
 mod managed_rpc_codegen;
 pub mod manifest;
 mod parser;
+pub mod plan_manifest;
 pub mod profile;
 pub mod profile_semantic;
 mod rpc_endpoint_codegen;
+pub mod rpc_plan;
 pub mod runtime_codegen;
 pub mod sdk_codegen;
 pub mod semantic;
 mod template;
 mod value_codegen;
 
-pub use codegen::{GeneratedC, generate_c};
+pub use codegen::{GeneratedC, generate_c, generate_c_for_profile};
 pub use identity::{IDENTITY_ALGORITHM, binding_profile_identity, schema_identity};
 pub use loader::{LoadedSchema, load_schema};
 pub use manifest::{

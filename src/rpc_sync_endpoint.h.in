@@ -83,13 +83,20 @@ static inline wl_rpc_completion_t @M@_endpoint_@S@_sync(@M@_endpoint_t *endpoint
       @M@_endpoint_@S@_sync_done, &state, &call);
   if (error == WL_OK) {
     while (!state.done) {
-      wl_poll_hint_t hint;
+      wl_readiness_t hint;
+      wl_time_ms_t queried_at, wait_now;
       error = @M@_endpoint_step(endpoint);
       if (state.done || error != WL_OK) break;
-      error = wl_endpoint_get_hint(@M@_endpoint_handle(endpoint), &hint);
+      error = wl_endpoint_now(@M@_endpoint_handle(endpoint), &queried_at);
       if (error != WL_OK) break;
-      if (hint.work_pending || hint.next_deadline_ms == 0U) continue;
-      error = waiter.wait(waiter.user_data, hint.next_deadline_ms);
+      error = wl_endpoint_get_readiness_at(@M@_endpoint_handle(endpoint), queried_at, &hint);
+      if (error != WL_OK) break;
+      if (hint.runnable || hint.next_deadline_ms == 0U) continue;
+      error = wl_endpoint_now(@M@_endpoint_handle(endpoint), &wait_now);
+      if (error != WL_OK) break;
+      const uint32_t remaining = wl_wait_remaining(hint.next_deadline_ms, queried_at, wait_now);
+      if (remaining == 0U) continue;
+      error = waiter.wait(waiter.user_data, remaining);
       if (error == WL_ERR_NO_DATA) error = WL_OK;
       if (error != WL_OK) break;
     }

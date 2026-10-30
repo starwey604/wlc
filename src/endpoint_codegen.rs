@@ -8,40 +8,27 @@ use crate::{
 
 pub(crate) fn emit(
     maxima: &HashMap<u16, Option<u64>>,
+    rpc_plan: &crate::rpc_plan::RpcEndpointPlan,
     profile: &BindingProfileModel,
     codec: &str,
     module: &str,
     has_runtime_storage: bool,
 ) -> String {
     let prefix = upper_snake(module);
-    let mut selected = profile
+    let selected = profile
         .retained_routes
         .iter()
-        .map(|route| (route.message_id, 0))
-        .chain(
-            profile
-                .direct_routes
-                .iter()
-                .map(|route| (route.message_id, 0)),
-        )
-        .chain(
-            profile
-                .send_routes
-                .iter()
-                .map(|route| (route.message_id, 0)),
-        )
-        .chain(profile.rpc_services.iter().flat_map(|service| {
-            [
-                (service.request_id, service.metadata_size()),
-                (service.response_id, service.metadata_size()),
-            ]
-        }));
-    let maximum = selected.try_fold(1_u64, |bound, (id, overhead)| {
-        maxima
-            .get(&id)
-            .copied()
-            .flatten()
-            .map(|value| bound.max(value + overhead))
+        .map(|route| route.message_id)
+        .chain(profile.direct_routes.iter().map(|route| route.message_id))
+        .chain(profile.send_routes.iter().map(|route| route.message_id));
+    let mut bounds = selected.map(|id| maxima.get(&id).copied().flatten()).chain(
+        profile.rpc_services.iter().flat_map(|service| {
+            let method = rpc_plan.method(&service.name);
+            [method.request_capacity, method.response_capacity]
+        }),
+    );
+    let maximum = bounds.try_fold(1_u64, |bound, capacity| {
+        capacity.map(|value| bound.max(value))
     });
     let Some(maximum) = maximum.filter(|value| *value <= 2048 && has_runtime_storage) else {
         return format!(
@@ -59,7 +46,7 @@ pub(crate) fn emit(
         .rpc_services
         .iter()
         .any(|service| service.is_managed());
-    let rpc = crate::rpc_endpoint_codegen::fragments(profile, maxima, module);
+    let rpc = crate::rpc_endpoint_codegen::fragments(profile, rpc_plan, module);
     let transport =
         crate::endpoint_transport_codegen::fragments(profile.endpoint_layout().envelope, &prefix);
     let maximum = maximum.to_string();

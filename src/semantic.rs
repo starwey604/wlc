@@ -577,9 +577,10 @@ fn validate_message_nesting(declarations: &[Symbol], errors: &mut Vec<SemanticEr
             Symbol::Enum(_) => None,
         })
         .collect();
+    let mut validated = BTreeSet::new();
     for message in messages.values() {
         let mut path = vec![message.id];
-        validate_message_children(message, 0, &messages, &mut path, errors);
+        validate_message_children(message, 0, &messages, &mut path, &mut validated, errors);
     }
 }
 
@@ -588,8 +589,13 @@ fn validate_message_children(
     depth: usize,
     messages: &HashMap<u16, &MessageSymbol>,
     path: &mut Vec<u16>,
+    validated: &mut BTreeSet<(u16, usize)>,
     errors: &mut Vec<SemanticError>,
 ) {
+    if validated.contains(&(message.id, depth)) {
+        return;
+    }
+    let initial_errors = errors.len();
     for field in &message.fields {
         let ResolvedType::Message { id, name } = &field.ty else {
             continue;
@@ -610,9 +616,14 @@ fn validate_message_children(
         }
         if let Some(child) = messages.get(id) {
             path.push(*id);
-            validate_message_children(child, depth + 1, messages, path, errors);
+            validate_message_children(child, depth + 1, messages, path, validated, errors);
             path.pop();
         }
+    }
+    // Cache only successful subgraphs, including their starting depth. A
+    // cycle/error is never cached as valid for a different ancestor path.
+    if errors.len() == initial_errors {
+        validated.insert((message.id, depth));
     }
 }
 

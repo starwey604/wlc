@@ -7,7 +7,10 @@
 
 use crate::{
     ast::Cardinality,
-    profile_semantic::{BindingProfileModel, DeliveryPolicy, RetainedRouteKind, RpcStatusDomain},
+    codec_plan::CodecProfile,
+    profile_semantic::{
+        BindingProfileModel, DeliveryPolicy, RetainedRouteKind, RpcGuarantee, RpcStatusDomain,
+    },
     semantic::{FieldDefault, ResolvedType, SemanticModel, Symbol},
 };
 
@@ -86,6 +89,7 @@ pub fn binding_profile_identity(model: &BindingProfileModel) -> u64 {
         hash.string(&route.message_name);
         hash.u16(route.message_id);
         hash_delivery(&mut hash, route.delivery);
+        hash_codec_override(&mut hash, route.codec, CodecProfile::SchemaV1);
     }
     hash.len(model.rpc_services.len());
     for service in &model.rpc_services {
@@ -96,8 +100,9 @@ pub fn binding_profile_identity(model: &BindingProfileModel) -> u64 {
         hash.u16(service.response_id);
         if service.is_managed() {
             hash.string("runtime-owned-rpc-header");
-            hash.u8(2);
-            hash.u16(20);
+            hash.u8(4);
+            hash.u16(13);
+            hash.string("tagged-fixed32-as-varuint32");
         } else {
             let request = service.request_operation_id.as_ref().unwrap();
             let response = service.response_operation_id.as_ref().unwrap();
@@ -119,6 +124,19 @@ pub fn binding_profile_identity(model: &BindingProfileModel) -> u64 {
         }
         hash_delivery(&mut hash, service.request_delivery);
         hash_delivery(&mut hash, service.response_delivery);
+        hash_codec_override(
+            &mut hash,
+            service.codec,
+            if service.is_managed() {
+                CodecProfile::ManagedTagged
+            } else {
+                CodecProfile::SchemaV1
+            },
+        );
+        if service.guarantee == RpcGuarantee::Correlate {
+            hash.string("rpc-guarantee-v1");
+            hash.string("correlate");
+        }
     }
     // Preserve the exact identity of existing profiles without send bindings.
     if !model.send_routes.is_empty() {
@@ -128,6 +146,7 @@ pub fn binding_profile_identity(model: &BindingProfileModel) -> u64 {
             hash.string(&route.message_name);
             hash.u16(route.message_id);
             hash_delivery(&mut hash, route.delivery);
+            hash_codec_override(&mut hash, route.codec, CodecProfile::SchemaV1);
         }
     }
     let layout = model.endpoint_layout();
@@ -138,6 +157,7 @@ pub fn binding_profile_identity(model: &BindingProfileModel) -> u64 {
             hash.string(&route.message_name);
             hash.u16(route.message_id);
             hash_delivery(&mut hash, route.delivery);
+            hash_codec_override(&mut hash, route.codec, CodecProfile::SchemaV1);
         }
     }
     if layout != crate::endpoint_layout::EndpointLayout::default() {
@@ -156,6 +176,14 @@ pub fn binding_profile_identity(model: &BindingProfileModel) -> u64 {
         });
     }
     hash.finish()
+}
+
+// Explicit defaults normalize to the established tagged/replay identity.
+fn hash_codec_override(hash: &mut StableHash, codec: CodecProfile, default: CodecProfile) {
+    if codec != default {
+        hash.string("route-codec-v1");
+        hash.string(codec.name());
+    }
 }
 
 fn hash_cardinality(hash: &mut StableHash, cardinality: Cardinality) {

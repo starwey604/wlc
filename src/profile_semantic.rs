@@ -8,6 +8,7 @@ use thiserror::Error;
 
 use crate::{
     ast::{Cardinality, Span, Spanned},
+    codec_plan::{CodecPlan, CodecProfile},
     profile::{BINDING_PROFILE_VERSION, BindingDeclaration, BindingProfile, RpcBinding},
     semantic::{FieldSymbol, MessageSymbol, ResolvedType, SemanticModel, Symbol},
 };
@@ -16,6 +17,13 @@ use crate::{
 pub enum DeliveryPolicy {
     Unreliable,
     Reliable,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+pub enum RpcGuarantee {
+    #[default]
+    Replay,
+    Correlate,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -48,6 +56,18 @@ impl BindingProfileModel {
         !self.rpc_services.is_empty() && self.endpoint_layout().has_client()
     }
 
+    pub fn has_replay(&self) -> bool {
+        self.rpc_services
+            .iter()
+            .any(|s| s.guarantee == RpcGuarantee::Replay)
+    }
+
+    pub fn has_correlate(&self) -> bool {
+        self.rpc_services
+            .iter()
+            .any(|s| s.guarantee == RpcGuarantee::Correlate)
+    }
+
     pub fn has_rpc_server(&self) -> bool {
         !self.rpc_services.is_empty() && self.endpoint_layout().has_server()
     }
@@ -58,6 +78,7 @@ pub struct SendRoute {
     pub message_name: String,
     pub message_id: u16,
     pub delivery: DeliveryPolicy,
+    pub codec: CodecProfile,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -66,6 +87,7 @@ pub struct RetainedRoute {
     pub message_name: String,
     pub message_id: u16,
     pub delivery: DeliveryPolicy,
+    pub codec: CodecProfile,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -93,6 +115,8 @@ pub struct RpcService {
     pub status_domain: Option<RpcStatusDomain>,
     pub request_delivery: DeliveryPolicy,
     pub response_delivery: DeliveryPolicy,
+    pub guarantee: RpcGuarantee,
+    pub codec: CodecProfile,
 }
 
 impl RpcService {
@@ -101,8 +125,13 @@ impl RpcService {
         self.request_operation_id.is_none()
     }
 
+    /// Maximum request and successful-response header length.
     pub fn metadata_size(&self) -> u64 {
-        if self.is_managed() { 20 } else { 0 }
+        if self.is_managed() { 13 } else { 0 }
+    }
+    /// A rejection must fit even when the response business message is empty.
+    pub fn minimum_response_size(&self) -> u64 {
+        if self.is_managed() { 17 } else { 0 }
     }
 }
 
@@ -229,6 +258,13 @@ pub fn analyze_binding_profile(
                 message_name: message.name.clone(),
                 message_id: message.id,
                 delivery,
+                codec: resolve_codec(
+                    route.codec.as_ref(),
+                    CodecProfile::SchemaV1,
+                    &[message.id],
+                    schema,
+                    &mut errors,
+                ),
             });
         }
     }
@@ -323,6 +359,38 @@ pub fn analyze_binding_profile(
         };
         let request_delivery = resolve_delivery(&rpc.request_delivery, &mut errors);
         let response_delivery = resolve_delivery(&rpc.response_delivery, &mut errors);
+        let managed = rpc.request_operation_id.is_none();
+        let codec = resolve_codec(
+            rpc.codec.as_ref(),
+            if managed {
+                CodecProfile::ManagedTagged
+            } else {
+                CodecProfile::SchemaV1
+            },
+            &[request.id, response.id],
+            schema,
+            &mut errors,
+        );
+        if !managed && codec == CodecProfile::PositionalV1 {
+            errors.push(ProfileSemanticError::new(
+                rpc.codec.as_ref().unwrap().span,
+                "positional-v1 RPC requires runtime-owned metadata; remove mapped RPC fields",
+            ));
+        }
+        let guarantee = match rpc.guarantee.as_ref() {
+            None => RpcGuarantee::Replay,
+            Some(value) => match value.value.as_str() {
+                "replay" => RpcGuarantee::Replay,
+                "correlate" => RpcGuarantee::Correlate,
+                _ => {
+                    errors.push(ProfileSemanticError::new(
+                        value.span,
+                        "RPC guarantee must be replay or correlate",
+                    ));
+                    RpcGuarantee::Replay
+                }
+            },
+        };
 
         if let (
             Some((request_operation_id, response_operation_id, response_status, status_domain)),
@@ -342,6 +410,8 @@ pub fn analyze_binding_profile(
                 status_domain,
                 request_delivery,
                 response_delivery,
+                guarantee,
+                codec,
             });
         }
     }
@@ -375,6 +445,13 @@ pub fn analyze_binding_profile(
                 message_name: message.name.clone(),
                 message_id: message.id,
                 delivery,
+                codec: resolve_codec(
+                    route.codec.as_ref(),
+                    CodecProfile::SchemaV1,
+                    &[message.id],
+                    schema,
+                    &mut errors,
+                ),
             });
         }
     }
@@ -408,10 +485,34 @@ pub fn analyze_binding_profile(
                 message_name: message.name.clone(),
                 message_id: message.id,
                 delivery,
+                codec: resolve_codec(
+                    route.codec.as_ref(),
+                    CodecProfile::SchemaV1,
+                    &[message.id],
+                    schema,
+                    &mut errors,
+                ),
             });
         }
     }
     direct_routes.sort_by_key(|route| route.message_id);
+    let mut codecs = HashMap::new();
+    for (id, codec) in send_routes
+        .iter()
+        .chain(&direct_routes)
+        .map(|r| (r.message_id, r.codec))
+        .chain(retained_routes.iter().map(|r| (r.message_id, r.codec)))
+    {
+        if codecs
+            .insert(id, codec)
+            .is_some_and(|previous| previous != codec)
+        {
+            errors.push(ProfileSemanticError::new(
+                profile.version.span,
+                format!("message ID {id} has conflicting route codecs"),
+            ));
+        }
+    }
     if !errors.is_empty() {
         return Err(ProfileSemanticErrors { errors });
     }
@@ -540,6 +641,28 @@ pub fn compose_binding_profiles(
     merged
         .rpc_services
         .sort_by(|left, right| left.name.cmp(&right.name));
+    let mut codecs = HashMap::new();
+    for (id, codec) in merged
+        .send_routes
+        .iter()
+        .chain(&merged.direct_routes)
+        .map(|r| (r.message_id, r.codec))
+        .chain(
+            merged
+                .retained_routes
+                .iter()
+                .map(|r| (r.message_id, r.codec)),
+        )
+    {
+        if codecs
+            .insert(id, codec)
+            .is_some_and(|previous| previous != codec)
+        {
+            return Err(ProfileCompositionError(format!(
+                "message ID {id} has conflicting route codecs across profiles"
+            )));
+        }
+    }
     Ok(merged)
 }
 
@@ -570,6 +693,44 @@ fn resolve_message<'a>(
         },
     ));
     None
+}
+
+fn resolve_codec(
+    value: Option<&Spanned<String>>,
+    default: CodecProfile,
+    ids: &[u16],
+    schema: &SemanticModel,
+    errors: &mut Vec<ProfileSemanticError>,
+) -> CodecProfile {
+    let Some(value) = value else {
+        return default;
+    };
+    let codec = match value.value.as_str() {
+        "schema_v1" => CodecProfile::SchemaV1,
+        "managed_tagged" => CodecProfile::ManagedTagged,
+        "positional_v1" => CodecProfile::PositionalV1,
+        _ => {
+            errors.push(ProfileSemanticError::new(
+                value.span,
+                "codec must be schema_v1, managed_tagged or positional_v1",
+            ));
+            return default;
+        }
+    };
+    if codec != default && codec != CodecProfile::PositionalV1 {
+        errors.push(ProfileSemanticError::new(
+            value.span,
+            format!(
+                "codec `{}` is not valid for this binding (default {})",
+                value.value,
+                default.name()
+            ),
+        ));
+    }
+    if let Err(error) = CodecPlan::selected(schema, codec, ids.iter().copied()) {
+        errors.push(ProfileSemanticError::new(value.span, error.to_string()));
+    }
+    codec
 }
 
 fn resolve_delivery(

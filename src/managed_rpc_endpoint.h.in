@@ -26,8 +26,8 @@ typedef struct {
   int32_t link_result;
   wl_rpc_err_t runtime_error;
   bool response_valid;
-  /* Borrowed fields, if present in the schema, live until call release. */
-  @RES@_t response;
+  /* Owned value borrowed until release/close; assignment copies all fields. */
+  const @RES@_value_t *response;
 } @M@_@S@_result_t;
 
 /* On success out_call identifies this invocation. On failure it is cleared;
@@ -76,7 +76,6 @@ static inline wl_rpc_err_t @M@_endpoint_@S@_inspect(@M@_endpoint_t *endpoint,
     const @M@_@S@_call_t *call, @M@_@S@_result_t *out_result) {
   wl_rpc_client_result_t client;
   wl_rpc_err_t error;
-  @M@_runtime_result_t decoded;
   if (out_result == NULL) return WL_RPC_ERR_INVALID_ARG;
   memset(out_result, 0, sizeof(*out_result));
   error = @M@_endpoint_@S@_call_get(endpoint, call, &client);
@@ -86,11 +85,8 @@ static inline wl_rpc_err_t @M@_endpoint_@S@_inspect(@M@_endpoint_t *endpoint,
   out_result->link_result = client.link_result;
   out_result->runtime_error = client.runtime_error;
   if (client.state != WL_RPC_CLIENT_COMPLETED) return WL_RPC_OK;
-  decoded = @M@_@S@_client_decode(&client, &out_result->response);
-  if (!@M@_runtime_result_ok(&decoded)) {
-    endpoint->private_state.result = decoded;
-    return decoded.detail.rpc.rpc_result != WL_RPC_OK ? decoded.detail.rpc.rpc_result : WL_RPC_ERR_INVALID_STATE;
-  }
+  if (!client.response_valid) return WL_RPC_ERR_INVALID_STATE;
+  out_result->response = &@M@_endpoint_runtime(endpoint)->rpc_results[client.result_index].@S@;
   out_result->response_valid = true;
   return WL_RPC_OK;
 }

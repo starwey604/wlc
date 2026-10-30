@@ -99,7 +99,50 @@ pub fn generate_codegen_manifest(
         Some(identity) => write!(output, "\"0x{identity:016x}\"").unwrap(),
         None => output.push_str("null"),
     }
-    output.push_str("\n  },\n  \"bounded_fields\": [\n");
+    output.push_str("\n  },\n");
+    let managed_wire = artifacts.iter().find_map(|artifact| {
+        let text = std::str::from_utf8(artifact.contents).ok()?;
+        text.lines().find_map(|line| {
+            let mut words = line.split_whitespace();
+            if words.next()? != "#define" || !words.next()?.ends_with("_RPC_MANAGED_WIRE_FORMAT") {
+                return None;
+            }
+            words.next()?.strip_prefix('"')?.strip_suffix('"')
+        })
+    });
+    if let Some(wire) = managed_wire {
+        output.push_str("  \"managed_rpc_wire_format\": ");
+        push_json_string(&mut output, wire);
+        output.push_str(",\n");
+    }
+    let mut codecs = std::collections::BTreeMap::new();
+    for artifact in &artifacts {
+        if let Ok(text) = std::str::from_utf8(artifact.contents) {
+            for line in text.lines() {
+                let mut words = line.split_whitespace();
+                if words.next() != Some("#define") {
+                    continue;
+                }
+                if let (Some(name), Some(format)) = (words.next(), words.next())
+                    && (name.ends_with("_CODEC_FORMAT") || name.ends_with("_RPC_BODY_FORMAT"))
+                {
+                    codecs.insert(name, format.trim_matches('"'));
+                }
+            }
+        }
+    }
+    output.push_str("  \"codec_formats\": {");
+    for (index, (symbol, format)) in codecs.iter().enumerate() {
+        if index != 0 {
+            output.push(',');
+        }
+        output.push_str("\n    ");
+        push_json_string(&mut output, symbol);
+        output.push_str(": ");
+        push_json_string(&mut output, format);
+    }
+    output.push_str("\n  },\n");
+    output.push_str("  \"bounded_fields\": [\n");
     let bounded_fields = schema
         .declarations
         .iter()
@@ -171,7 +214,7 @@ fn artifact_digest(contents: &[u8]) -> u64 {
     hash
 }
 
-fn push_json_string(output: &mut String, value: &str) {
+pub(crate) fn push_json_string(output: &mut String, value: &str) {
     output.push('"');
     for character in value.chars() {
         match character {
