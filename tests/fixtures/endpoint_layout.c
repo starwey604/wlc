@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: Apache-2.0 */
+#include "wirelink/usb_bulk_defaults.h"
 #include "client_advanced.h"
 #include "server_advanced.h"
 #include "both_endpoint.h"
@@ -56,7 +57,7 @@ static void transfer(direction_t *d) {
   assert(result == WL_OK || result == WL_ERR_WOULD_BLOCK || result == WL_ERR_NO_SPACE);
   if (d->offset == d->length) {
     d->data = NULL;
-    assert(wl_tx_complete(d->source, d->token, WL_OK) == WL_OK);
+    assert(wl_tx_consumed(d->source, d->token, WL_OK) == WL_OK);
   }
 }
 static void step(void) {
@@ -82,11 +83,11 @@ static void done(void *context, const wl_rpc_completion_t *completion, const res
   } else assert(response == NULL);
   ++completed;
 }
-static void initialize(void) {
+static void initialize(wl_link_defaults_t defaults) {
   client_endpoint_config_t c;
   server_endpoint_config_t s;
-  assert(client_endpoint_config_defaults(&c, environment()) == WL_OK);
-  assert(server_endpoint_config_defaults(&s, environment()) == WL_OK);
+  assert(client_endpoint_config_defaults(&c, environment(), defaults) == WL_OK);
+  assert(server_endpoint_config_defaults(&s, environment(), defaults) == WL_OK);
   s.on_echo = echo;
   /* Profile mismatches fail before session allocation or incarnation mutation. */
   int32_t envelope = c.link.envelope;
@@ -99,7 +100,7 @@ static void initialize(void) {
   client_runtime_requirements_t requirements;
   assert(client_runtime_requirements(&c.advanced, &requirements) == WL_ERR_NOT_SUPPORTED);
   client_runtime_init_diagnostic_t diagnostic;
-  client_runtime_storage_t storage = {client.private_state.arena.bytes, sizeof(client.private_state.arena.bytes)};
+  client_runtime_storage_t storage = {client.private_state.arena.bytes, sizeof(client.private_state.arena.bytes), client.private_state.rpc_results, CLIENT_ENDPOINT_RPC_CAPACITY};
   assert(client_runtime_init_checked(&client.private_state.instance, &c.advanced, &storage, &diagnostic) == WL_ERR_NOT_SUPPORTED);
   assert(diagnostic.issue == CLIENT_RUNTIME_INIT_ROLE_ENABLE);
   assert(client_endpoint_init_config(&client, &c) == WL_ERR_NOT_SUPPORTED);
@@ -130,7 +131,7 @@ static void close_pair(void) {
     direction_t *d = &directions[i];
     if (d->data != NULL) {
       d->data = NULL;
-      assert(wl_tx_complete(d->source, d->token, WL_ERR_IO) == WL_OK);
+      assert(wl_tx_consumed(d->source, d->token, WL_ERR_IO) == WL_OK);
     }
     assert(wl_set_sink(d->source, NULL, NULL) == WL_OK);
   }
@@ -177,8 +178,8 @@ int main(void) {
   for (int integrity = WL_INTEGRITY_NONE; integrity <= WL_INTEGRITY_CRC32C; ++integrity) {
     both_endpoint_config_t b;
     flex_endpoint_config_t f;
-    assert(both_endpoint_config_defaults(&b, environment()) == WL_OK);
-    assert(flex_endpoint_config_defaults(&f, environment()) == WL_OK);
+    assert(both_endpoint_config_defaults(&b, environment(), wl_link_defaults()) == WL_OK);
+    assert(flex_endpoint_config_defaults(&f, environment(), wl_link_defaults()) == WL_OK);
     b.on_echo = echo;
     f.on_echo = echo;
     b.link.integrity = f.link.integrity = integrity;
@@ -188,8 +189,8 @@ int main(void) {
     assert(both_endpoint_close(&both) == WL_OK);
     assert(flex_endpoint_close(&flex) == WL_OK);
   }
-  for (unsigned pass = 0; pass < 2; ++pass) {
-    initialize();
+  for (unsigned pass = 0; pass < 4; ++pass) {
+    initialize(pass < 2 ? wl_link_defaults() : wl_usb_bulk_link_defaults());
     omitted_role_diagnostics();
     expected = WL_RPC_SUCCESS;
     request_value_t request;

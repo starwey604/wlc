@@ -22,8 +22,8 @@ int main(void) {
   assert(sender_runtime_requirements(&config, &requirements) == WL_OK);
   assert(requirements.storage_size == 0); /* No retained or RPC storage. */
   assert(SENDER_ENDPOINT_MAX_PAYLOAD == STATE_MAX_ENCODED_SIZE);
-  assert(sender_endpoint_init(&sender, test_environment_id(1, (wl_clock_t){now, NULL})) == WL_OK);
-  assert(receiver_endpoint_init(&receiver, test_environment_id(2, (wl_clock_t){now, NULL})) == WL_OK);
+  assert(sender_endpoint_init(&sender, test_environment_id(1, (wl_clock_t){now, NULL}), wl_link_defaults()) == WL_OK);
+  assert(receiver_endpoint_init(&receiver, test_environment_id(2, (wl_clock_t){now, NULL}), wl_link_defaults()) == WL_OK);
   assert(wl_loopback_connect(&cable, sender_endpoint_handle(&sender), receiver_endpoint_handle(&receiver)) == WL_OK);
   state_t sent, received;
   state_clear(&sent);
@@ -41,8 +41,8 @@ int main(void) {
   assert(sender_endpoint_close(&sender) == WL_OK);
   assert(receiver_endpoint_close(&receiver) == WL_OK);
 
-  assert(reliable_sender_endpoint_init(&reliable_sender, test_environment_id(3, (wl_clock_t){now, NULL})) == WL_OK);
-  assert(reliable_receiver_endpoint_init(&reliable_receiver, test_environment_id(4, (wl_clock_t){now, NULL})) == WL_OK);
+  assert(reliable_sender_endpoint_init(&reliable_sender, test_environment_id(3, (wl_clock_t){now, NULL}), wl_link_defaults()) == WL_OK);
+  assert(reliable_receiver_endpoint_init(&reliable_receiver, test_environment_id(4, (wl_clock_t){now, NULL}), wl_link_defaults()) == WL_OK);
   assert(wl_loopback_connect(&cable, reliable_sender_endpoint_handle(&reliable_sender), reliable_receiver_endpoint_handle(&reliable_receiver)) == WL_OK);
   /* Send before the first step: only reliable admission samples the clock. */
   clock_reads = 0;

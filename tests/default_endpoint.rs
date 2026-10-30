@@ -29,9 +29,18 @@ rpc Execute {
 
 #[test]
 fn default_endpoints_compile_and_run_with_real_core() {
+    run_default_endpoints("", false);
+    run_default_endpoints("endpoint { envelope = cobs_stream; }", false);
+    run_default_endpoints("endpoint { envelope = cobs_stream; }", true);
+}
+
+fn run_default_endpoints(endpoint: &str, fixed: bool) {
     let schema = analyze_schema(&parse_schema(SCHEMA).unwrap()).unwrap();
-    let profile =
-        analyze_binding_profile(&parse_binding_profile(PROFILE).unwrap(), &schema).unwrap();
+    let profile = analyze_binding_profile(
+        &parse_binding_profile(&format!("{PROFILE} {endpoint}")).unwrap(),
+        &schema,
+    )
+    .unwrap();
     let generated = generate_runtime_c(&schema, &profile, "demo").unwrap();
     // Delivery is a generator decision, not a constant C self-comparison (which
     // Apple Clang rejects under -Werror). Unreliable sends omit clock reads.
@@ -73,7 +82,7 @@ fn default_endpoints_compile_and_run_with_real_core() {
         ("demo_runtime.h", generated.header), ("demo_runtime.c", generated.source),
         ("peer_runtime.h", alternate.header), ("peer_runtime.c", alternate.source),
         ("test.c", include_str!("fixtures/default_endpoint.c").to_owned()),
-        ("headers.cpp", "#include \"demo_runtime.h\"\n#include \"peer_runtime.h\"\nstatic demo_endpoint_t a;\nstatic peer_endpoint_t b;\nint main() { return demo_endpoint_init(&a, wl_environment_t{}) + peer_endpoint_init(&b, wl_environment_t{}); }\n".to_owned()),
+        ("headers.cpp", "#include \"demo_runtime.h\"\n#include \"peer_runtime.h\"\nstatic demo_endpoint_t a;\nstatic peer_endpoint_t b;\nint main() { return demo_endpoint_init(&a, wl_environment_t{}, wl_link_defaults()) + peer_endpoint_init(&b, wl_environment_t{}, wl_link_defaults()); }\n".to_owned()),
     ] { fs::write(temp.path().join(name), contents).unwrap(); }
     let root = std::env::var_os("WIRELINK_SOURCE_DIR")
         .map(PathBuf::from)
@@ -84,10 +93,15 @@ fn default_endpoints_compile_and_run_with_real_core() {
                 .to_owned()
         });
     let mut command = Command::new("cc");
+    if fixed {
+        command.arg("-DWL_LINK_PROFILE_COBS_CRC16=1");
+    }
     command
         .args(["-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Werror"])
         .arg("-I")
         .arg(root.join("include"))
+        .arg("-I")
+        .arg(root.join("adapters/common/include"))
         .arg("-I")
         .arg(root.join("tests/support"))
         .arg("-I")
@@ -134,6 +148,8 @@ fn default_endpoints_compile_and_run_with_real_core() {
         ])
         .arg("-I")
         .arg(root.join("include"))
+        .arg("-I")
+        .arg(root.join("adapters/common/include"))
         .arg("-I")
         .arg(root.join("tests/support"))
         .arg("-I")

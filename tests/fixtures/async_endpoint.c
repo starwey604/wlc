@@ -68,7 +68,7 @@ static void done(void *context, const wl_rpc_completion_t *result, const respons
   if (closing) {
     request_value_t value = request();
     CHECK(demo_endpoint_execute_async(&client, &value, 100, done, &completions, NULL) == WL_ERR_NOT_INITIALIZED);
-    CHECK(demo_endpoint_init(&client, test_environment_id(99, (wl_clock_t){read_clock, NULL})) == WL_ERR_REENTRANT);
+    CHECK(demo_endpoint_init(&client, test_environment_id(99, (wl_clock_t){read_clock, NULL}), wl_link_defaults()) == WL_ERR_REENTRANT);
   }
   if (chained != 0) {
     request_value_t value = request();
@@ -86,8 +86,8 @@ static void download_done(void *context, const wl_rpc_completion_t *result, cons
 }
 static void initialize(void) {
   demo_endpoint_config_t config;
-  CHECK(demo_endpoint_init(&client, test_environment_id(1, (wl_clock_t){read_clock, NULL})) == WL_OK);
-  CHECK(demo_endpoint_config_defaults(&config, test_environment_id(2, (wl_clock_t){0})) == WL_OK);
+  CHECK(demo_endpoint_init(&client, test_environment_id(1, (wl_clock_t){read_clock, NULL}), wl_link_defaults()) == WL_OK);
+  CHECK(demo_endpoint_config_defaults(&config, test_environment_id(2, (wl_clock_t){0}), wl_link_defaults()) == WL_OK);
   config.environment.clock = (wl_clock_t){read_clock, NULL};
   config.on_execute = execute;
   config.user_data = &handlers;
@@ -96,7 +96,7 @@ static void initialize(void) {
   CHECK(demo_endpoint_init_config(&server, &config) == WL_OK);
   {
     demo_runtime_t *runtime = demo_endpoint_runtime(&server);
-    CHECK((void *)runtime->execute.request_scratch == (void *)runtime->download.response_scratch);
+    CHECK(runtime->rpc_results == server.private_state.rpc_results);
   }
   CHECK(wl_loopback_connect(&cable, demo_endpoint_handle(&client), demo_endpoint_handle(&server)) == WL_OK);
 }
@@ -205,6 +205,6 @@ int main(void) {
   run_allocation_tests();
   allocate_endpoints = true;
   run_sync_tests();
-  CHECK(allocations == 4 && deallocations == 4 && wl_fixed_pool_in_use(&endpoint_pool) == 0);
+  CHECK(allocations == 6 && deallocations == 6 && wl_fixed_pool_in_use(&endpoint_pool) == 0);
   return 0;
 }

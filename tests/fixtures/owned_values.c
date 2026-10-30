@@ -8,6 +8,36 @@
 
 #define CHECK(x) do { if (!(x)) { fprintf(stderr, "%d: %s\n", __LINE__, #x); return 1; } } while (0)
 
+/* Differential error precedence, canonical output, and failure atomicity for
+ * the shared generic traversal and the scalar backend, including malformed TLV. */
+#define DIFFERENTIAL(name, maximum) \
+static int check_##name(const uint8_t *wire, size_t size) { \
+  name##_t view; name##_value_t owned, before; \
+  uint8_t a[maximum], b[maximum]; size_t an, bn; \
+  memset(&owned, 0xA5, sizeof(owned)); memcpy(&before, &owned, sizeof(before)); \
+  wl_codec_status_t status = name##_decode(wire, size, &view); \
+  CHECK(name##_value_decode(wire, size, &owned) == status); \
+  if (status == WL_CODEC_OK) { \
+    CHECK(name##_encode(&view, a, sizeof(a), &an) == WL_CODEC_OK); \
+    CHECK(name##_value_encode(&owned, b, sizeof(b), &bn) == WL_CODEC_OK); \
+    CHECK(an == bn && memcmp(a, b, an) == 0); \
+  } else CHECK(memcmp(&owned, &before, sizeof(owned)) == 0); \
+  return 0; \
+} \
+static int mutate_##name(uint8_t *wire, size_t size) { \
+  for (size_t n = 0; n <= size; ++n) CHECK(check_##name(wire, n) == 0); \
+  for (size_t at = 0; at < size; ++at) { \
+    uint8_t saved = wire[at]; \
+    for (unsigned byte = 0; byte <= UINT8_MAX; ++byte) { \
+      wire[at] = (uint8_t)byte; CHECK(check_##name(wire, size) == 0); \
+    } \
+    wire[at] = saved; \
+  } \
+  return 0; \
+}
+DIFFERENTIAL(snapshot, SNAPSHOT_MAX_ENCODED_SIZE)
+DIFFERENTIAL(scalars, SCALARS_MAX_ENCODED_SIZE)
+
 #ifdef WLC_VALUE_BENCHMARK
 static int benchmark(void) {
   static large_value_t large;
@@ -37,6 +67,15 @@ static int benchmark(void) {
 #endif
 
 int main(void) {
+  {
+    scalars_value_t scalar; uint8_t encoded[SCALARS_MAX_ENCODED_SIZE]; size_t length;
+    scalars_value_clear(&scalar);
+    scalar.has_value = scalar.has_wide = scalar.has_real = true;
+    scalar.value = UINT32_MAX; scalar.wide = UINT64_MAX; scalar.real = -0.0;
+    CHECK(scalars_value_encode(&scalar, encoded, sizeof(encoded), &length) == WL_CODEC_OK);
+    CHECK(mutate_scalars(encoded, length) == 0);
+  }
+
   uint8_t wire[SNAPSHOT_MAX_ENCODED_SIZE], again[sizeof(wire)];
   snapshot_value_t value, saved, decoded, before;
   snapshot_t view;
@@ -58,6 +97,7 @@ int main(void) {
   value.samples[2] = 42.0F;
   CHECK(snapshot_value_encode(&value, wire, sizeof(wire), &size) == WL_CODEC_OK);
   CHECK(snapshot_value_encoded_size(&value) == size);
+  CHECK(mutate_snapshot(wire, size) == 0);
   CHECK(snapshot_decode(wire, size, &view) == WL_CODEC_OK);
   CHECK(view.device.name.data >= (const char *)wire && view.device.name.data < (const char *)(wire + size));
   CHECK(snapshot_encode(&view, again, sizeof(again), &other_size) == WL_CODEC_OK);

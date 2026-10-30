@@ -531,3 +531,84 @@ fn identity_command_reports_stable_schema_and_profile_values() {
         )
     );
 }
+
+#[test]
+fn binding_plan_and_execution_support_both_guarantees_and_codecs() {
+    let directory = tempdir().unwrap();
+    let schema = directory.path().join("device.wl");
+    let profile = directory.path().join("device.bind.wl");
+    fs::write(&schema, "version 1; message Request @id(1) {} message Response @id(2) { required fixed32 value @id(1); }").unwrap();
+    for choice in ["guarantee=correlate;", "codec=positional_v1;"] {
+        fs::write(
+            &profile,
+            format!("profile version 1; rpc Query {{request=Request;response=Response;{choice}}}"),
+        )
+        .unwrap();
+        let output = Command::cargo_bin("wlc")
+            .unwrap()
+            .arg("plan")
+            .arg(&schema)
+            .arg("--profile")
+            .arg(&profile)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let mut child = std::process::Command::new("python3")
+            .args(["-c", "import json,sys; x=json.load(sys.stdin); assert x['format']=='wirelink-binding-plan-v1'; assert x['execution_generation_available'] is True; assert x['typed_result_contract']=={'major':0,'minor':12}; assert x['client_result_methods']==['Query']; assert x['pending_response_methods']==['Query']"])
+            .arg(choice).stdin(std::process::Stdio::piped()).spawn().unwrap();
+        std::io::Write::write_all(child.stdin.take().as_mut().unwrap(), &output.stdout).unwrap();
+        assert!(child.wait().unwrap().success());
+        for operation in ["compile", "compile-runtime", "sdk"] {
+            let destination = directory.path().join(format!(
+                "{operation}-{}",
+                if choice.starts_with("guarantee") {
+                    "correlate"
+                } else {
+                    "positional"
+                }
+            ));
+            let output = Command::cargo_bin("wlc")
+                .unwrap()
+                .arg(operation)
+                .arg(&schema)
+                .arg("--profile")
+                .arg(&profile)
+                .arg("--out-dir")
+                .arg(&destination)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{operation}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(destination.exists());
+        }
+    }
+    fs::write(&schema,"version 1; message Request @id(1) {required bytes<8> value @id(1);} message Response @id(2) {}").unwrap();
+    fs::write(
+        &profile,
+        "profile version 1; rpc Query {request=Request;response=Response;codec=positional_v1;}",
+    )
+    .unwrap();
+    for operation in ["compile", "compile-runtime", "sdk"] {
+        let destination = directory.path().join(format!("unsupported-{operation}"));
+        let output = Command::cargo_bin("wlc")
+            .unwrap()
+            .arg(operation)
+            .arg(&schema)
+            .arg("--profile")
+            .arg(&profile)
+            .arg("--out-dir")
+            .arg(&destination)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("positional-v1 does not support"));
+        assert!(!destination.exists());
+    }
+}

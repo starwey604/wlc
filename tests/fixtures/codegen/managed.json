@@ -2,30 +2,44 @@
   "format": "wirelink-codegen-manifest-v1",
   "compiler": {
     "name": "wlc",
-    "version": "0.8.0",
-    "codegen_contract": {"major": 0, "minor": 8}
+    "version": "0.12.0",
+    "codegen_contract": {"major": 0, "minor": 12}
   },
   "module": "business",
   "identity": {
     "algorithm": "fnv1a64-v1",
-    "schema": "0x7a963437ca23c6d6",
-    "binding_profile": "0xef95e01d91174ec7"
+    "schema": "0xcf57edfa09599916",
+    "binding_profile": "0x3d97817d6eb3a291"
+  },
+  "managed_rpc_wire_format": "managed-rpc-v4-tagged-varuint32",
+  "codec_formats": {
+    "EVENT_CODEC_FORMAT": "schema-v1",
+    "LEGACY_REQUEST_CODEC_FORMAT": "schema-v1",
+    "LEGACY_RESPONSE_CODEC_FORMAT": "schema-v1",
+    "QUERY_REQUEST_CODEC_FORMAT": "schema-v1",
+    "QUERY_RESPONSE_CODEC_FORMAT": "schema-v1",
+    "REQUEST_CODEC_FORMAT": "schema-v1",
+    "RESPONSE_CODEC_FORMAT": "schema-v1",
+    "STATION_APPLY_RPC_BODY_FORMAT": "managed-rpc-v4-tagged-varuint32",
+    "STATION_QUERY_RPC_BODY_FORMAT": "managed-rpc-v4-tagged-varuint32",
+    "TELEMETRY_CODEC_FORMAT": "schema-v1"
   },
   "bounded_fields": [
     {"message": "Request", "message_id": 3, "field": "label", "field_number": 1, "kind": "string", "max_length": 32},
     {"message": "Request", "message_id": 3, "field": "data", "field_number": 2, "kind": "bytes", "max_length": 128},
-    {"message": "Response", "message_id": 4, "field": "result", "field_number": 1, "kind": "string", "max_length": 64}
+    {"message": "Response", "message_id": 4, "field": "result", "field_number": 1, "kind": "string", "max_length": 64},
+    {"message": "LegacyResponse", "message_id": 9, "field": "data", "field_number": 3, "kind": "bytes", "max_length": 64}
   ],
   "artifact_digest_algorithm": "fnv1a64-domain-bytes-v1",
   "artifacts": [
-    {"path": "business.c", "size": 62082, "digest": "0xda5f8e351918e308"},
-    {"path": "business.h", "size": 5846, "digest": "0x0b281ffc223cbffe"},
+    {"path": "business.c", "size": 82089, "digest": "0x649cabc172ec6269"},
+    {"path": "business.h", "size": 6205, "digest": "0x112d02a350ba8dbe"},
     {"path": "business_bindings.c", "size": 18286, "digest": "0x544ca75a291d9500"},
     {"path": "business_bindings.h", "size": 5546, "digest": "0x200171b4829e995b"},
-    {"path": "business_values.h", "size": 5252, "digest": "0xc9909e0a175fed55"},
-    {"path": "station_advanced.h", "size": 13819, "digest": "0xfaac9fbb2dc6cc35"},
+    {"path": "business_values.h", "size": 6612, "digest": "0x7eeb8ee1a26cf1a1"},
+    {"path": "station_advanced.h", "size": 13545, "digest": "0x47a56f5e7c7cb771"},
     {"path": "station_endpoint.h", "size": 398, "digest": "0xbaffac443d555187"},
-    {"path": "station_runtime.c", "size": 75799, "digest": "0xd5a6326b361d77b2"},
-    {"path": "station_runtime.h", "size": 55579, "digest": "0x6bdfdce6ba85264e"}
+    {"path": "station_runtime.c", "size": 185169, "digest": "0x51d075fb43bd9150"},
+    {"path": "station_runtime.h", "size": 57333, "digest": "0x7811a150b9b1f76d"}
   ]
 }

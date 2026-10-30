@@ -81,6 +81,16 @@ void wl_event_release(wl_ctx_t *ctx, const wl_event_t *event) {
   (void)event;
 }
 
+uint32_t wl_link_resource_generation(const wl_ctx_t *ctx) { (void)ctx; return 0U; }
+uint8_t wl_tx_can_submit(const wl_ctx_t *ctx, wl_delivery_t delivery) {
+  (void)ctx; (void)delivery;
+  return 1U;
+}
+uint8_t wl_tx_can_take(const wl_ctx_t *ctx, wl_tx_handle_t handle) {
+  (void)ctx;
+  return handle != 0U;
+}
+
 int wl_send_unreliable(wl_ctx_t *ctx, uint16_t message_id,
                        const uint8_t *payload, size_t payload_len) {
   (void)ctx;
@@ -156,7 +166,6 @@ static assembly_runtime_config_t valid_config(void) {
   config.alarm_fifo_capacity = 3U;
   config.rpc_client_enabled = 1U;
   config.rpc_client_slot_count = 2U;
-  config.rpc_client_response_capacity = 64U;
   config.rpc_client_next_operation_id = 7U;
   config.rpc_server_enabled = 1U;
   config.rpc_server_pending_slot_count = 3U;
@@ -184,6 +193,7 @@ int main(void) {
   assembly_runtime_requirements_t requirements = {0};
   assembly_runtime_config_t config = valid_config();
   assembly_runtime_config_t defaults;
+  assembly_rpc_result_value_t results[2];
   assembly_runtime_storage_t storage;
   wl_latest_stats_t latest_stats = {0};
   wl_fifo_stats_t fifo_stats = {0};
@@ -197,7 +207,6 @@ int main(void) {
       defaults.alarm_fifo_capacity != 1U ||
       defaults.rpc_client_enabled != 0U ||
       defaults.rpc_server_enabled != 0U ||
-      defaults.rpc_client_response_capacity == 0U ||
       assembly_runtime_config_enable_client(&defaults) != WL_OK ||
       defaults.rpc_client_enabled != 1U ||
       assembly_runtime_config_enable_server(&defaults) !=
@@ -220,27 +229,27 @@ int main(void) {
   before = instance;
   memset(arena.bytes, 0x5A, sizeof(arena.bytes));
   storage = (assembly_runtime_storage_t){arena.bytes,
-                                         requirements.storage_size - 1U};
+                                         requirements.storage_size - 1U, results, 2U};
   if (assembly_runtime_init(&instance, &config, &storage) !=
           WL_ERR_BUF_TOO_SMALL ||
       !unchanged(&instance, &before, sizeof(instance)))
     return 2;
 
   storage = (assembly_runtime_storage_t){arena.bytes + 1U,
-                                         requirements.storage_size};
+                                         requirements.storage_size, results, 2U};
   if (assembly_runtime_init(&instance, &config, &storage) !=
           WL_ERR_INVALID_ARG ||
       !unchanged(&instance, &before, sizeof(instance)))
     return 3;
 
-  storage = (assembly_runtime_storage_t){&instance, requirements.storage_size};
+  storage = (assembly_runtime_storage_t){&instance, requirements.storage_size, results, 2U};
   if (assembly_runtime_init(&instance, &config, &storage) !=
           WL_ERR_INVALID_ARG ||
       !unchanged(&instance, &before, sizeof(instance)))
     return 4;
 
   storage = (assembly_runtime_storage_t){arena.bytes,
-                                         requirements.storage_size};
+                                         requirements.storage_size, results, 2U};
   if (assembly_runtime_init(&instance, &config, &storage) != WL_OK) return 5;
   if (instance.runtime.state_latest != &instance.state_latest ||
       instance.runtime.alarm_fifo != &instance.alarm_fifo ||
@@ -248,8 +257,7 @@ int main(void) {
       instance.runtime.rpc_server != &instance.rpc_server ||
       instance.runtime.execute.request_scratch !=
           &instance.execute_scratch.request ||
-      instance.runtime.execute.response_scratch !=
-          &instance.execute_scratch.response ||
+      instance.runtime.rpc_results != results ||
       instance.runtime.rpc_encode_scratch != &instance.rpc_encode_scratch ||
       instance.runtime.execute.request_handler != execute ||
       instance.runtime.execute.user_data != (void *)(uintptr_t)0x1234U)
@@ -266,7 +274,7 @@ int main(void) {
     return 9;
 
   config.alarm_fifo_capacity = 0U;
-  requirements = (assembly_runtime_requirements_t){99U, 99U};
+  requirements = (assembly_runtime_requirements_t){99U, 99U, 99U};
   if (assembly_runtime_requirements(&config, &requirements) !=
           WL_ERR_INVALID_ARG ||
       requirements.storage_size != 0U || requirements.storage_alignment != 0U)
@@ -298,7 +306,7 @@ int main(void) {
     return 15;
   memset(&instance, 0xA5, sizeof(instance));
   before = instance;
-  storage = (assembly_runtime_storage_t){arena.bytes, sizeof(arena.bytes)};
+  storage = (assembly_runtime_storage_t){arena.bytes, sizeof(arena.bytes), results, 2U};
   if (assembly_runtime_init(&instance, &config, &storage) !=
           WL_ERR_INVALID_ARG ||
       !unchanged(&instance, &before, sizeof(instance)))
@@ -307,7 +315,6 @@ int main(void) {
   config = valid_config();
   config.rpc_client_enabled = 0U;
   config.rpc_client_slot_count = 0U;
-  config.rpc_client_response_capacity = 0U;
   config.rpc_server_enabled = 0U;
   config.rpc_server_pending_slot_count = 0U;
   config.rpc_server_cache_slot_count = 0U;
@@ -316,14 +323,14 @@ int main(void) {
       requirements.storage_size == 0U)
     return 17;
   storage = (assembly_runtime_storage_t){arena.bytes,
-                                         requirements.storage_size};
+                                         requirements.storage_size, results, 2U};
   if (assembly_runtime_init(&instance, &config, &storage) != WL_OK ||
       instance.runtime.state_latest == NULL ||
       instance.runtime.alarm_fifo == NULL ||
       instance.runtime.rpc_client != NULL ||
       instance.runtime.rpc_server != NULL ||
       instance.runtime.execute.request_scratch != NULL ||
-      instance.runtime.execute.response_scratch != NULL ||
+      instance.runtime.rpc_results != NULL ||
       instance.runtime.rpc_encode_scratch != NULL)
     return 18;
   return 0;

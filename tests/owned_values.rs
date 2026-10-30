@@ -20,6 +20,7 @@ message Snapshot @id(3) {
 message Large @id(4) { required bytes<2031> payload @id(1); }
 message Unbounded @id(5) { repeated DeviceInfo devices @id(1); }
 message Empty @id(6) {}
+message Scalars @id(7) { required uint32 value @id(1); optional fixed64 wide @id(300); optional float64 real @id(65535); }
 "#;
 
 #[test]

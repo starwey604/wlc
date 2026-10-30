@@ -98,3 +98,20 @@ message Metadata = 7 {
     ));
     assert!(!manifest.contains("unbounded\""));
 }
+
+#[test]
+fn manifest_records_managed_wire_separately_from_business_schema() {
+    let schema = schema("version 1; message Control @id(1) {}");
+    let artifact = ManifestArtifact {
+        path: "control_runtime.h",
+        contents: b"#define CONTROL_RPC_MANAGED_WIRE_FORMAT \"managed-rpc-v4-tagged-varuint32\"\n",
+    };
+    let managed = generate_codegen_manifest("control", &schema, Some(7), &[artifact]);
+    assert!(managed.contains("\"managed_rpc_wire_format\": \"managed-rpc-v4-tagged-varuint32\""));
+    assert!(managed.contains(&format!(
+        "\"schema\": \"0x{:016x}\"",
+        schema_identity(&schema)
+    )));
+    let ordinary = generate_codegen_manifest("control", &schema, None, &[]);
+    assert!(!ordinary.contains("managed_rpc_wire_format"));
+}

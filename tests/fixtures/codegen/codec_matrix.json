@@ -2,8 +2,8 @@
   "format": "wirelink-codegen-manifest-v1",
   "compiler": {
     "name": "wlc",
-    "version": "0.8.0",
-    "codegen_contract": {"major": 0, "minor": 8}
+    "version": "0.12.0",
+    "codegen_contract": {"major": 0, "minor": 12}
   },
   "module": "business",
   "identity": {
@@ -11,16 +11,40 @@
     "schema": "0xd2385a69c9704dff",
     "binding_profile": null
   },
+  "codec_formats": {
+    "BORROWED_CODEC_FORMAT": "schema-v1",
+    "MIXED_PACKED_CODEC_FORMAT": "schema-v1",
+    "N0S1_CODEC_FORMAT": "schema-v1",
+    "N0S997_CODEC_FORMAT": "schema-v1",
+    "N16S1_CODEC_FORMAT": "schema-v1",
+    "N16S997_CODEC_FORMAT": "schema-v1",
+    "N1S1_CODEC_FORMAT": "schema-v1",
+    "N1S997_CODEC_FORMAT": "schema-v1",
+    "N32S1_CODEC_FORMAT": "schema-v1",
+    "N32S997_CODEC_FORMAT": "schema-v1",
+    "N64S1_CODEC_FORMAT": "schema-v1",
+    "N64S997_CODEC_FORMAT": "schema-v1",
+    "N8S1_CODEC_FORMAT": "schema-v1",
+    "N8S997_CODEC_FORMAT": "schema-v1",
+    "N9S1_CODEC_FORMAT": "schema-v1",
+    "N9S997_CODEC_FORMAT": "schema-v1",
+    "PACKED32_CODEC_FORMAT": "schema-v1",
+    "PACKED64_CODEC_FORMAT": "schema-v1",
+    "PACKED_FIXED32_CODEC_FORMAT": "schema-v1",
+    "PACKED_FIXED_CODEC_FORMAT": "schema-v1",
+    "PARENT_CODEC_FORMAT": "schema-v1",
+    "SCALARS_CODEC_FORMAT": "schema-v1"
+  },
   "bounded_fields": [
     {"message": "Scalars", "message_id": 101, "field": "label", "field_number": 15, "kind": "string", "max_length": 32},
     {"message": "Scalars", "message_id": 101, "field": "data", "field_number": 2048, "kind": "bytes", "max_length": 16}
   ],
   "artifact_digest_algorithm": "fnv1a64-domain-bytes-v1",
   "artifacts": [
-    {"path": "business.c", "size": 224487, "digest": "0x9fe8c250ce5cca90"},
+    {"path": "business.c", "size": 331506, "digest": "0x21f028d4bee82024"},
     {"path": "business.h", "size": 23596, "digest": "0xdc970965a904bc34"},
     {"path": "business_bindings.c", "size": 47568, "digest": "0xbc6eaf78bd44b2a0"},
     {"path": "business_bindings.h", "size": 11768, "digest": "0x180a96f922da43e5"},
-    {"path": "business_values.h", "size": 22356, "digest": "0x00b77d68616066e3"}
+    {"path": "business_values.h", "size": 23978, "digest": "0xefdd45db9bbe5b7b"}
   ]
 }

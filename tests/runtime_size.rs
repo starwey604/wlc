@@ -50,10 +50,11 @@ rpc Execute {
 "#;
 
 const HOT_PATH_TEXT_BUDGET: usize = 3904;
-const ASSEMBLY_TEXT_BUDGET: usize = 1200;
+// Typed pool checks add cold initialization code; keep hot path budget fixed.
+const ASSEMBLY_TEXT_BUDGET: usize = 1248;
 const PUMP_BRIDGE_TEXT_BUDGET: usize = 320;
 const OPTIONAL_DIAGNOSTIC_TEXT_BUDGET: usize = 1792;
-const COMBINED_TEXT_BUDGET: usize = 6784;
+const COMBINED_TEXT_BUDGET: usize = 6848;
 
 fn wirelink_root() -> std::path::PathBuf {
     fs::canonicalize(
@@ -239,7 +240,8 @@ fn combined_runtime_cortex_m_text_stays_within_split_budgets_when_toolchain_exis
                 "runtime_size_runtime_requirements",
                 "runtime_size_runtime_init",
             ]
-            .contains(name);
+            .contains(name)
+                || name.starts_with("runtime_size_runtime_result_storage_validate");
             is_assembly
                 .then(|| usize::from_str_radix(columns.get(1)?, 16).ok())
                 .flatten()

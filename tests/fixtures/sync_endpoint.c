@@ -7,6 +7,7 @@ static unsigned sync_waits, sync_handlers, sync_other_done, sync_steps;
 static uint32_t sync_last_wait;
 static bool sync_blackhole;
 static int sync_wait_error;
+static uint32_t sync_query_delay;
 
 static int sync_transfer(void *context) {
   (void)context;
@@ -15,17 +16,17 @@ static int sync_transfer(void *context) {
 }
 static int sync_service(void *context) {
   if (++sync_steps > 10000) {
-    wl_poll_hint_t hint;
+    wl_readiness_t hint;
     wl_rpc_deadline_hint_t rpc_hint;
     wl_adapter_stats_t a, b;
-    (void)wl_poll_get_hint(wl_endpoint_link(demo_endpoint_handle(sync_client)), now, &hint);
+    (void)wl_link_get_readiness(wl_endpoint_link(demo_endpoint_handle(sync_client)), now, &hint);
     (void)demo_runtime_get_deadline_hint(demo_endpoint_runtime(sync_client), now, &rpc_hint);
     (void)wl_loopback_get_stats(&sync_cable, WL_LOOPBACK_ENDPOINT_A, &a);
     (void)wl_loopback_get_stats(&sync_cable, WL_LOOPBACK_ENDPOINT_B, &b);
     fprintf(stderr, "sync stuck: handlers=%u waits=%u blackhole=%u wait_error=%d time=%u\n",
         sync_handlers, sync_waits, sync_blackhole, sync_wait_error, now);
     fprintf(stderr, "hints core=%u work=%u rpc=%u txa=%u txb=%u\n", hint.next_deadline_ms,
-        hint.work_pending, rpc_hint.next_deadline_ms, a.tx_active, b.tx_active);
+        hint.runnable, rpc_hint.next_deadline_ms, a.tx_active, b.tx_active);
     abort();
   }
   int error = sync_transfer(context);
@@ -37,17 +38,25 @@ static int sync_service(void *context) {
   }
   return WL_OK;
 }
-static uint32_t sync_hint(const void *context, wl_time_ms_t time) {
-  (void)context; (void)time;
-  /* A deliberately stopped peer cannot consume its RX slot. Outstanding
-   * loopback transfers are blocked, not immediately progressable work. */
-  if (sync_blackhole) return UINT32_MAX;
-  wl_adapter_stats_t a, b;
-  wl_poll_hint_t peer;
-  CHECK(wl_loopback_get_stats(&sync_cable, WL_LOOPBACK_ENDPOINT_A, &a) == WL_OK);
-  CHECK(wl_loopback_get_stats(&sync_cable, WL_LOOPBACK_ENDPOINT_B, &b) == WL_OK);
-  CHECK(wl_poll_get_hint(wl_endpoint_link(demo_endpoint_handle(&sync_server)), time, &peer) == WL_OK);
-  return a.tx_active || b.tx_active || peer.work_pending ? 0 : peer.next_deadline_ms;
+static wl_readiness_t sync_hint_readiness(const void *context, const wl_ctx_t *link, wl_time_ms_t time) {
+  (void)context;
+  (void)link;
+  wl_readiness_t value = wl_readiness_idle(), peer;
+  if (sync_blackhole) {
+    if (sync_query_delay != 0U && !demo_endpoint_handle(sync_client)->private_stepping) {
+      now += sync_query_delay; /* Deterministic preemption during outer query. */
+      sync_query_delay = 0U;
+    }
+    value.blocked = 1U;
+    return value;
+  }
+  value = wl_loopback_readiness(&sync_cable);
+  wl_ctx_t *server_link = wl_endpoint_link(demo_endpoint_handle(&sync_server));
+  CHECK(wl_link_get_readiness(server_link, time, &peer) == WL_OK);
+  wl_readiness_merge(&value, peer);
+  wl_readiness_merge(&value, demo_runtime_readiness(server_link,
+      demo_endpoint_runtime(&sync_server), time));
+  return value;
 }
 static wl_err_t sync_wait(void *context, uint32_t maximum_ms) {
   CHECK(context == &sync_waits);
@@ -91,11 +100,11 @@ static void sync_initialize(void) {
   if (allocate_endpoints) {
     wl_allocator_t allocator = endpoint_allocator();
     sync_client = NULL;
-    CHECK(demo_endpoint_config_defaults(&config, test_environment_id(31, (wl_clock_t){0})) == WL_OK);
+    CHECK(demo_endpoint_config_defaults(&config, test_environment_id(31, (wl_clock_t){0}), wl_link_defaults()) == WL_OK);
     config.environment.clock = (wl_clock_t){read_clock, NULL};
     CHECK(demo_endpoint_create(&sync_client, &config, &allocator) == WL_OK);
-  } else CHECK(demo_endpoint_init(sync_client, test_environment_id(31, (wl_clock_t){read_clock, NULL})) == WL_OK);
-  CHECK(demo_endpoint_config_defaults(&config, test_environment_id(32, (wl_clock_t){0})) == WL_OK);
+  } else CHECK(demo_endpoint_init(sync_client, test_environment_id(31, (wl_clock_t){read_clock, NULL}), wl_link_defaults()) == WL_OK);
+  CHECK(demo_endpoint_config_defaults(&config, test_environment_id(32, (wl_clock_t){0}), wl_link_defaults()) == WL_OK);
   config.environment.clock = (wl_clock_t){read_clock, NULL};
   config.on_execute = sync_execute;
   config.on_download = download;
@@ -105,7 +114,7 @@ static void sync_initialize(void) {
       wl_endpoint_link(demo_endpoint_handle(&sync_server))) == WL_OK);
   wl_pump_hooks_t hooks = {0};
   hooks.service = sync_transfer;
-  hooks.adapter_deadline_hint = sync_hint;
+  hooks.adapter_readiness = sync_hint_readiness;
   CHECK(wl_endpoint_attach(demo_endpoint_handle(&sync_server), &hooks) == WL_OK);
   hooks.service = sync_service;
   CHECK(wl_endpoint_attach(demo_endpoint_handle(sync_client), &hooks) == WL_OK);
@@ -113,6 +122,7 @@ static void sync_initialize(void) {
   CHECK(wl_endpoint_set_waiter(demo_endpoint_handle(sync_client), &waiter) == WL_OK);
   sync_blackhole = false;
   sync_wait_error = WL_OK;
+  sync_query_delay = 0U;
   sync_waits = sync_handlers = sync_other_done = sync_steps = 0;
 }
 static void sync_close(void) {
@@ -176,6 +186,19 @@ static void run_sync_tests(void) {
     CHECK(demo_endpoint_step(sync_client) == WL_OK);
     sync_close();
     CHECK(sync_other_done == ((DEMO_ENDPOINT_RPC_CAPACITY > 1 && attempt != 0) ? 1U : 0U));
+  }
+  for (unsigned delay = 7U; delay <= 15U; delay += 8U) {
+    sync_initialize();
+    sync_blackhole = true;
+    sync_query_delay = delay;
+    now = UINT32_MAX - 5U;
+    result = demo_endpoint_execute_sync(sync_client, &value, &response, 10);
+    CHECK(result.status == WL_RPC_TIMED_OUT && result.local_error == WL_OK);
+    CHECK(sync_waits == (delay < 10U ? 1U : 0U));
+    if (delay < 10U) CHECK(sync_last_wait == 10U - delay);
+    CHECK(now == (wl_time_ms_t)(UINT32_MAX - 5U + (delay < 10U ? 10U : delay)));
+    CHECK(memcmp(&response, &unchanged, sizeof(response)) == 0);
+    sync_close();
   }
   result = demo_endpoint_execute_sync(sync_client, &value, &response, 10);
   CHECK(result.status == WL_RPC_FAILED && result.local_error == WL_ERR_NOT_INITIALIZED);

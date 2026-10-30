@@ -71,8 +71,8 @@ static void deferred_work_survives_another_service(void) {
   uint64_t identity = 1;
   const wl_environment_t environment = {{now, NULL}, {next_identity, &identity}};
   demo_endpoint_config_t config;
-  assert(demo_endpoint_init(&client_endpoint, environment) == WL_OK);
-  assert(demo_endpoint_config_defaults(&config, environment) == WL_OK);
+  assert(demo_endpoint_init(&client_endpoint, environment, wl_link_defaults()) == WL_OK);
+  assert(demo_endpoint_config_defaults(&config, environment, wl_link_defaults()) == WL_OK);
   config.advanced.small_request_handler = defer_small;
   config.on_large = large;
   assert(demo_endpoint_init_config(&server_endpoint, &config) == WL_OK);
@@ -122,7 +122,7 @@ int main(void) {
   const demo_runtime_storage_t descriptor = demo_runtime_default_storage_descriptor(&storage);
   assert(demo_runtime_init(&instance, &config, &descriptor) == WL_OK);
   assert((void *)instance.runtime.small.request_scratch == (void *)instance.runtime.large.request_scratch);
-  assert(instance.runtime.large.response_scratch == NULL); /* Client role disabled. */
+  assert(instance.runtime.rpc_results == NULL); /* Client role disabled. */
   assert((uintptr_t)instance.runtime.large.request_scratch % _Alignof(large_request_t) == 0);
   config.rpc_server_cache_ttl_ms = UINT32_MAX;
   assert(demo_runtime_requirements(&config, &grown) == WL_ERR_INVALID_ARG);

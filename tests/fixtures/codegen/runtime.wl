@@ -7,4 +7,4 @@ message QueryRequest @id(5) {}
 message QueryResponse @id(6) { optional uint32 status @id(1); }
 message LegacyRequest @id(7) { optional uint32 operation_id @id(1); repeated uint32 values @id(2); }
 enum Status @id(8) { SUCCESS = 0; FAILURE = 1; }
-message LegacyResponse @id(9) { optional uint32 call_id @id(1); optional Status status @id(2); optional bytes data @id(3); }
+message LegacyResponse @id(9) { optional uint32 call_id @id(1); optional Status status @id(2); optional bytes<64> data @id(3); }

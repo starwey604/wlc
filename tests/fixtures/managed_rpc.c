@@ -19,7 +19,6 @@ static demo_execute_request_token_t observer_token;
 static wl_rpc_err_t observer_reply;
 static wl_rpc_client_t concurrent_client;
 static wl_rpc_client_slot_t client_slots[2];
-static uint8_t client_responses[2][26];
 static wl_rpc_server_t concurrent_server;
 static wl_rpc_server_pending_slot_t pending_slots[2];
 static wl_rpc_server_cache_slot_t cache_slots[4];
@@ -55,12 +54,12 @@ static int drain(void) {
 static int init(void) {
   demo_endpoint_config_t ca, cb;
   const wl_rpc_client_config_t client = {
-      client_slots, 2U, &client_responses[0][0], sizeof(client_responses), 26U, 1U};
+      client_slots, 2U, 1U};
   const wl_rpc_server_config_t server = {
       pending_slots, 2U, cache_slots, 4U, &cached_responses[0][0],
       sizeof(cached_responses), 26U, 1000U, 1000U, WL_RPC_CACHE_EVICT_OLDEST};
-  CHECK(demo_endpoint_config_defaults(&ca, test_environment_id(101U, (wl_clock_t){0})) == WL_OK);
-  CHECK(demo_endpoint_config_defaults(&cb, test_environment_id(202U, (wl_clock_t){0})) == WL_OK);
+  CHECK(demo_endpoint_config_defaults(&ca, test_environment_id(101U, (wl_clock_t){0}), wl_link_defaults()) == WL_OK);
+  CHECK(demo_endpoint_config_defaults(&cb, test_environment_id(202U, (wl_clock_t){0}), wl_link_defaults()) == WL_OK);
   CHECK(demo_runtime_config_enable_client(&ca.advanced) == WL_OK);
   CHECK(demo_runtime_config_enable_server(&cb.advanced) == WL_OK);
   ca.link.ack_timeout_ms = cb.link.ack_timeout_ms = 10U;
@@ -103,14 +102,19 @@ static int complete(unsigned index, int32_t value) {
   return drain();
 }
 
-static void header(uint8_t *data, uint32_t id, int32_t status) {
+static size_t header(uint8_t *data, uint32_t id, int32_t status) {
   uint64_t session = wl_link_session_id(wl_endpoint_link(demo_endpoint_handle(&a)));
-  for (unsigned i = 0; i < 8; ++i) data[12U + i] = (uint8_t)(session >> (56U - 8U * i));
-  data[0] = 0U; data[1] = 2U; data[2] = 2U; data[3] = 0U;
-  for (unsigned i = 0U; i < 4U; ++i) {
-    data[4U + i] = (uint8_t)(id >> (24U - 8U * i));
-    data[8U + i] = (uint8_t)((uint32_t)status >> (24U - 8U * i));
+  size_t at = 9U;
+  for (unsigned i = 0; i < 8; ++i) data[i] = (uint8_t)(session >> (56U - 8U * i));
+  data[8] = (uint8_t)(((id & 63U) << 1U) | (status != 0));
+  id >>= 6;
+  if (id) data[8] |= 128U;
+  while (id) { uint8_t byte = (uint8_t)(id & 127U); id >>= 7; data[at++] = id ? (uint8_t)(byte | 128U) : byte; }
+  if (status) {
+    for (unsigned i = 0; i < 4; ++i) data[at + i] = (uint8_t)((uint32_t)status >> (24U - 8U * i));
+    at += 4;
   }
+  return at;
 }
 
 static int inject(demo_endpoint_t *endpoint, uint16_t id, const uint8_t *data,
@@ -120,7 +124,7 @@ static int inject(demo_endpoint_t *endpoint, uint16_t id, const uint8_t *data,
   size_t written;
   wl_wire_packet_t packet = {0};
   packet.type = WL_PACKET_DATA;
-  packet.integrity = WL_INTEGRITY_CRC32C;
+  packet.integrity = WL_INTEGRITY_CRC16;
   packet.flags = reliable ? WL_PACKET_FLAG_RELIABLE : 0U;
   packet.sequence = reliable ? sequence++ : 0U;
   packet.session_id = reliable ? wl_link_session_id(wl_endpoint_link(demo_endpoint_handle(endpoint == &a ? &b : &a))) : 0U;
@@ -169,7 +173,7 @@ static int test_peer_response_retirement(void) {
     CHECK(demo_runtime_peer_observe(wl_endpoint_link(demo_endpoint_handle(&b)),
         demo_endpoint_runtime(&b), 999U, &observation) == WL_RPC_OK);
     if (retiring_async) {
-      CHECK(wl_tx_complete(wl_endpoint_link(demo_endpoint_handle(&b)), retiring_token, WL_OK) == WL_OK);
+      CHECK(wl_tx_consumed(wl_endpoint_link(demo_endpoint_handle(&b)), retiring_token, WL_OK) == WL_OK);
     }
     CHECK(demo_endpoint_step(&b) == WL_OK);
     retiring_async = false;
@@ -185,6 +189,25 @@ static int test_peer_response_retirement(void) {
 }
 #endif
 
+static int test_compact_request_bytes(void) {
+  const request_value_t request = {.has_input = true, .input = 41};
+  const uint8_t expected[] = {
+    0x01U, 0x23U, 0x45U, 0x67U, 0x89U, 0xABU, 0xCDU, 0xEFU,
+    0xFEU, 0xFFU, 0xFFU, 0xFFU, 0x1FU,
+    0x08U, 0x52U
+  };
+  uint8_t encoded[sizeof(expected) + 1U];
+  size_t length = 0U;
+  memset(encoded, 0xA5, sizeof(encoded));
+  CHECK(demo_execute_encode_submission(&request, UINT32_MAX,
+      UINT64_C(0x0123456789ABCDEF), encoded, sizeof(expected), &length) == WL_OK);
+  CHECK(length == sizeof(expected) && memcmp(encoded, expected, length) == 0);
+  CHECK(encoded[sizeof(expected)] == 0xA5U);
+  CHECK(demo_execute_encode_submission(&request, UINT32_MAX,
+      UINT64_C(0x0123456789ABCDEF), encoded, sizeof(expected) - 1U, &length) == WL_ERR_CORRUPT_PAYLOAD);
+  return 0;
+}
+
 int main(void) {
   demo_execute_call_t first, second, saved;
   demo_execute_result_t result;
@@ -197,6 +220,7 @@ int main(void) {
   request_t missing;
   uint8_t payload[26] = {0};
   uint32_t first_id, second_id;
+  CHECK(test_compact_request_bytes() == 0);
   CHECK(init() == 0);
   CHECK(call(41, 1000U, &first) == 0);
   CHECK(call(50, 1000U, &second) == 0);
@@ -210,79 +234,100 @@ int main(void) {
   CHECK(demo_endpoint_auxiliary_inspect(&a, &wrong_service, &auxiliary_result) == WL_RPC_ERR_RESPONSE_MISMATCH);
   CHECK(complete(1U, 51) == 0);
   CHECK(demo_endpoint_execute_inspect(&a, &second, &result) == WL_RPC_OK);
-  CHECK(result.state == WL_RPC_CLIENT_COMPLETED && result.response_valid && result.response.output == 51);
+  CHECK(result.state == WL_RPC_CLIENT_COMPLETED && result.response_valid && result.response->output == 51);
   CHECK(demo_endpoint_execute_inspect(&a, &first, &result) == WL_RPC_OK);
   CHECK(result.state == WL_RPC_CLIENT_WAIT_RESPONSE && !result.response_valid);
+  {
+    wl_rpc_client_result_t raw;
+    const uint8_t expected[] = {
+      0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x65U,
+      0x04U,
+      0x08U, 0x66U
+    };
+    CHECK(demo_execute_client_inspect(demo_endpoint_runtime(&a), second_id, &raw) == WL_RPC_OK);
+    CHECK(raw.response_valid);
+    CHECK(memcmp(cached_responses[1], expected, sizeof(expected)) == 0);
+  }
   saved = second;
   CHECK(demo_endpoint_execute_release(&a, &second) == WL_RPC_OK);
   // A late released-call reply and malformed metadata must not complete first.
   header(payload, second_id, 0);
-  payload[20] = 8U; payload[21] = 102U;
-  CHECK(inject_response(RESPONSE_MESSAGE_ID, payload, 22U, WL_OK) == 0);
+  payload[9] = 8U; payload[10] = 102U;
+  CHECK(inject_response(RESPONSE_MESSAGE_ID, payload, 11U, WL_OK) == 0);
   CHECK(demo_endpoint_result(&a)->detail.rpc.rpc_result == WL_RPC_ERR_NOT_FOUND);
   header(payload, first_id, 0);
-  payload[19] ^= 1U;
-  CHECK(inject_response(RESPONSE_MESSAGE_ID, payload, 22U, WL_OK) == 0);
+  payload[7] ^= 1U;
+  CHECK(inject_response(RESPONSE_MESSAGE_ID, payload, 11U, WL_OK) == 0);
   CHECK(demo_endpoint_result(&a)->detail.rpc.rpc_result == WL_RPC_ERR_SESSION_MISMATCH);
   CHECK(demo_endpoint_execute_inspect(&a, &first, &result) == WL_RPC_OK);
   CHECK(result.state == WL_RPC_CLIENT_WAIT_RESPONSE);
   header(payload, first_id, 0);
-  memset(payload + 12U, 0, 8U);
-  CHECK(inject_response(RESPONSE_MESSAGE_ID, payload, 22U, WL_ERR_INVALID_STATE) == 0);
-  CHECK(demo_endpoint_result(&a)->detail.rpc.rpc_result == WL_RPC_ERR_MALFORMED_METADATA);
-  header(payload, first_id, 0);
-  payload[1] = 1U; /* Old managed format is not silently accepted. */
-  CHECK(inject_response(RESPONSE_MESSAGE_ID, payload, 22U, WL_ERR_INVALID_STATE) == 0);
-  CHECK(demo_endpoint_result(&a)->detail.rpc.rpc_result == WL_RPC_ERR_MALFORMED_METADATA);
-  header(payload, first_id, 0);
-  for (unsigned byte = 0U; byte < 4U; ++byte) {
-    payload[byte] ^= 0x80U;
-    CHECK(inject_response(RESPONSE_MESSAGE_ID, payload, 22U, WL_ERR_INVALID_STATE) == 0);
-    CHECK(demo_endpoint_result(&a)->detail.rpc.rpc_result == WL_RPC_ERR_MALFORMED_METADATA);
-    payload[byte] ^= 0x80U;
-  }
+  memset(payload, 0, 8U);
   CHECK(inject_response(RESPONSE_MESSAGE_ID, payload, 11U, WL_ERR_INVALID_STATE) == 0);
+  CHECK(demo_endpoint_result(&a)->detail.rpc.rpc_result == WL_RPC_ERR_MALFORMED_METADATA);
+  header(payload, first_id, 0);
+  payload[8] = (uint8_t)((first_id << 1) | 128U); payload[9] = 0U; // Noncanonical call ID.
+  CHECK(inject_response(RESPONSE_MESSAGE_ID, payload, 11U, WL_ERR_INVALID_STATE) == 0);
+  CHECK(demo_endpoint_result(&a)->detail.rpc.rpc_result == WL_RPC_ERR_MALFORMED_METADATA);
+  header(payload, UINT32_MAX, 0);
+  payload[12] = 32U; // Operation ID overflow.
+  CHECK(inject_response(RESPONSE_MESSAGE_ID, payload, 13U, WL_ERR_INVALID_STATE) == 0);
+  CHECK(demo_endpoint_result(&a)->detail.rpc.rpc_result == WL_RPC_ERR_MALFORMED_METADATA);
+  CHECK(inject_response(RESPONSE_MESSAGE_ID, payload, 8U, WL_ERR_INVALID_STATE) == 0);
   header(payload, 0U, 0);
-  CHECK(inject_response(RESPONSE_MESSAGE_ID, payload, 22U, WL_ERR_INVALID_STATE) == 0);
+  CHECK(inject_response(RESPONSE_MESSAGE_ID, payload, 11U, WL_ERR_INVALID_STATE) == 0);
   CHECK(demo_endpoint_result(&a)->detail.rpc.rpc_result == WL_RPC_ERR_MALFORMED_METADATA);
   header(payload, first_id, 7);
-  CHECK(inject_response(RESPONSE_MESSAGE_ID, payload, 22U, WL_ERR_INVALID_STATE) == 0);
+  CHECK(inject_response(RESPONSE_MESSAGE_ID, payload, 12U, WL_ERR_INVALID_STATE) == 0);
+  CHECK(demo_endpoint_result(&a)->detail.rpc.rpc_result == WL_RPC_ERR_MALFORMED_METADATA);
+  CHECK(inject_response(RESPONSE_MESSAGE_ID, payload, 14U, WL_ERR_INVALID_STATE) == 0);
+  CHECK(demo_endpoint_result(&a)->detail.rpc.rpc_result == WL_RPC_ERR_MALFORMED_METADATA);
+  memset(payload + 9U, 0, 4U);
+  CHECK(inject_response(RESPONSE_MESSAGE_ID, payload, 13U, WL_ERR_INVALID_STATE) == 0);
   CHECK(demo_endpoint_result(&a)->detail.rpc.rpc_result == WL_RPC_ERR_MALFORMED_METADATA);
   header(payload, first_id, 0);
-  CHECK(inject_response(RESPONSE_MESSAGE_ID, payload, 20U, WL_ERR_INVALID_STATE) == 0);
+  CHECK(inject_response(RESPONSE_MESSAGE_ID, payload, 9U, WL_ERR_INVALID_STATE) == 0);
   CHECK(demo_endpoint_result(&a)->domain == DEMO_RUNTIME_CODEC_ERROR);
   CHECK(demo_endpoint_execute_inspect(&a, &first, &result) == WL_RPC_OK);
   CHECK(result.state == WL_RPC_CLIENT_WAIT_RESPONSE);
   CHECK(complete(0U, 42) == 0);
   CHECK(demo_endpoint_execute_inspect(&a, &first, &result) == WL_RPC_OK);
-  CHECK(result.response_valid && result.response.output == 42);
+  CHECK(result.response_valid && result.response->output == 42);
   CHECK(demo_endpoint_execute_release(&a, &first) == WL_RPC_OK);
   header(payload, first_id, 0);
-  payload[2] = 1U;
-  payload[20] = 8U; payload[21] = 82U; /* Same request: input = 41. */
+  payload[9] = 8U; payload[10] = 82U; /* Same request: input = 41. */
 #if REQUEST_RELIABLE
-  payload[19] ^= 1U;
-  CHECK(inject(&b, REQUEST_MESSAGE_ID, payload, 22U, true, WL_ERR_INVALID_STATE) == 0);
+  payload[7] ^= 1U;
+  CHECK(inject(&b, REQUEST_MESSAGE_ID, payload, 11U, true, WL_ERR_INVALID_STATE) == 0);
   CHECK(demo_endpoint_result(&b)->detail.rpc.rpc_result == WL_RPC_ERR_SESSION_MISMATCH);
   CHECK(calls == 2U);
   CHECK(drain() == 0);
-  payload[19] ^= 1U;
+  payload[7] ^= 1U;
 #endif
-  CHECK(inject(&b, REQUEST_MESSAGE_ID, payload, 22U, REQUEST_RELIABLE != 0, WL_OK) == 0);
+  CHECK(inject(&b, REQUEST_MESSAGE_ID, payload, 11U, REQUEST_RELIABLE != 0, WL_OK) == 0);
   CHECK(calls == 2U); /* Replay must not execute the handler again. */
   CHECK(drain() == 0);
-  payload[21] = 84U;
-  CHECK(inject(&b, REQUEST_MESSAGE_ID, payload, 22U, REQUEST_RELIABLE != 0, WL_ERR_INVALID_STATE) == 0);
+  payload[10] = 84U;
+  CHECK(inject(&b, REQUEST_MESSAGE_ID, payload, 11U, REQUEST_RELIABLE != 0, WL_ERR_INVALID_STATE) == 0);
   CHECK(demo_endpoint_result(&b)->detail.rpc.rpc_result == WL_RPC_ERR_OPERATION_CONFLICT);
   CHECK(calls == 2U);
   CHECK(drain() == 0);
   CHECK(call(-1, 1000U, &first) == 0);
   CHECK(demo_endpoint_execute_inspect(&a, &saved, &result) == WL_RPC_ERR_NOT_FOUND);
   completed = demo_endpoint_execute_reject(&b, &tokens[2], INT32_MIN);
-  CHECK(completed == WL_RPC_OK && demo_endpoint_result(&b)->detail.rpc.payload_length == 20U);
+  CHECK(completed == WL_RPC_OK && demo_endpoint_result(&b)->detail.rpc.payload_length == 13U);
   CHECK(drain() == 0);
   CHECK(demo_endpoint_execute_inspect(&a, &first, &result) == WL_RPC_OK);
   CHECK(result.state == WL_RPC_CLIENT_APPLICATION_ERROR && result.application_status == INT32_MIN && !result.response_valid);
+  {
+    wl_rpc_client_result_t raw;
+    CHECK(demo_execute_client_inspect(demo_endpoint_runtime(&a),
+        tokens[2].private_state.request.identity.operation_id, &raw) == WL_RPC_OK);
+    CHECK(!raw.response_valid);
+    CHECK(cached_responses[2][8] & 1U);
+    CHECK(cached_responses[2][9] == 0x80U && cached_responses[2][10] == 0U &&
+        cached_responses[2][11] == 0U && cached_responses[2][12] == 0U);
+  }
   CHECK(demo_endpoint_execute_release(&a, &first) == WL_RPC_OK);
   CHECK(call(9, 1000U, &first) == 0);
   CHECK(demo_endpoint_execute_cancel(&a, &first) == WL_RPC_OK);

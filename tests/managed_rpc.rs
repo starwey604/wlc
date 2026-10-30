@@ -52,12 +52,12 @@ fn managed_rpc_profiles_have_no_business_metadata_or_partial_mapping() {
     assert!(
         runtime
             .header
-            .contains("#define DEMO_ENDPOINT_MAX_PAYLOAD 26U")
+            .contains("#define DEMO_ENDPOINT_MAX_PAYLOAD 19U")
     );
     assert!(
         runtime
             .source
-            .contains("config->rpc_client_response_capacity = 26U")
+            .contains("config->rpc_server_response_capacity = 19U")
     );
     assert!(
         runtime
@@ -106,7 +106,7 @@ fn managed_rpc_profiles_have_no_business_metadata_or_partial_mapping() {
 
 #[test]
 fn managed_metadata_counts_toward_one_frame_limits() {
-    for (count, available) in [(506, true), (507, false)] {
+    for (count, available) in [(508, true), (509, false)] {
         let source = format!(
             "version 1; message Request @id(2) {{ required packed fixed32 values[{count}] @id(1); }} message Response @id(3) {{}}"
         );
@@ -122,6 +122,40 @@ fn managed_metadata_counts_toward_one_frame_limits() {
             u8::from(available)
         )));
     }
+}
+
+#[test]
+fn empty_managed_responses_reserve_rejection_capacity() {
+    let schema = analyze_schema(
+        &parse_schema("version 1; message Request @id(2) {} message Response @id(3) {}").unwrap(),
+    )
+    .unwrap();
+    let profile = analyze_binding_profile(
+        &parse_binding_profile(PROFILE.split("rpc Auxiliary").next().unwrap()).unwrap(),
+        &schema,
+    )
+    .unwrap();
+    let runtime = generate_runtime_c(&schema, &profile, "demo").unwrap();
+    assert!(
+        runtime
+            .header
+            .contains("#define DEMO_ENDPOINT_MAX_PAYLOAD 17U")
+    );
+    assert!(
+        runtime
+            .header
+            .contains("#define DEMO_ENDPOINT_REQUEST_CAPACITY 13U")
+    );
+    assert!(
+        runtime
+            .source
+            .contains("config->rpc_server_response_capacity = 17U")
+    );
+    assert!(
+        runtime
+            .source
+            .contains("config->rpc_server_response_capacity = 17U")
+    );
 }
 
 #[test]
@@ -192,7 +226,7 @@ fn managed_rpc_runs_real_core_and_shared_codec_for_all_deliveries() {
                 ("peer_runtime.h", peer.header), ("peer_runtime.c", peer.source),
                 ("peer_advanced.h", peer.advanced_header),
                 ("test.c", include_str!("fixtures/managed_rpc.c").to_owned()),
-                ("headers.cpp", "#include \"demo_runtime.h\"\n#include \"peer_runtime.h\"\nstatic demo_endpoint_t a;\nstatic peer_endpoint_t b;\nint main() { return demo_endpoint_init(&a, wl_environment_t{}) + peer_endpoint_init(&b, wl_environment_t{}); }\n".to_owned()),
+                ("headers.cpp", "#include \"demo_runtime.h\"\n#include \"peer_runtime.h\"\nstatic demo_endpoint_t a;\nstatic peer_endpoint_t b;\nint main() { return demo_endpoint_init(&a, wl_environment_t{}, wl_link_defaults()) + peer_endpoint_init(&b, wl_environment_t{}, wl_link_defaults()); }\n".to_owned()),
             ] { fs::write(temp.path().join(name), text).unwrap(); }
             let mut cc = Command::new("cc");
             cc.args(["-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Werror"])

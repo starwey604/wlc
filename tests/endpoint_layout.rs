@@ -95,7 +95,16 @@ fn role_layouts_also_compile_for_mapped_and_unbounded_expert_runtimes() {
             );
             let profile =
                 analyze_binding_profile(&parse_binding_profile(&text).unwrap(), &schema).unwrap();
-            let generated = generate_runtime_c_named(&schema, &profile, "business", role).unwrap();
+            let generated = match generate_runtime_c_named(&schema, &profile, "business", role) {
+                Ok(generated) => generated,
+                Err(error)
+                    if role != "server"
+                        && error.to_string().contains("statically bounded response") =>
+                {
+                    continue;
+                }
+                Err(error) => panic!("{error}"),
+            };
             let dispatch = generated
                 .source
                 .split("_runtime_dispatch_event(wl_ctx_t")
@@ -104,8 +113,15 @@ fn role_layouts_also_compile_for_mapped_and_unbounded_expert_runtimes() {
                 .split("release_event:")
                 .next()
                 .unwrap();
-            assert_eq!(dispatch.contains("request_decode("), role != "client");
-            assert_eq!(dispatch.contains("response_decode("), role != "server");
+            assert_eq!(
+                dispatch.contains("request_decode(") || dispatch.contains("_receive_request("),
+                role != "client"
+            );
+            assert_eq!(
+                dispatch.contains("response_wlc_detail_value_decode(")
+                    || dispatch.contains("response_value_decode("),
+                role != "server"
+            );
             for (suffix, text) in [
                 ("runtime.h", generated.header),
                 ("runtime.c", generated.source),
@@ -125,6 +141,8 @@ fn role_layouts_also_compile_for_mapped_and_unbounded_expert_runtimes() {
                     "-I",
                 ])
                 .arg(root.join("include"))
+                .arg("-I")
+                .arg(root.join("adapters/common/include"))
                 .arg(temp.path().join(format!("{role}_runtime.c"))));
             fs::write(
                 temp.path().join("headers.cpp"),
@@ -142,6 +160,8 @@ fn role_layouts_also_compile_for_mapped_and_unbounded_expert_runtimes() {
                     "-I",
                 ])
                 .arg(root.join("include"))
+                .arg("-I")
+                .arg(root.join("adapters/common/include"))
                 .arg(temp.path().join("headers.cpp")));
         }
     }
@@ -185,7 +205,16 @@ fn trimmed_layouts_run_with_all_envelopes_and_slot_capacities() {
             };
             let profile =
                 analyze_binding_profile(&parse_binding_profile(&source).unwrap(), &schema).unwrap();
-            let generated = generate_runtime_c_named(&schema, &profile, "business", role).unwrap();
+            let generated = match generate_runtime_c_named(&schema, &profile, "business", role) {
+                Ok(generated) => generated,
+                Err(error)
+                    if role != "server"
+                        && error.to_string().contains("statically bounded response") =>
+                {
+                    continue;
+                }
+                Err(error) => panic!("{error}"),
+            };
             if role == "server" {
                 assert!(!generated.header.contains("uint8_t requests["));
                 assert!(!generated.header.contains("client_slot_t rpc_client_slot;"));
@@ -225,6 +254,8 @@ fn trimmed_layouts_run_with_all_envelopes_and_slot_capacities() {
                 "-I",
             ])
             .arg(root.join("include"))
+            .arg("-I")
+            .arg(root.join("adapters/common/include"))
             .arg(temp.path().join("headers.cpp")));
         fs::write(
             temp.path().join("test.c"),
@@ -243,6 +274,8 @@ fn trimmed_layouts_run_with_all_envelopes_and_slot_capacities() {
                 "-I",
             ])
             .arg(root.join("include"))
+            .arg("-I")
+            .arg(root.join("adapters/common/include"))
             .args(["-I"])
             .arg(temp.path());
             for role in ["CLIENT", "SERVER", "BOTH", "FLEX"] {

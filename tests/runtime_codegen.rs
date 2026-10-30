@@ -12,6 +12,30 @@ fn profile(source: &str, schema: &wlc::SemanticModel) -> wlc::BindingProfileMode
 }
 
 #[test]
+fn rpc_dispatch_keeps_a_portable_lto_boundary_without_constraining_small_routes() {
+    let model = schema(
+        "version 1; message Request @id(1) {} message Response @id(2) {} message State @id(3) { optional uint32 value @id(1); }",
+    );
+    let rpc = profile(
+        "profile version 1; rpc Query { request = Request; response = Response; }",
+        &model,
+    );
+    let source = generate_runtime_c(&model, &rpc, "control").unwrap().source;
+    let boundary = "#if defined(_MSC_VER)\n__declspec(noinline)\n#elif defined(__GNUC__) || defined(__clang__)\n__attribute__((noinline))\n#endif\n#if WLC_CONTROL_RPC_LAYOUT_ACTIVE && defined(CONTROL_RPC_LAYOUT_control_runtime_dispatch_event)\nCONTROL_RPC_LAYOUT_control_runtime_dispatch_event\n#elif WLC_CONTROL_RPC_LAYOUT_ACTIVE\nCONTROL_RPC_LAYOUT(control_runtime_dispatch_event)\n#endif\ncontrol_runtime_result_t control_runtime_dispatch_event(";
+    assert!(source.contains(boundary));
+    for route in [
+        "send State { delivery = unreliable; }",
+        "latest State { delivery = unreliable; }",
+    ] {
+        let binding = profile(&format!("profile version 1; {route}"), &model);
+        let source = generate_runtime_c(&model, &binding, "control")
+            .unwrap()
+            .source;
+        assert!(!source.contains("noinline"));
+    }
+}
+
+#[test]
 fn runtime_only_preserves_codec_validation_without_rendering_a_codec() {
     for (source, module) in [
         ("version 1; message Value @id(1) {}", ""),
@@ -401,7 +425,7 @@ rpc Execute {
     assert!(
         generated
             .source
-            .contains("config->rpc_client_response_capacity = 12U;")
+            .contains("config->rpc_server_response_capacity = 12U;")
     );
     assert!(
         !generated
@@ -465,7 +489,7 @@ rpc Local {
             .contains("local_rpc_runtime_get_deadline_hint")
     );
     assert!(generated.header.contains("local_rpc_local_client_inspect"));
-    assert!(generated.header.contains("local_rpc_local_client_decode"));
+    assert!(generated.header.contains("local_rpc_local_client_response"));
     assert!(generated.source.contains("local_rpc_local_client_release"));
     assert!(
         generated

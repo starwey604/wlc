@@ -127,30 +127,30 @@ static void runtime_cases(const uint8_t *body, size_t length, const uint8_t *reo
   static validation_endpoint_t server;
   validation_endpoint_config_t config;
   wl_environment_t environment = {{now, NULL}, {identity, NULL}};
-  assert(validation_endpoint_config_defaults(&config, environment) == WL_OK);
+  assert(validation_endpoint_config_defaults(&config, environment, wl_link_defaults()) == WL_OK);
   config.on_execute = execute;
   assert(validation_endpoint_init_config(&server, &config) == WL_OK);
   uint8_t wire[REQUEST_MAX_ENCODED_SIZE + 32];
   validation_rpc_header_write(wire, 1, 7, 0, 42);
-  memcpy(wire + 20, body, length);
+  memcpy(wire + 9, body, length);
   wl_event_t event = {.type = WL_EVT_UNRELIABLE_RX, .message_id = REQUEST_MESSAGE_ID,
-      .payload = wire, .payload_len = length + 20};
+      .payload = wire, .payload_len = length + 9};
   wl_ctx_t *link = wl_endpoint_link(validation_endpoint_handle(&server));
   validation_runtime_t *runtime = validation_endpoint_runtime(&server);
   utf8_calls = fingerprint_calls = 0;
   validation_runtime_result_t r = validation_runtime_dispatch_event(link, &event, runtime, 1);
   assert(r.domain == VALIDATION_RUNTIME_OK && calls == 1);
   assert(utf8_calls == 1 && fingerprint_calls == 1);
-  memcpy(wire + 20, reordered, length);
+  memcpy(wire + 9, reordered, length);
   r = validation_runtime_dispatch_event(link, &event, runtime, 1);
   assert(r.domain == VALIDATION_RUNTIME_OK && r.detail.rpc.rpc_disposition == WL_RPC_SERVER_REPLAY && calls == 1);
   const uint8_t unknown[] = {0xF8, 0x07, 1};
-  memcpy(wire + 20 + length, unknown, sizeof(unknown)); event.payload_len += sizeof(unknown);
+  memcpy(wire + 9 + length, unknown, sizeof(unknown)); event.payload_len += sizeof(unknown);
   r = validation_runtime_dispatch_event(link, &event, runtime, 1);
   assert(r.domain == VALIDATION_RUNTIME_OK && calls == 1);
-  memcpy(wire + 20, body, length); event.payload_len = length + 20;
+  memcpy(wire + 9, body, length); event.payload_len = length + 9;
   size_t text = 0;
-  for (size_t i = 20; i + 5 <= event.payload_len; ++i)
+  for (size_t i = 9; i + 5 <= event.payload_len; ++i)
     if (memcmp(wire + i, "ABCDE", 5) == 0) { text = i; break; }
   assert(text != 0); wire[text] = 'Z';
   r = validation_runtime_dispatch_event(link, &event, runtime, 1);

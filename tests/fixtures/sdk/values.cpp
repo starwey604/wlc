@@ -77,4 +77,16 @@ int main() {
   assert(std::signbit(result.single) && std::isinf(result.double_));
   assert((*result.doubles)[0] == 1.5 && std::signbit((*result.doubles)[1]));
   assert(result.words[1] == UINT32_MAX);
+  for (const auto single : {UINT32_C(0x7F812345),UINT32_C(0xFF812345),UINT32_C(0x7FC12345)}) {
+    const std::uint64_t real=UINT64_C(0x7FF0123456789ABC), packed[2]={real,UINT64_C(0xFFF0123456789ABC)};
+    std::memcpy(&numbers.single,&single,4);std::memcpy(&numbers.double_,&real,8);
+    std::memcpy(numbers.doubles->data(),packed,16);
+    assert(device::wlc_detail::to_c(numbers,nc));
+    assert(std::memcmp(&nc.single,&single,4)==0 && std::memcmp(&nc.double_,&real,8)==0 && std::memcmp(nc.doubles,packed,16)==0);
+    assert(numbers_value_encode(&nc,bytes,sizeof(bytes),&length)==WL_CODEC_OK);
+    assert(numbers_value_decode(bytes,length,&nd)==WL_CODEC_OK);
+    const auto raw=device::wlc_detail::from_c(nd);
+    assert(std::memcmp(&raw.single,&single,4)==0 && std::memcmp(&raw.double_,&real,8)==0 && std::memcmp(raw.doubles->data(),packed,16)==0);
+  }
+
 }

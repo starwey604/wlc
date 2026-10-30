@@ -32,7 +32,7 @@ static void run_allocation_tests(void) {
   wl_allocator_t allocator = endpoint_allocator();
   CHECK(wl_fixed_pool_init(&endpoint_pool, endpoint_memory, sizeof(endpoint_memory),
       sizeof(demo_endpoint_t), DEMO_ENDPOINT_ALIGNMENT, 1) == WL_OK);
-  CHECK(demo_endpoint_config_defaults(&config, test_environment_id(71, (wl_clock_t){0})) == WL_OK);
+  CHECK(demo_endpoint_config_defaults(&config, test_environment_id(71, (wl_clock_t){0}), wl_link_defaults()) == WL_OK);
   config.environment.clock = (wl_clock_t){read_clock, NULL};
   CHECK(demo_endpoint_create(NULL, &config, &allocator) == WL_ERR_INVALID_ARG);
   CHECK(demo_endpoint_create(&endpoint, &config, NULL) == WL_ERR_INVALID_ARG);
@@ -55,7 +55,11 @@ static void run_allocation_tests(void) {
     CHECK(demo_endpoint_create(&endpoint, &bad, &allocator) != WL_OK);
     CHECK(endpoint == NULL && wl_fixed_pool_in_use(&endpoint_pool) == 0);
   }
+  CHECK(config.link.integrity == WL_INTEGRITY_CRC16);
   CHECK(demo_endpoint_create(&endpoint, &config, &allocator) == WL_OK);
+  wl_config_t actual;
+  CHECK(wl_get_config(wl_endpoint_link(demo_endpoint_handle(endpoint)), &actual) == WL_OK);
+  CHECK(actual.integrity == WL_INTEGRITY_CRC16);
   CHECK(demo_endpoint_create(&endpoint, &config, &allocator) == WL_ERR_INVALID_ARG);
   CHECK(demo_endpoint_create(&other, &config, &allocator) == WL_ERR_NO_MEM && other == NULL);
   memset(&allocator, 0, sizeof(allocator)); /* Descriptor was copied. */

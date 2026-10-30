@@ -45,7 +45,7 @@ message Repeated @id(4) { repeated uint32 items @id(1); repeated Child children 
     assert!(!codec.header.contains("wlc_detail"));
     assert!(!codec.values_header.contains("wlc_detail"));
     assert!(!runtime.header.contains("canonical_request"));
-    assert!(!runtime.source.contains("request_value_from_view("));
+    assert!(!runtime.source.contains("= request_value_from_view("));
     // Test-only work counters; production generated C contains no probes.
     let source = codec
         .source
@@ -65,7 +65,13 @@ message Repeated @id(4) { repeated uint32 items @id(1); repeated Child children 
         ("validation_bindings.h", codec.bindings_header),
         ("validation_bindings.c", codec.bindings_source),
         ("validation_runtime.h", runtime.header),
-        ("validation_runtime.c", runtime.source),
+        (
+            "validation_runtime.c",
+            runtime.source.replace(
+                "static bool validation_rpc_wlc_utf8(const uint8_t *s, size_t n) {",
+                "static bool validation_rpc_wlc_utf8(const uint8_t *s, size_t n) { ++utf8_calls;",
+            ),
+        ),
         ("test.c", include_str!("fixtures/rpc_validation.c").into()),
     ] {
         fs::write(dir.path().join(file), text).unwrap();

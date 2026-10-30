@@ -2,9 +2,10 @@ use std::{fs, path::PathBuf, process::Command};
 use tempfile::tempdir;
 use wlc::{analyze_schema, generate_c, parse_schema};
 
-fn compile(schema: &str, body: &str) {
+fn compile(schema: &str, body: &str) -> String {
     let model = analyze_schema(&parse_schema(schema).unwrap()).unwrap();
     let codec = generate_c(&model, "plan").unwrap();
+    let source = codec.source.clone();
     let dir = tempdir().unwrap();
     for (file, text) in [
         ("plan.h", codec.header),
@@ -61,6 +62,7 @@ fn compile(schema: &str, body: &str) {
         String::from_utf8_lossy(&result.stdout),
         String::from_utf8_lossy(&result.stderr)
     );
+    source
 }
 
 #[test]
@@ -145,7 +147,8 @@ fn cursor_matches_frozen_linear_decoder_including_failure_state() {
          message Child @id(41) { required uint32 x @id(1); optional uint32 y @id(16); }\n\
          message Mixed @id(42) { required Child child @id(1); repeated uint32 samples @id(2);\n\
          repeated Child children @id(3); packed float32 values[3] @id(16);\n\
-         optional string<16> text @id(2048); optional uint64 last @id(65535); }",
+         optional string<16> text @id(2048); optional uint64 last @id(65535); }\n\
+         message ReferenceSigned @id(43) { optional int32 x @id(1); optional int64 y @id(2); }",
     );
     compile(
         &schema,
@@ -221,10 +224,13 @@ int main(void) {{
 
 #[test]
 fn final_field_hint_preserves_repeated_and_duplicate_semantics() {
+    // The frozen lookup oracle references UTF-8/fixed/packed helpers even though
+    // Single and Tail do not; include those types in this oracle-only schema.
     compile(
         "version 1;\n\
          message Single @id(1) { optional uint32 value @id(1); }\n\
-         message Tail @id(2) { required uint32 first @id(1); repeated uint32 values @id(2); }",
+         message Tail @id(2) { required uint32 first @id(1); repeated uint32 values @id(2); }\n\
+         message ReferenceHelpers @id(3) { optional string text @id(1); packed fixed32 values[1] @id(2); optional int32 x @id(3); optional int64 y @id(4); }",
         &format!(
             r#"
 #include <assert.h>
@@ -263,4 +269,220 @@ int main(void) {{
             include_str!("fixtures/codec_lookup_reference.c.in"),
         ),
     );
+}
+
+#[test]
+fn schema_type_subsets_preserve_wire_bytes_validation_and_fingerprints() {
+    // Each case generates its own translation unit: a combined scalar matrix
+    // cannot detect helpers accidentally depending on an absent type branch.
+    let cases = [
+        ("bool", "BOOL", "value.v = true;", "8, 1", ""),
+        ("uint8", "U8", "value.v = 129;", "8, 129, 1", ""),
+        ("uint16", "U16", "value.v = 129;", "8, 129, 1", ""),
+        ("uint32", "U32", "value.v = 129;", "8, 129, 1", ""),
+        ("uint64", "U64", "value.v = 129;", "8, 129, 1", ""),
+        ("int8", "I8", "value.v = -64;", "8, 127", ""),
+        ("int16", "I16", "value.v = -64;", "8, 127", ""),
+        ("int32", "I32", "value.v = -64;", "8, 127", ""),
+        ("int64", "I64", "value.v = -64;", "8, 127", ""),
+        (
+            "fixed32",
+            "F32",
+            "value.v = UINT32_C(0x80000001);",
+            "13, 128, 0, 0, 1",
+            "",
+        ),
+        (
+            "fixed64",
+            "F64",
+            "value.v = UINT64_C(0x8000000000000001);",
+            "9, 128, 0, 0, 0, 0, 0, 0, 1",
+            "",
+        ),
+        (
+            "float32",
+            "FLOAT32",
+            "value.v = -1.5f;",
+            "13, 191, 192, 0, 0",
+            "",
+        ),
+        (
+            "float64",
+            "FLOAT64",
+            "value.v = -1.5;",
+            "9, 191, 248, 0, 0, 0, 0, 0, 0",
+            "",
+        ),
+        (
+            "bytes<8>",
+            "BYTES",
+            "const uint8_t b[] = {0, 255}; value.v = (wl_codec_bytes_t){b, 2};",
+            "10, 2, 0, 255",
+            "",
+        ),
+        (
+            "string<8>",
+            "STRING",
+            "value.v = (wl_codec_string_t){\"电\", 3};",
+            "10, 3, 231, 148, 181",
+            "",
+        ),
+        (
+            "Mode",
+            "ENUM",
+            "value.v = -1;",
+            "8, 1",
+            "enum Mode @id(2) { OFF = 0; NEG = -1; }",
+        ),
+        (
+            "Child",
+            "MESSAGE",
+            "value.v.has_x = true; value.v.x = 129;",
+            "10, 3, 8, 129, 1",
+            "message Child @id(2) { required uint16 x @id(1); }",
+        ),
+    ];
+    let kinds = [
+        "BOOL", "U8", "U16", "U32", "U64", "I8", "I16", "I32", "I64", "F32", "F64", "FLOAT32",
+        "FLOAT64", "BYTES", "STRING", "ENUM", "MESSAGE",
+    ];
+    for (ty, kind, init, bytes, extra) in cases {
+        let schema =
+            format!("version 1; {extra} message Sample @id(1) {{ required {ty} v @id(1); }}");
+        let source = compile(
+            &schema,
+            &format!(
+                r#"
+#include <assert.h>
+#include "plan.c"
+static uint64_t reference_hash(const uint8_t *bytes, size_t n) {{
+  uint64_t h = 12345;
+  for (size_t i = 0; i < n; ++i) h = (h ^ bytes[i]) * UINT64_C(0x100000001b3);
+  return h;
+}}
+int main(void) {{
+  const uint8_t expected[] = {{{bytes}}};
+  /* All legal unknown wire types must remain supported, regardless of schema. */
+  const uint8_t unknown[] = {{16, 129, 1, 25, 0,0,0,0,0,0,0,1, 34, 2, 255,0, 45, 0,0,0,1}};
+  sample_t value, decoded;
+  sample_clear(&value); value.has_v = true; {init}
+  uint8_t encoded[64], input[128]; size_t n;
+  assert(sample_encode(&value, encoded, sizeof(encoded), &n) == WL_CODEC_OK);
+  assert(n == sizeof(expected) && memcmp(encoded, expected, n) == 0);
+  assert(sample_decode(NULL, 0, &decoded) == WL_CODEC_ERR_MISSING_REQUIRED_FIELD);
+  for (size_t i = 1; i < sizeof(expected); ++i)
+    assert(sample_decode(expected, i, &decoded) != WL_CODEC_OK);
+  for (unsigned order = 0; order != 2; ++order) {{
+    memcpy(input, order ? unknown : expected, order ? sizeof(unknown) : sizeof(expected));
+    memcpy(input + (order ? sizeof(unknown) : sizeof(expected)), order ? expected : unknown,
+           order ? sizeof(expected) : sizeof(unknown));
+    assert(sample_decode(input, sizeof(expected) + sizeof(unknown), &decoded) == WL_CODEC_OK);
+    uint64_t hash = 12345; size_t length = SIZE_MAX;
+    assert(sample_wlc_detail_fingerprint(&decoded, &hash, &length) == WL_CODEC_OK);
+    assert(length == sizeof(expected) && hash == reference_hash(expected, sizeof(expected)));
+  }}
+  memcpy(input, expected, sizeof(expected)); memcpy(input + sizeof(expected), expected, sizeof(expected));
+  assert(sample_decode(input, 2 * sizeof(expected), &decoded) == WL_CODEC_ERR_DUPLICATE_FIELD);
+  memcpy(input, expected, sizeof(expected)); input[0] = expected[0] == 8 ? 13 : 8;
+  assert(sample_decode(input, sizeof(expected), &decoded) == WL_CODEC_ERR_WIRE_TYPE);
+  const uint8_t noncanonical[] = {{16, 128, 0}};
+  assert(sample_decode(noncanonical, sizeof(noncanonical), &decoded) == WL_CODEC_ERR_MALFORMED);
+  return 0;
+}}
+"#
+            ),
+        );
+        for candidate in kinds {
+            let present = candidate == kind || (kind == "MESSAGE" && candidate == "U16");
+            assert_eq!(
+                source.contains(&format!("case WLC_{candidate}:")),
+                present,
+                "{ty}: {candidate}"
+            );
+        }
+        assert!(!source.contains("WLC_IF"));
+        assert!(!source.contains("static wl_codec_status_t wlc_read_packed("));
+        assert_eq!(source.contains("static bool wlc_utf8("), kind == "STRING");
+    }
+}
+
+#[test]
+fn empty_schema_engine_is_warning_clean_and_keeps_unknown_field_validation() {
+    let source = compile(
+        "version 1; message Empty @id(1) {}",
+        r#"
+#include <assert.h>
+#include "plan.c"
+int main(void) {
+  empty_t view; empty_value_t value;
+  empty_value_clear(&value);
+  assert(empty_value_to_view(&value, &view) == WL_CODEC_OK && view._empty == 0);
+  const uint8_t unknown[] = {8, 1, 17, 0,0,0,0,0,0,0,0, 26, 1, 255, 37, 0,0,0,0};
+  assert(empty_decode(unknown, sizeof(unknown), &view) == WL_CODEC_OK);
+  uint64_t hash = 12345; size_t length = SIZE_MAX;
+  assert(empty_wlc_detail_fingerprint(&view, &hash, &length) == WL_CODEC_OK);
+  assert(hash == 12345 && length == 0);
+  const uint8_t truncated[] = {17, 0};
+  assert(empty_decode(truncated, sizeof(truncated), &view) == WL_CODEC_ERR_MALFORMED);
+  assert(empty_encoded_size(&view) == 0);
+  return 0;
+}
+"#,
+    );
+    assert!(!source.contains("case WLC_"));
+    assert!(!source.contains("static bool wlc_utf8("));
+    assert!(!source.contains("static wl_codec_status_t wlc_read_fixed("));
+    assert!(!source.contains("static inline void wlc_putv("));
+}
+
+#[test]
+fn packed_type_subsets_keep_specialized_and_generic_paths_equivalent() {
+    for (ty, kind, bytes) in [
+        ("fixed32", "F32", "10, 8, 128,0,0,1, 127,192,0,1"),
+        ("float32", "FLOAT32", "10, 8, 128,0,0,1, 127,192,0,1"),
+        (
+            "fixed64",
+            "F64",
+            "10, 16, 128,0,0,0,0,0,0,1, 127,248,0,0,0,0,0,1",
+        ),
+        (
+            "float64",
+            "FLOAT64",
+            "10, 16, 128,0,0,0,0,0,0,1, 127,248,0,0,0,0,0,1",
+        ),
+    ] {
+        let source = compile(
+            &format!("version 1; message Sample @id(1) {{ required packed {ty} v[2] @id(1); }}"),
+            &format!(
+                r#"
+#include <assert.h>
+#include "plan.c"
+int main(void) {{
+  /* Keep floating representations including a NaN payload byte-for-byte. */
+  const uint8_t expected[] = {{{bytes}}};
+  sample_t value, generic;
+  assert(sample_decode(expected, sizeof(expected), &value) == WL_CODEC_OK);
+  assert(wlc_decode(&sample_desc, expected, sizeof(expected), &generic) == WL_CODEC_OK);
+  assert(value.has_v && generic.has_v && memcmp(value.v, generic.v, sizeof(value.v)) == 0);
+  uint8_t encoded[64], reference[64]; size_t n, m;
+  assert(sample_encode(&value, encoded, sizeof(encoded), &n) == WL_CODEC_OK);
+  assert(wlc_encode(&sample_desc, &generic, reference, sizeof(reference), &m) == WL_CODEC_OK);
+  assert(n == sizeof(expected) && n == m && memcmp(encoded, expected, n) == 0 && memcmp(encoded, reference, n) == 0);
+  uint64_t hash = 12345, want = hash; size_t length;
+  for (size_t i = 0; i < n; ++i) want = (want ^ expected[i]) * UINT64_C(0x100000001b3);
+  assert(sample_wlc_detail_fingerprint(&value, &hash, &length) == WL_CODEC_OK && hash == want && length == n);
+  for (size_t i = 0; i < sizeof(expected); ++i)
+    assert(sample_decode(expected, i, &value) == wlc_decode(&sample_desc, expected, i, &generic));
+  return 0;
+}}
+"#
+            ),
+        );
+        for candidate in ["F32", "F64", "FLOAT32", "FLOAT64"] {
+            assert_eq!(
+                source.contains(&format!("case WLC_{candidate}:")),
+                candidate == kind
+            );
+        }
+    }
 }

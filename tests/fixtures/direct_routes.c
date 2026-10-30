@@ -53,14 +53,14 @@ static void pump(void) {
 int main(void) {
   receiver_endpoint_config_t config;
   assert(RECEIVER_ENDPOINT_MAX_PAYLOAD == CHUNK_MAX_ENCODED_SIZE);
-  assert(receiver_endpoint_config_defaults(&config, test_environment_id(2U, (wl_clock_t){now, NULL})) == WL_OK);
+  assert(receiver_endpoint_config_defaults(&config, test_environment_id(2U, (wl_clock_t){now, NULL}), wl_link_defaults()) == WL_OK);
   config.on_chunk = chunk;
   config.chunk_user_data = &calls;
   config.on_result = record;
   assert(receiver_endpoint_init_config(&receiver, &config) == WL_OK);
   wl_endpoint_service_t service = {.on_peer_session = peer, .on_close = close_service};
   assert(wl_endpoint_set_services(receiver_endpoint_handle(&receiver), &service, 1U) == WL_OK);
-  assert(sender_endpoint_init(&sender, test_environment_id(1U, (wl_clock_t){now, NULL})) == WL_OK);
+  assert(sender_endpoint_init(&sender, test_environment_id(1U, (wl_clock_t){now, NULL}), wl_link_defaults()) == WL_OK);
   assert(wl_loopback_connect(&cable, sender_endpoint_handle(&sender), receiver_endpoint_handle(&receiver)) == WL_OK);
   uint8_t bytes[512];
   memset(bytes, 0x55, sizeof(bytes));

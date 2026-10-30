@@ -255,6 +255,10 @@ fn cpp_values_round_trip_through_the_real_c_codec() {
             ]);
         }
     }
+    if std::env::var_os("WLC_TEST_X87").is_some() {
+        cc.args(["-mfpmath=387", "-mno-sse"]);
+        cxx.args(["-mfpmath=387"]);
+    }
     // Compile the actual sync/async facade and C-only callback bridge too. This
     // fixture includes names such as Mode and catches C/C++ namespace mistakes.
     let mut bridge = Command::new("cc");
