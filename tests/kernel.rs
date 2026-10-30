@@ -195,7 +195,7 @@ int main(void) {
   return 0;
 }
 "#).unwrap();
-    let prototype = root.join("experimental/static_kernel");
+    let prototype = root.to_path_buf();
     let mut cc = Command::new(std::env::var("CC").unwrap_or_else(|_| "cc".into()));
     cc.args([
         "-std=c11",
@@ -318,7 +318,7 @@ int main(void) {
   return 0;
 }
 "#).unwrap();
-        let prototype = root.join("experimental/static_kernel");
+        let prototype = root.to_path_buf();
         let mut cc = Command::new(std::env::var("CC").unwrap_or_else(|_| "cc".into()));
         cc.args([
             "-std=c11",
