@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
+use super::server_resources::ServerResources;
 use crate::codegen::{c_identifier, type_name, upper_snake};
 use crate::profile_semantic::{BindingProfileModel, RetainedRouteKind};
-use std::collections::HashMap;
+use crate::rpc_plan::RpcEndpointPlan;
 use std::fmt::Write;
 
 pub(super) struct RuntimeDefaultCapacities {
     rpc_response: Option<u16>,
+    server: ServerResources,
     request_bounds: Vec<(String, Option<u16>)>,
 }
 
@@ -20,25 +22,20 @@ impl RuntimeDefaultCapacities {
 }
 
 pub(super) fn runtime_default_capacities(
-    maxima: &HashMap<u16, Option<u64>>,
+    rpc_plan: &RpcEndpointPlan,
     profile: &BindingProfileModel,
 ) -> RuntimeDefaultCapacities {
     let mut rpc_response = Some(1_u16);
     let mut request_bounds = Vec::new();
 
     for service in &profile.rpc_services {
-        let request_capacity = maxima
-            .get(&service.request_id)
-            .copied()
-            .flatten()
-            .map(|capacity| capacity.max(1))
-            .and_then(|capacity| u16::try_from(capacity).ok());
-        let response_capacity = maxima
-            .get(&service.response_id)
-            .copied()
-            .flatten()
-            .map(|capacity| (capacity + service.metadata_size()).max(1))
-            .and_then(|capacity| u16::try_from(capacity).ok());
+        let method = rpc_plan.method(&service.name);
+        // Arrays need at least one byte; automatic C storage uses u16 sizes.
+        // These representation constraints are distinct from wire bounds.
+        let storage_capacity =
+            |capacity: Option<u64>| capacity.and_then(|n| u16::try_from(n.max(1)).ok());
+        let request_capacity = storage_capacity(method.request_body_capacity);
+        let response_capacity = storage_capacity(method.response_capacity);
         rpc_response = match (rpc_response, response_capacity) {
             (Some(current), Some(capacity)) => Some(current.max(capacity)),
             _ => None,
@@ -47,6 +44,7 @@ pub(super) fn runtime_default_capacities(
     }
     RuntimeDefaultCapacities {
         rpc_response,
+        server: ServerResources::new(profile, rpc_plan),
         request_bounds,
     }
 }
@@ -71,14 +69,9 @@ pub(super) fn default_storage_terms(
     }
     if profile.has_rpc_client() {
         terms.push(format!("({padding} + sizeof(wl_rpc_client_slot_t))"));
-        terms.push(format!("{}U", capacities.rpc_response.unwrap()));
     }
     if profile.has_rpc_server() {
-        terms.push(format!(
-            "({padding} + sizeof(wl_rpc_server_pending_slot_t))"
-        ));
-        terms.push(format!("({padding} + sizeof(wl_rpc_server_cache_slot_t))"));
-        terms.push(format!("{}U", capacities.rpc_response.unwrap()));
+        terms.extend(capacities.server.storage_terms(&padding));
         // The canonical sink retains only a fingerprint, never a byte arena.
     }
     terms
@@ -86,10 +79,11 @@ pub(super) fn default_storage_terms(
 
 pub(super) fn emit_assembly_header(
     output: &mut String,
-    maxima: &HashMap<u16, Option<u64>>,
+    rpc_plan: &RpcEndpointPlan,
     profile: &BindingProfileModel,
     module: &str,
 ) {
+    let server = ServerResources::new(profile, rpc_plan);
     output.push_str(concat!(
         "/* Static runtime assembly. requirements() validates every sizing field and\n",
         " * reports the exact caller-owned byte storage needed by init(). Configuration\n",
@@ -121,16 +115,9 @@ pub(super) fn emit_assembly_header(
         output.push_str(concat!(
             "  uint8_t rpc_client_enabled;\n",
             "  uint16_t rpc_client_slot_count;\n",
-            "  uint16_t rpc_client_response_capacity;\n",
             "  uint32_t rpc_client_next_operation_id;\n",
-            "  uint8_t rpc_server_enabled;\n",
-            "  uint16_t rpc_server_pending_slot_count;\n",
-            "  uint16_t rpc_server_cache_slot_count;\n",
-            "  uint16_t rpc_server_response_capacity;\n",
-            "  uint32_t rpc_server_pending_timeout_ms;\n",
-            "  uint32_t rpc_server_cache_ttl_ms;\n",
-            "  wl_rpc_cache_policy_t rpc_server_cache_policy;\n",
         ));
+        output.push_str(&server.config_fields());
         for service in &profile.rpc_services {
             let service_name = c_identifier(&service.name);
             writeln!(
@@ -142,7 +129,7 @@ pub(super) fn emit_assembly_header(
         }
     }
     writeln!(output, "}} {module}_runtime_config_t;\n").unwrap();
-    let default_capacities = runtime_default_capacities(maxima, profile);
+    let default_capacities = runtime_default_capacities(rpc_plan, profile);
     let prefix = upper_snake(module);
     writeln!(
         output,
@@ -164,7 +151,7 @@ pub(super) fn emit_assembly_header(
             output.push_str("  wl_rpc_client_slot_t rpc_client_slot;\n");
         }
         if profile.has_rpc_server() {
-            output.push_str("  wl_rpc_server_pending_slot_t rpc_server_pending_slot;\n  wl_rpc_server_cache_slot_t rpc_server_cache_slot;\n");
+            output.push_str(&server.alignment_members());
         }
         writeln!(
             output,
@@ -181,36 +168,52 @@ pub(super) fn emit_assembly_header(
             output.push_str(" + \\\n   ");
             output.push_str(&term);
         }
-        output.push_str(")\n\ntypedef union {\n  ");
+        output.push_str(")\n\ntypedef struct {\n  union {\n  ");
         write!(
             output,
             "{module}_runtime_default_storage_alignment_t alignment;\n  uint8_t bytes["
         )
         .unwrap();
         write!(output, "{prefix}_RUNTIME_DEFAULT_STORAGE_CAPACITY").unwrap();
-        writeln!(output, "];\n}} {module}_runtime_default_storage_t;\n").unwrap();
+        output.push_str("];\n  };\n");
+        if profile.has_rpc_client() {
+            writeln!(output, "  {module}_rpc_result_value_t rpc_results[1];").unwrap();
+        }
+        writeln!(output, "}} {module}_runtime_default_storage_t;\n").unwrap();
     }
     // C++ anonymous unions may contain data members, not type declarations.
     // Define the member types first; the shared layout and field paths stay identical.
-    for service in &profile.rpc_services {
+    for service in profile
+        .rpc_services
+        .iter()
+        .filter(|_| profile.has_rpc_server())
+    {
         let name = c_identifier(&service.name);
         let request = type_name(&service.request_name);
-        let response = type_name(&service.response_name);
         let request_member = if profile.has_rpc_server() {
             format!("{request}_t request; ")
         } else {
             String::new()
         };
-        let response_member = if profile.has_rpc_client() {
-            format!("{response}_t response; ")
-        } else {
-            String::new()
-        };
-        writeln!(output, "typedef union {{ {request_member}{response_member}}} {module}_runtime_{name}_decode_detail_t;").unwrap();
+        writeln!(
+            output,
+            "typedef union {{ {request_member}}} {module}_runtime_{name}_decode_detail_t;"
+        )
+        .unwrap();
     }
+    let result_requirements = if profile.has_rpc_client() {
+        "  size_t rpc_result_count;\n"
+    } else {
+        ""
+    };
+    let result_storage = if profile.has_rpc_client() {
+        format!("  {module}_rpc_result_value_t *rpc_results;\n  size_t rpc_result_count;\n")
+    } else {
+        String::new()
+    };
     write!(
         output,
-        "typedef struct {{\n  size_t storage_size;\n  size_t storage_alignment;\n}} {module}_runtime_requirements_t;\n\ntypedef struct {{\n  void *data;\n  size_t size;\n}} {module}_runtime_storage_t;\n\ntypedef struct {{\n  {module}_runtime_t runtime;\n"
+        "typedef struct {{\n  size_t storage_size;\n  size_t storage_alignment;\n{result_requirements}}} {module}_runtime_requirements_t;\n\ntypedef struct {{\n  void *data;\n  size_t size;\n{result_storage}}} {module}_runtime_storage_t;\n\ntypedef struct {{\n  {module}_runtime_t runtime;\n"
     )
     .unwrap();
     for route in &profile.retained_routes {
@@ -252,7 +255,7 @@ pub(super) fn emit_assembly_header(
         // Unbounded repeated fields carry caller-configured backing pointers.
         // Keep those per-service objects stable; bounded messages have no such
         // persistent decode configuration and can safely share a union.
-        let share_decode = default_capacities.has_storage();
+        let share_decode = default_capacities.has_storage() && profile.has_rpc_server();
         if share_decode {
             output.push_str(
                 "  /* One dispatch at a time: bounded services share decode scratch.\n   * Views are callback-scoped; deferred work must copy its input. */\n  union {\n",
@@ -260,7 +263,11 @@ pub(super) fn emit_assembly_header(
         } else {
             output.push_str("  /* Preserve per-service caller-configured decode backing. */\n");
         }
-        for service in &profile.rpc_services {
+        for service in profile
+            .rpc_services
+            .iter()
+            .filter(|_| profile.has_rpc_server())
+        {
             let service_name = c_identifier(&service.name);
             writeln!(
                 output,
@@ -300,11 +307,13 @@ pub(super) fn emit_assembly_header(
 
 pub(super) fn emit_config_defaults(
     output: &mut String,
-    maxima: &HashMap<u16, Option<u64>>,
+    rpc_plan: &RpcEndpointPlan,
     profile: &BindingProfileModel,
     module: &str,
 ) {
-    let capacities = runtime_default_capacities(maxima, profile);
+    let server = ServerResources::new(profile, rpc_plan);
+    let capacities = runtime_default_capacities(rpc_plan, profile);
+    let server_invalid_capacity = server.invalid_capacity("config");
     let prefix = upper_snake(module);
     write!(
         output,
@@ -326,31 +335,29 @@ pub(super) fn emit_config_defaults(
     }
     if !profile.rpc_services.is_empty() {
         output.push_str(
-            "  config->rpc_client_slot_count = 1U;\n  config->rpc_client_next_operation_id = 1U;\n  config->rpc_server_pending_slot_count = 1U;\n  config->rpc_server_cache_slot_count = 1U;\n  config->rpc_server_cache_policy = WL_RPC_CACHE_REJECT_NEW;\n",
+            "  config->rpc_client_slot_count = 1U;\n  config->rpc_client_next_operation_id = 1U;\n",
         );
-        if let Some(response_capacity) = capacities.rpc_response {
-            writeln!(
-                output,
-                "  config->rpc_client_response_capacity = {}U;\n  config->rpc_server_response_capacity = {}U;",
-                response_capacity, response_capacity
-            )
-            .unwrap();
-        }
+        output.push_str(&server.defaults());
     }
     output.push_str("  return WL_OK;\n}\n\n");
 
     if !profile.rpc_services.is_empty() {
         write!(
             output,
-            "wl_err_t {module}_runtime_config_enable_client({module}_runtime_config_t *config) {{\n  if (config == NULL) return WL_ERR_INVALID_ARG;\n  if (!{prefix}_RUNTIME_HAS_RPC_CLIENT || config->rpc_client_slot_count == 0U || config->rpc_client_response_capacity == 0U) return WL_ERR_NOT_SUPPORTED;\n  config->rpc_client_enabled = 1U;\n  return WL_OK;\n}}\n\nwl_err_t {module}_runtime_config_enable_server({module}_runtime_config_t *config) {{\n  if (config == NULL) return WL_ERR_INVALID_ARG;\n  if (!{prefix}_RUNTIME_HAS_RPC_SERVER || config->rpc_server_pending_slot_count == 0U || config->rpc_server_cache_slot_count == 0U || config->rpc_server_response_capacity == 0U) return WL_ERR_NOT_SUPPORTED;\n"
+            "wl_err_t {module}_runtime_config_enable_client({module}_runtime_config_t *config) {{\n  if (config == NULL) return WL_ERR_INVALID_ARG;\n  if (!{prefix}_RUNTIME_HAS_RPC_CLIENT || config->rpc_client_slot_count == 0U) return WL_ERR_NOT_SUPPORTED;\n  config->rpc_client_enabled = 1U;\n  return WL_OK;\n}}\n\nwl_err_t {module}_runtime_config_enable_server({module}_runtime_config_t *config) {{\n  if (config == NULL) return WL_ERR_INVALID_ARG;\n  if (!{prefix}_RUNTIME_HAS_RPC_SERVER || {server_invalid_capacity}) return WL_ERR_NOT_SUPPORTED;\n"
         )
         .unwrap();
         output.push_str("  config->rpc_server_enabled = 1U;\n  return WL_OK;\n}\n\n");
     }
     if capacities.has_storage() {
+        let typed_descriptor = if profile.has_rpc_client() {
+            "    descriptor.rpc_results = storage->rpc_results;\n    descriptor.rpc_result_count = 1U;\n"
+        } else {
+            ""
+        };
         write!(
             output,
-            "{module}_runtime_storage_t {module}_runtime_default_storage_descriptor({module}_runtime_default_storage_t *storage) {{\n  {module}_runtime_storage_t descriptor = {{0}};\n  if (storage != NULL) {{\n    descriptor.data = storage->bytes;\n    descriptor.size = sizeof(storage->bytes);\n  }}\n  return descriptor;\n}}\n\n"
+            "{module}_runtime_storage_t {module}_runtime_default_storage_descriptor({module}_runtime_default_storage_t *storage) {{\n  {module}_runtime_storage_t descriptor = {{0}};\n  if (storage != NULL) {{\n    descriptor.data = storage->bytes;\n    descriptor.size = sizeof(storage->bytes);\n{typed_descriptor}  }}\n  return descriptor;\n}}\n\n"
         )
         .unwrap();
     }
@@ -358,11 +365,12 @@ pub(super) fn emit_config_defaults(
 
 pub(super) fn emit_assembly_source(
     output: &mut String,
-    maxima: &HashMap<u16, Option<u64>>,
+    rpc_plan: &RpcEndpointPlan,
     profile: &BindingProfileModel,
     module: &str,
 ) {
-    emit_config_defaults(output, maxima, profile, module);
+    let server = ServerResources::new(profile, rpc_plan);
+    emit_config_defaults(output, rpc_plan, profile, module);
     let prefix = upper_snake(module);
     if !profile.rpc_services.is_empty() {
         writeln!(
@@ -386,6 +394,8 @@ pub(super) fn emit_assembly_source(
         }
         output.push_str("  (void)config;\n  return WL_OK;\n}\n\n");
     }
+    let server_diagnostics = server.diagnostics(module, &prefix);
+    let server_init = server.init(module, &prefix);
     let has_components = !profile.retained_routes.is_empty() || !profile.rpc_services.is_empty();
     let result_declaration = if has_components {
         "  int result;\n"
@@ -397,6 +407,23 @@ pub(super) fn emit_assembly_source(
         "const char *{module}_runtime_init_issue_str({module}_runtime_init_issue_t issue) {{\n  switch (issue) {{\n    case {prefix}_RUNTIME_INIT_OK: return \"ok\";\n    case {prefix}_RUNTIME_INIT_NULL_ARGUMENT: return \"null argument\";\n    case {prefix}_RUNTIME_INIT_ROLE_ENABLE: return \"role enable must be zero or one\";\n    case {prefix}_RUNTIME_INIT_RETAINED_CAPACITY: return \"retained capacity is zero\";\n    case {prefix}_RUNTIME_INIT_RPC_CLIENT_CAPACITY: return \"RPC client capacity is zero\";\n    case {prefix}_RUNTIME_INIT_RPC_SERVER_CAPACITY: return \"RPC server capacity is zero\";\n    case {prefix}_RUNTIME_INIT_RPC_TIMEOUT: return \"RPC timeout exceeds wrap-safe range\";\n    case {prefix}_RUNTIME_INIT_RPC_CACHE_POLICY: return \"unknown RPC cache policy\";\n    case {prefix}_RUNTIME_INIT_LAYOUT_OVERFLOW: return \"runtime layout size overflow\";\n    case {prefix}_RUNTIME_INIT_STORAGE_TOO_SMALL: return \"runtime storage is too small\";\n    case {prefix}_RUNTIME_INIT_STORAGE_NULL: return \"runtime storage data is null\";\n    case {prefix}_RUNTIME_INIT_STORAGE_ALIGNMENT: return \"runtime storage is misaligned\";\n    case {prefix}_RUNTIME_INIT_STORAGE_OVERLAP: return \"runtime storage overlaps the instance\";\n    case {prefix}_RUNTIME_INIT_COMPONENT: return \"runtime component initialization failed\";\n    default: return \"unknown runtime initialization issue\";\n  }}\n}}\n\nstatic int {module}_runtime_init_failure({module}_runtime_init_diagnostic_t *diagnostic, {module}_runtime_init_issue_t issue, const char *field, size_t required, size_t provided, int result) {{\n  if (diagnostic != NULL) {{\n    diagnostic->issue = issue;\n    diagnostic->field = field;\n    diagnostic->required = required;\n    diagnostic->provided = provided;\n  }}\n  return result;\n}}\n\n"
     )
     .unwrap();
+    if profile.has_rpc_client() {
+        write!(output, "static int {module}_runtime_result_storage_validate(const {module}_runtime_instance_t *instance, const {module}_runtime_config_t *config, const {module}_runtime_storage_t *storage, {module}_runtime_init_diagnostic_t *diagnostic) {{\n  uintptr_t address, other;\n  size_t bytes;\n  if (!config->rpc_client_enabled) return WL_OK;\n  if (storage->rpc_result_count < config->rpc_client_slot_count) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_STORAGE_TOO_SMALL, \"storage.rpc_result_count\", config->rpc_client_slot_count, storage->rpc_result_count, WL_ERR_BUF_TOO_SMALL);\n  if (storage->rpc_results == NULL) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_STORAGE_NULL, \"storage.rpc_results\", 1U, 0U, WL_ERR_INVALID_ARG);\n  if (storage->rpc_result_count > SIZE_MAX / sizeof(*storage->rpc_results)) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_LAYOUT_OVERFLOW, \"storage.rpc_result_count\", 0U, storage->rpc_result_count, WL_ERR_INVALID_ARG);\n  address = (uintptr_t)(void *)storage->rpc_results;\n  if (address % _Alignof({module}_rpc_result_value_t) != 0U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_STORAGE_ALIGNMENT, \"storage.rpc_results\", _Alignof({module}_rpc_result_value_t), address % _Alignof({module}_rpc_result_value_t), WL_ERR_INVALID_ARG);\n  bytes = storage->rpc_result_count * sizeof(*storage->rpc_results);\n  other = (uintptr_t)(const void *)instance;\n  if ((address <= other && other - address < bytes) || (other < address && address - other < sizeof(*instance))) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_STORAGE_OVERLAP, \"storage.rpc_results\", bytes, 0U, WL_ERR_INVALID_ARG);\n  other = (uintptr_t)storage->data;\n  if (storage->size != 0U && ((address <= other && other - address < bytes) || (other < address && address - other < storage->size))) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_STORAGE_OVERLAP, \"storage.rpc_results\", bytes, 0U, WL_ERR_INVALID_ARG);\n  return WL_OK;\n}}\n\n").unwrap();
+    }
+    let result_storage_check = if profile.has_rpc_client() {
+        format!(
+            "  result = {module}_runtime_result_storage_validate(instance, config, storage, diagnostic);\n  if (result != WL_OK) return result;\n"
+        )
+    } else {
+        String::new()
+    };
+    let result_storage_check_init = if profile.has_rpc_client() {
+        format!(
+            "  result = {module}_runtime_result_storage_validate(instance, config, storage, NULL);\n  if (result != WL_OK) return result;\n"
+        )
+    } else {
+        String::new()
+    };
     write!(
         output,
         "typedef struct {{\n  uint8_t *base;\n  size_t size;\n  size_t offset;\n}} {module}_runtime_storage_cursor_t;\n\ntypedef struct {{\n"
@@ -414,15 +441,8 @@ pub(super) fn emit_assembly_source(
         writeln!(output, "  void *{message}_{kind}_storage;").unwrap();
     }
     if !profile.rpc_services.is_empty() {
-        output.push_str(concat!(
-            "  void *rpc_client_slots;\n",
-            "  void *rpc_client_responses;\n",
-            "  size_t rpc_client_responses_size;\n",
-            "  void *rpc_server_pending_slots;\n",
-            "  void *rpc_server_cache_slots;\n",
-            "  void *rpc_server_responses;\n",
-            "  size_t rpc_server_responses_size;\n",
-        ));
+        output.push_str("  void *rpc_client_slots;\n");
+        output.push_str(&server.layout_fields());
     }
     write!(
         output,
@@ -451,12 +471,16 @@ pub(super) fn emit_assembly_source(
     }
 
     if !profile.rpc_services.is_empty() {
+        let server_layout = server.layout(module);
         write!(
             output,
-            "  if ({module}_runtime_roles_valid(config) != WL_OK) return WL_ERR_NOT_SUPPORTED;\n  if (config->rpc_client_enabled > 1U || config->rpc_server_enabled > 1U) return WL_ERR_INVALID_ARG;\n  if (config->rpc_client_enabled != 0U) {{\n    if (config->rpc_client_slot_count == 0U || config->rpc_client_response_capacity == 0U) return WL_ERR_INVALID_ARG;\n    if (alignment < _Alignof(wl_rpc_client_slot_t)) alignment = _Alignof(wl_rpc_client_slot_t);\n    result = {module}_runtime_storage_region(&cursor, _Alignof(wl_rpc_client_slot_t), config->rpc_client_slot_count, sizeof(wl_rpc_client_slot_t), out_layout == NULL ? NULL : &out_layout->rpc_client_slots, NULL);\n    if (result != WL_OK) return result;\n    result = {module}_runtime_storage_region(&cursor, 1U, config->rpc_client_slot_count, config->rpc_client_response_capacity, out_layout == NULL ? NULL : &out_layout->rpc_client_responses, out_layout == NULL ? NULL : &out_layout->rpc_client_responses_size);\n    if (result != WL_OK) return result;\n  }}\n  if (config->rpc_server_enabled != 0U) {{\n    if (config->rpc_server_pending_slot_count == 0U || config->rpc_server_cache_slot_count == 0U || config->rpc_server_response_capacity == 0U) return WL_ERR_INVALID_ARG;\n    if ((config->rpc_server_pending_timeout_ms != 0U && config->rpc_server_pending_timeout_ms >= UINT32_C(0x80000000)) || (config->rpc_server_cache_ttl_ms != 0U && config->rpc_server_cache_ttl_ms >= UINT32_C(0x80000000))) return WL_ERR_INVALID_ARG;\n    if (config->rpc_server_cache_policy != WL_RPC_CACHE_REJECT_NEW && config->rpc_server_cache_policy != WL_RPC_CACHE_EVICT_OLDEST) return WL_ERR_INVALID_ARG;\n    if (alignment < _Alignof(wl_rpc_server_pending_slot_t)) alignment = _Alignof(wl_rpc_server_pending_slot_t);\n    if (alignment < _Alignof(wl_rpc_server_cache_slot_t)) alignment = _Alignof(wl_rpc_server_cache_slot_t);\n    result = {module}_runtime_storage_region(&cursor, _Alignof(wl_rpc_server_pending_slot_t), config->rpc_server_pending_slot_count, sizeof(wl_rpc_server_pending_slot_t), out_layout == NULL ? NULL : &out_layout->rpc_server_pending_slots, NULL);\n    if (result != WL_OK) return result;\n    result = {module}_runtime_storage_region(&cursor, _Alignof(wl_rpc_server_cache_slot_t), config->rpc_server_cache_slot_count, sizeof(wl_rpc_server_cache_slot_t), out_layout == NULL ? NULL : &out_layout->rpc_server_cache_slots, NULL);\n    if (result != WL_OK) return result;\n    result = {module}_runtime_storage_region(&cursor, 1U, config->rpc_server_cache_slot_count, config->rpc_server_response_capacity, out_layout == NULL ? NULL : &out_layout->rpc_server_responses, out_layout == NULL ? NULL : &out_layout->rpc_server_responses_size);\n    if (result != WL_OK) return result;\n"
+            "  if ({module}_runtime_roles_valid(config) != WL_OK) return WL_ERR_NOT_SUPPORTED;\n  if (config->rpc_client_enabled > 1U || config->rpc_server_enabled > 1U) return WL_ERR_INVALID_ARG;\n  if (config->rpc_client_enabled != 0U) {{\n    if (config->rpc_client_slot_count == 0U) return WL_ERR_INVALID_ARG;\n    if (alignment < _Alignof(wl_rpc_client_slot_t)) alignment = _Alignof(wl_rpc_client_slot_t);\n    result = {module}_runtime_storage_region(&cursor, _Alignof(wl_rpc_client_slot_t), config->rpc_client_slot_count, sizeof(wl_rpc_client_slot_t), out_layout == NULL ? NULL : &out_layout->rpc_client_slots, NULL);\n    if (result != WL_OK) return result;\n  }}\n  if (config->rpc_server_enabled != 0U) {{\n{server_layout}"
         )
         .unwrap();
         output.push_str("  }\n");
+    }
+    if profile.has_rpc_client() {
+        output.push_str("  if (out_requirements != NULL) out_requirements->rpc_result_count = config->rpc_client_enabled ? config->rpc_client_slot_count : 0U;\n");
     }
     write!(
         output,
@@ -477,13 +501,13 @@ pub(super) fn emit_assembly_source(
     if !profile.rpc_services.is_empty() {
         write!(
             output,
-            "  if ({module}_runtime_roles_valid(config) != WL_OK) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_ROLE_ENABLE, \"endpoint.rpc_role\", 0U, 1U, WL_ERR_NOT_SUPPORTED);\n  if (config->rpc_client_enabled > 1U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_ROLE_ENABLE, \"rpc_client_enabled\", 1U, config->rpc_client_enabled, WL_ERR_INVALID_ARG);\n  if (config->rpc_server_enabled > 1U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_ROLE_ENABLE, \"rpc_server_enabled\", 1U, config->rpc_server_enabled, WL_ERR_INVALID_ARG);\n  if (config->rpc_client_enabled != 0U && config->rpc_client_slot_count == 0U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_CLIENT_CAPACITY, \"rpc_client_slot_count\", 1U, 0U, WL_ERR_INVALID_ARG);\n  if (config->rpc_client_enabled != 0U && config->rpc_client_response_capacity == 0U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_CLIENT_CAPACITY, \"rpc_client_response_capacity\", 1U, 0U, WL_ERR_INVALID_ARG);\n  if (config->rpc_server_enabled != 0U && config->rpc_server_pending_slot_count == 0U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_SERVER_CAPACITY, \"rpc_server_pending_slot_count\", 1U, 0U, WL_ERR_INVALID_ARG);\n  if (config->rpc_server_enabled != 0U && config->rpc_server_cache_slot_count == 0U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_SERVER_CAPACITY, \"rpc_server_cache_slot_count\", 1U, 0U, WL_ERR_INVALID_ARG);\n  if (config->rpc_server_enabled != 0U && config->rpc_server_response_capacity == 0U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_SERVER_CAPACITY, \"rpc_server_response_capacity\", 1U, 0U, WL_ERR_INVALID_ARG);\n  if (config->rpc_server_enabled != 0U && config->rpc_server_pending_timeout_ms >= UINT32_C(0x80000000)) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_TIMEOUT, \"rpc_server_pending_timeout_ms\", UINT32_C(0x7fffffff), config->rpc_server_pending_timeout_ms, WL_ERR_INVALID_ARG);\n  if (config->rpc_server_enabled != 0U && config->rpc_server_cache_ttl_ms >= UINT32_C(0x80000000)) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_TIMEOUT, \"rpc_server_cache_ttl_ms\", UINT32_C(0x7fffffff), config->rpc_server_cache_ttl_ms, WL_ERR_INVALID_ARG);\n  if (config->rpc_server_enabled != 0U && config->rpc_server_cache_policy != WL_RPC_CACHE_REJECT_NEW && config->rpc_server_cache_policy != WL_RPC_CACHE_EVICT_OLDEST) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_CACHE_POLICY, \"rpc_server_cache_policy\", 0U, (size_t)config->rpc_server_cache_policy, WL_ERR_INVALID_ARG);\n"
+            "  if ({module}_runtime_roles_valid(config) != WL_OK) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_ROLE_ENABLE, \"endpoint.rpc_role\", 0U, 1U, WL_ERR_NOT_SUPPORTED);\n  if (config->rpc_client_enabled > 1U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_ROLE_ENABLE, \"rpc_client_enabled\", 1U, config->rpc_client_enabled, WL_ERR_INVALID_ARG);\n  if (config->rpc_server_enabled > 1U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_ROLE_ENABLE, \"rpc_server_enabled\", 1U, config->rpc_server_enabled, WL_ERR_INVALID_ARG);\n  if (config->rpc_client_enabled != 0U && config->rpc_client_slot_count == 0U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_RPC_CLIENT_CAPACITY, \"rpc_client_slot_count\", 1U, 0U, WL_ERR_INVALID_ARG);\n{server_diagnostics}"
         )
         .unwrap();
     }
     write!(
         output,
-        "  result = {module}_runtime_requirements(config, requirements);\n  if (result != WL_OK) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_LAYOUT_OVERFLOW, \"config\", 0U, 0U, result);\n  if (storage->size < requirements->storage_size) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_STORAGE_TOO_SMALL, \"storage.size\", requirements->storage_size, storage->size, WL_ERR_BUF_TOO_SMALL);\n  if (requirements->storage_size != 0U) {{\n    if (storage->data == NULL) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_STORAGE_NULL, \"storage.data\", requirements->storage_size, 0U, WL_ERR_INVALID_ARG);\n    if (((uintptr_t)storage->data & (requirements->storage_alignment - 1U)) != 0U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_STORAGE_ALIGNMENT, \"storage.data\", requirements->storage_alignment, (size_t)((uintptr_t)storage->data & (requirements->storage_alignment - 1U)), WL_ERR_INVALID_ARG);\n    instance_address = (uintptr_t)(const void *)instance;\n    storage_address = (uintptr_t)storage->data;\n    if ((storage_address <= instance_address && instance_address - storage_address < requirements->storage_size) || (instance_address < storage_address && storage_address - instance_address < sizeof(*instance))) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_STORAGE_OVERLAP, \"storage.data\", requirements->storage_size, storage->size, WL_ERR_INVALID_ARG);\n  }}\n  return WL_OK;\n}}\n\nint {module}_runtime_init({module}_runtime_instance_t *instance, const {module}_runtime_config_t *config, const {module}_runtime_storage_t *storage) {{\n  {module}_runtime_config_t config_copy;\n  {module}_runtime_storage_t storage_copy;\n  {module}_runtime_requirements_t requirements;\n  {module}_runtime_layout_t layout;\n  uintptr_t instance_address;\n  uintptr_t storage_address;\n  int result;\n  if (instance == NULL || config == NULL || storage == NULL) return WL_ERR_INVALID_ARG;\n  config_copy = *config;\n  storage_copy = *storage;\n  config = &config_copy;\n  storage = &storage_copy;\n  result = {module}_runtime_requirements(config, &requirements);\n  if (result != WL_OK) return result;\n  if (storage->size < requirements.storage_size) return WL_ERR_BUF_TOO_SMALL;\n  if (requirements.storage_size != 0U) {{\n    if (storage->data == NULL || ((uintptr_t)storage->data & (requirements.storage_alignment - 1U)) != 0U) return WL_ERR_INVALID_ARG;\n    instance_address = (uintptr_t)(void *)instance;\n    storage_address = (uintptr_t)storage->data;\n    if ((storage_address <= instance_address && instance_address - storage_address < requirements.storage_size) || (instance_address < storage_address && storage_address - instance_address < sizeof(*instance))) return WL_ERR_INVALID_ARG;\n  }}\n  result = {module}_runtime_layout(config, (uint8_t *)storage->data, storage->size, &layout, NULL);\n  if (result != WL_OK) return result;\n  memset(instance, 0, sizeof(*instance));\n"
+        "  result = {module}_runtime_requirements(config, requirements);\n  if (result != WL_OK) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_LAYOUT_OVERFLOW, \"config\", 0U, 0U, result);\n  if (storage->size < requirements->storage_size) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_STORAGE_TOO_SMALL, \"storage.size\", requirements->storage_size, storage->size, WL_ERR_BUF_TOO_SMALL);\n  if (requirements->storage_size != 0U) {{\n    if (storage->data == NULL) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_STORAGE_NULL, \"storage.data\", requirements->storage_size, 0U, WL_ERR_INVALID_ARG);\n    if (((uintptr_t)storage->data & (requirements->storage_alignment - 1U)) != 0U) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_STORAGE_ALIGNMENT, \"storage.data\", requirements->storage_alignment, (size_t)((uintptr_t)storage->data & (requirements->storage_alignment - 1U)), WL_ERR_INVALID_ARG);\n    instance_address = (uintptr_t)(const void *)instance;\n    storage_address = (uintptr_t)storage->data;\n    if ((storage_address <= instance_address && instance_address - storage_address < requirements->storage_size) || (instance_address < storage_address && storage_address - instance_address < sizeof(*instance))) return {module}_runtime_init_failure(diagnostic, {prefix}_RUNTIME_INIT_STORAGE_OVERLAP, \"storage.data\", requirements->storage_size, storage->size, WL_ERR_INVALID_ARG);\n  }}\n{result_storage_check}  return WL_OK;\n}}\n\nint {module}_runtime_init({module}_runtime_instance_t *instance, const {module}_runtime_config_t *config, const {module}_runtime_storage_t *storage) {{\n  {module}_runtime_config_t config_copy;\n  {module}_runtime_storage_t storage_copy;\n  {module}_runtime_requirements_t requirements;\n  {module}_runtime_layout_t layout;\n  uintptr_t instance_address;\n  uintptr_t storage_address;\n  int result;\n  if (instance == NULL || config == NULL || storage == NULL) return WL_ERR_INVALID_ARG;\n  config_copy = *config;\n  storage_copy = *storage;\n  config = &config_copy;\n  storage = &storage_copy;\n  result = {module}_runtime_requirements(config, &requirements);\n  if (result != WL_OK) return result;\n  if (storage->size < requirements.storage_size) return WL_ERR_BUF_TOO_SMALL;\n  if (requirements.storage_size != 0U) {{\n    if (storage->data == NULL || ((uintptr_t)storage->data & (requirements.storage_alignment - 1U)) != 0U) return WL_ERR_INVALID_ARG;\n    instance_address = (uintptr_t)(void *)instance;\n    storage_address = (uintptr_t)storage->data;\n    if ((storage_address <= instance_address && instance_address - storage_address < requirements.storage_size) || (instance_address < storage_address && storage_address - instance_address < sizeof(*instance))) return WL_ERR_INVALID_ARG;\n  }}\n{result_storage_check_init}  result = {module}_runtime_layout(config, (uint8_t *)storage->data, storage->size, &layout, NULL);\n  if (result != WL_OK) return result;\n  memset(instance, 0, sizeof(*instance));\n"
     )
     .unwrap();
 
@@ -515,14 +539,14 @@ pub(super) fn emit_assembly_source(
     if !profile.rpc_services.is_empty() {
         write!(
             output,
-            "#if {prefix}_RUNTIME_HAS_RPC_CLIENT\n  if (config->rpc_client_enabled != 0U) {{\n    const wl_rpc_client_config_t client_config = {{\n      (wl_rpc_client_slot_t *)layout.rpc_client_slots,\n      config->rpc_client_slot_count,\n      (uint8_t *)layout.rpc_client_responses,\n      layout.rpc_client_responses_size,\n      config->rpc_client_response_capacity,\n      config->rpc_client_next_operation_id\n    }};\n    if (wl_rpc_client_init(&instance->rpc_client, &client_config) != WL_RPC_OK) {{\n      result = WL_ERR_INVALID_ARG;\n      goto init_failed;\n    }}\n    instance->runtime.rpc_client = &instance->rpc_client;\n  }}\n#endif\n#if {prefix}_RUNTIME_HAS_RPC_SERVER\n  if (config->rpc_server_enabled != 0U) {{\n    const wl_rpc_server_config_t server_config = {{\n      (wl_rpc_server_pending_slot_t *)layout.rpc_server_pending_slots,\n      config->rpc_server_pending_slot_count,\n      (wl_rpc_server_cache_slot_t *)layout.rpc_server_cache_slots,\n      config->rpc_server_cache_slot_count,\n      (uint8_t *)layout.rpc_server_responses,\n      layout.rpc_server_responses_size,\n      config->rpc_server_response_capacity,\n      config->rpc_server_pending_timeout_ms,\n      config->rpc_server_cache_ttl_ms,\n      config->rpc_server_cache_policy\n    }};\n    if (wl_rpc_server_init(&instance->rpc_server, &server_config) != WL_RPC_OK) {{\n      result = WL_ERR_INVALID_ARG;\n      goto init_failed;\n    }}\n    instance->runtime.rpc_server = &instance->rpc_server;\n  }}\n#endif\n"
+            "#if {prefix}_RUNTIME_HAS_RPC_CLIENT\n  if (config->rpc_client_enabled != 0U) {{\n    const wl_rpc_client_config_t client_config = {{\n      (wl_rpc_client_slot_t *)layout.rpc_client_slots,\n      config->rpc_client_slot_count,\n      config->rpc_client_next_operation_id\n    }};\n    if (wl_rpc_client_init(&instance->rpc_client, &client_config) != WL_RPC_OK) {{\n      result = WL_ERR_INVALID_ARG;\n      goto init_failed;\n    }}\n    instance->runtime.rpc_client = &instance->rpc_client;\n    instance->runtime.rpc_results = storage->rpc_results;\n    instance->runtime.rpc_result_count = storage->rpc_result_count;\n  }}\n#endif\n{server_init}"
         )
         .unwrap();
         for service in &profile.rpc_services {
             let service_name = c_identifier(&service.name);
             write!(
                 output,
-                "#if {prefix}_RUNTIME_HAS_RPC_SERVER\n  if (config->rpc_server_enabled != 0U) {{\n    instance->runtime.{service_name}.request_scratch = &instance->{service_name}_scratch.request;\n    instance->runtime.{service_name}.request_handler = config->{service_name}_request_handler;\n    instance->runtime.{service_name}.user_data = config->{service_name}_user_data;\n  }}\n#endif\n#if {prefix}_RUNTIME_HAS_RPC_CLIENT\n  if (config->rpc_client_enabled != 0U) instance->runtime.{service_name}.response_scratch = &instance->{service_name}_scratch.response;\n#endif\n"
+                "#if {prefix}_RUNTIME_HAS_RPC_SERVER\n  if (config->rpc_server_enabled != 0U) {{\n    instance->runtime.{service_name}.request_scratch = &instance->{service_name}_scratch.request;\n    instance->runtime.{service_name}.request_handler = config->{service_name}_request_handler;\n    instance->runtime.{service_name}.user_data = config->{service_name}_user_data;\n  }}\n#endif\n"
             )
             .unwrap();
         }

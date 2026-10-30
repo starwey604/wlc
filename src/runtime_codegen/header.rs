@@ -6,6 +6,7 @@ use crate::codegen::{c_identifier, type_name, upper_snake};
 use crate::identity::{IDENTITY_ALGORITHM, binding_profile_identity, schema_identity};
 use crate::manifest::{CODEGEN_CONTRACT_MAJOR, CODEGEN_CONTRACT_MINOR};
 use crate::profile_semantic::{BindingProfileModel, RetainedRouteKind, RpcService};
+use crate::rpc_plan::RpcEndpointPlan;
 use crate::semantic::SemanticModel;
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -18,11 +19,12 @@ pub(super) fn emit_header(
     codec_module: &str,
     module: &str,
     maxima: &HashMap<u16, Option<u64>>,
+    rpc_plan: &RpcEndpointPlan,
 ) -> String {
     let prefix = upper_snake(module);
     let guard = format!("WIRELINK_GENERATED_{prefix}_RUNTIME_H");
     let mut output = format!(
-        "#ifndef {guard}\n#define {guard}\n\n#include \"{codec_module}_bindings.h\"\n#include <wirelink/pump.h>\n#include <wirelink/endpoint.h>\n#include <wirelink/allocator.h>\n#include <wirelink/frame.h>\n#include <wirelink/version.h>\n#include <string.h>\n"
+        "#ifndef {guard}\n#define {guard}\n\n#include \"{codec_module}_bindings.h\"\n#include <wirelink/port.h>\n#include <wirelink/pump.h>\n#include <wirelink/endpoint.h>\n#include <wirelink/link_defaults.h>\n#include <wirelink/allocator.h>\n#include <wirelink/frame.h>\n#include <wirelink/version.h>\n#include <string.h>\n"
     );
     if profile
         .retained_routes
@@ -43,6 +45,58 @@ pub(super) fn emit_header(
     }
     if profile.rpc_services.iter().any(RpcService::is_managed) {
         output.push_str("#include <wirelink/rpc_sync.h>\n");
+    }
+    if profile.rpc_services.iter().any(RpcService::is_managed) {
+        let formats = profile
+            .rpc_services
+            .iter()
+            .filter(|s| s.is_managed())
+            .map(|s| s.codec)
+            .collect::<std::collections::BTreeSet<_>>();
+        let wire = if formats.len() > 1 {
+            "managed-rpc-v4-mixed"
+        } else if formats.contains(&crate::codec_plan::CodecProfile::PositionalV1) {
+            "managed-rpc-v4-positional-v1"
+        } else {
+            "managed-rpc-v4-tagged-varuint32"
+        };
+        writeln!(
+            output,
+            "#define {prefix}_RPC_MANAGED_WIRE_FORMAT \"{wire}\"\n"
+        )
+        .unwrap();
+    }
+    for service in profile.rpc_services.iter().filter(|s| s.is_managed()) {
+        let method = upper_snake(&service.name);
+        writeln!(
+            output,
+            "#define {prefix}_{method}_RPC_BODY_FORMAT \"{}\"",
+            service.codec.name()
+        )
+        .unwrap();
+    }
+    for (id, codec) in profile
+        .send_routes
+        .iter()
+        .chain(&profile.direct_routes)
+        .map(|r| (r.message_id, r.codec))
+        .chain(
+            profile
+                .retained_routes
+                .iter()
+                .map(|r| (r.message_id, r.codec)),
+        )
+    {
+        let message = schema
+            .declarations
+            .iter()
+            .find_map(|s| match s {
+                crate::semantic::Symbol::Message(m) if m.id == id => Some(m),
+                _ => None,
+            })
+            .expect("validated route");
+        let m = upper_snake(&message.name);
+        writeln!(output, "#if {m}_CODEC_PROFILE != {}U\n#error \"Route codec/profile mismatch; generate codec and runtime with the same binding profile.\"\n#endif", codec.code()).unwrap();
     }
     output.push_str("\n#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n");
     writeln!(
@@ -84,7 +138,7 @@ pub(super) fn emit_header(
     )
     .unwrap();
     writeln!(output, "/* Generated capabilities, not application overrides. */\n#define {prefix}_RUNTIME_HAS_RPC_CLIENT {}\n#define {prefix}_RUNTIME_HAS_RPC_SERVER {}\n", u8::from(profile.has_rpc_client()), u8::from(profile.has_rpc_server())).unwrap();
-    if !profile.rpc_services.is_empty() {
+    if profile.has_replay() {
         writeln!(
             output,
             "#define {prefix}_RPC_REQUEST_FINGERPRINT_ALGORITHM \"{RPC_FINGERPRINT_ALGORITHM}\"\n"
@@ -181,6 +235,7 @@ pub(super) fn emit_header(
         )
         .unwrap();
     }
+    emit_client_result_union(&mut output, rpc_plan, codec_module, module);
     output.push_str("typedef struct {\n  uint8_t _reserved;\n");
     for route in &profile.direct_routes {
         let name = type_name(&route.message_name);
@@ -198,10 +253,25 @@ pub(super) fn emit_header(
         };
         writeln!(output, "  {ty} *{message}_{kind};").unwrap();
     }
+    if profile.has_rpc_client() {
+        writeln!(
+            output,
+            "  {module}_rpc_result_value_t *rpc_results;\n  size_t rpc_result_count;"
+        )
+        .unwrap();
+    }
+    if profile.has_rpc_client()
+        && profile
+            .rpc_services
+            .iter()
+            .any(|service| !service.is_managed())
+    {
+        writeln!(output, "  {module}_rpc_result_value_t rpc_mapped_scratch;").unwrap();
+    }
     if !profile.rpc_services.is_empty() {
         writeln!(
             output,
-            "  wl_rpc_client_t *rpc_client;\n  wl_rpc_server_t *rpc_server;\n  wl_rpc_peer_t rpc_peer;\n  wl_rpc_peer_observation_t rpc_peer_observation;\n  wl_tx_handle_t rpc_retiring_tx;"
+            "  wl_rpc_client_t *rpc_client;\n  wl_rpc_server_t *rpc_server;\n  wl_rpc_peer_t rpc_peer;\n  wl_rpc_peer_observation_t rpc_peer_observation;\n  wl_tx_handle_t rpc_retiring_tx;\n  uint32_t rpc_response_retry_generation;\n  uint8_t rpc_response_retry_blocked;"
         )
         .unwrap();
         if profile.rpc_services.iter().any(RpcService::is_managed) {
@@ -237,7 +307,7 @@ pub(super) fn emit_header(
         .unwrap();
     }
     writeln!(output, "}} {module}_runtime_pump_t;\n").unwrap();
-    emit_assembly_header(&mut output, maxima, profile, module);
+    emit_assembly_header(&mut output, rpc_plan, profile, module);
     output.push_str(concat!(
         "/* With non-null ctx/event every RX outcome is consumed. Matching RPC TX\n",
         " * terminal events advance the runtime and reclaim the handle. Inspect\n",
@@ -259,7 +329,7 @@ pub(super) fn emit_header(
         .unwrap();
         write!(
             output,
-            "/* A reliable server request automatically observes its peer session before\n * dispatch. Take a changed observation to revoke product leases/non-RPC work. */\nwl_rpc_err_t {module}_runtime_peer_observation_take({module}_runtime_t *runtime, wl_rpc_peer_observation_t *out_observation);\n/* Advance configured RPC deadlines without performing I/O. At most one\n * expired server identity is returned per call and remains pending until the\n * application completes, rejects, or abandons it. */\nwl_rpc_err_t {module}_runtime_poll({module}_runtime_t *runtime, wl_time_ms_t now_ms, {module}_runtime_poll_result_t *out_result);\n/* Advance deadlines and submit at most one runtime-owned server response.\n * Link backpressure defers the same cached bytes for a later service call. */\nwl_rpc_err_t {module}_runtime_service(wl_ctx_t *ctx, {module}_runtime_t *runtime, wl_time_ms_t now_ms, {module}_runtime_service_result_t *out_result);\n/* Side-effect free. Zero is due; WL_RPC_NO_DEADLINE_MS means no deadline. */\nwl_rpc_err_t {module}_runtime_get_deadline_hint(const {module}_runtime_t *runtime, wl_time_ms_t now_ms, wl_rpc_deadline_hint_t *out_hint);\n\n"
+            "/* A reliable server request automatically observes its peer session before\n * dispatch. Take a changed observation to revoke product leases/non-RPC work. */\nwl_rpc_err_t {module}_runtime_peer_observation_take({module}_runtime_t *runtime, wl_rpc_peer_observation_t *out_observation);\n/* Advance configured RPC deadlines without performing I/O. At most one\n * expired server identity is returned per call and remains pending until the\n * application completes, rejects, or abandons it. */\nwl_rpc_err_t {module}_runtime_poll({module}_runtime_t *runtime, wl_time_ms_t now_ms, {module}_runtime_poll_result_t *out_result);\n/* Advance deadlines and submit at most one runtime-owned server response.\n * Link backpressure defers the same cached bytes for a later service call. */\nwl_rpc_err_t {module}_runtime_service(wl_ctx_t *ctx, {module}_runtime_t *runtime, wl_time_ms_t now_ms, {module}_runtime_service_result_t *out_result);\n/* Timer-only query. Response availability is in runtime_readiness(). */\nwl_readiness_t {module}_runtime_readiness(const wl_ctx_t *ctx, const {module}_runtime_t *runtime, wl_time_ms_t now_ms);\nwl_rpc_err_t {module}_runtime_get_deadline_hint(const {module}_runtime_t *runtime, wl_time_ms_t now_ms, wl_rpc_deadline_hint_t *out_hint);\n\n"
         )
         .unwrap();
     }
@@ -270,13 +340,19 @@ pub(super) fn emit_header(
     .unwrap();
     for service in &profile.rpc_services {
         emit_rpc_header_functions(&mut output, module, service);
+        if profile.has_rpc_client() {
+            let name = c_identifier(&service.name);
+            let response = type_name(&service.response_name);
+            writeln!(output, "/* Borrow a complete owned value until release/close. Copy *out for independent retention. */\nwl_rpc_err_t {module}_{name}_client_response(const {module}_runtime_t *runtime, uint32_t operation_id, const {response}_value_t **out_response);\n").unwrap();
+        }
     }
     output.push_str(&crate::endpoint_codegen::emit(
         maxima,
+        rpc_plan,
         profile,
         codec_module,
         module,
-        runtime_default_capacities(maxima, profile).has_storage(),
+        runtime_default_capacities(rpc_plan, profile).has_storage(),
     ));
     output.push_str("#ifdef __cplusplus\n}\n#endif\n\n#endif\n");
     output
@@ -307,4 +383,36 @@ pub(super) fn emit_result_helpers_header(
         )
         .unwrap();
     }
+}
+
+/// The target C compiler determines ABI size/alignment of these owned values.
+/// Membership and order come from the execution-validated RPC plan.
+fn emit_client_result_union(
+    output: &mut String,
+    plan: &RpcEndpointPlan,
+    codec_module: &str,
+    module: &str,
+) {
+    if plan.client_result_methods.is_empty() {
+        return;
+    }
+    writeln!(
+        output,
+        "#include \"{codec_module}_values.h\"\ntypedef union {{"
+    )
+    .unwrap();
+    for method in plan
+        .methods
+        .iter()
+        .filter(|method| plan.client_result_methods.contains(&method.name))
+    {
+        writeln!(
+            output,
+            "  {}_value_t {};",
+            type_name(&method.response_name),
+            c_identifier(&method.name)
+        )
+        .unwrap();
+    }
+    writeln!(output, "}} {module}_rpc_result_value_t;\n").unwrap();
 }

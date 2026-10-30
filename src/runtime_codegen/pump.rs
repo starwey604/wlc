@@ -20,7 +20,7 @@ pub(super) fn emit_pump_implementation(
     } else if !profile.rpc_services.is_empty() {
         write!(
             output,
-            "static uint8_t {module}_runtime_pump_progress(void *user_data, wl_ctx_t *ctx, wl_time_ms_t now_ms) {{\n  {module}_runtime_pump_t *pump = ({module}_runtime_pump_t *)user_data;\n  if (pump == NULL || pump->runtime == NULL) return 0U;\n  pump->last_service_result = {module}_runtime_service(ctx, pump->runtime, now_ms, &pump->last_service);\n  if (pump->last_service_result != WL_RPC_OK) return 0U;\n  if (pump->last_service.response.message_id != 0U && pump->on_result != NULL)\n    pump->on_result(pump->user_data, &pump->last_service.response);\n  return pump->last_service.responses_submitted != 0U ? 1U : 0U;\n}}\n\nstatic uint32_t {module}_runtime_pump_deadline(const void *user_data, wl_time_ms_t now_ms) {{\n  const {module}_runtime_pump_t *pump = (const {module}_runtime_pump_t *)user_data;\n  wl_rpc_deadline_hint_t hint = {{0}};\n  if (pump == NULL || pump->runtime == NULL || {module}_runtime_get_deadline_hint(pump->runtime, now_ms, &hint) != WL_RPC_OK)\n    return WL_POLL_NO_DEADLINE_MS;\n  return hint.next_deadline_ms;\n}}\n\n"
+            "static uint8_t {module}_runtime_pump_step(void *user_data, wl_ctx_t *ctx, wl_time_ms_t now_ms) {{\n  {module}_runtime_pump_t *pump = ({module}_runtime_pump_t *)user_data;\n  if (pump == NULL || pump->runtime == NULL) return 0U;\n  pump->last_service_result = {module}_runtime_service(ctx, pump->runtime, now_ms, &pump->last_service);\n  if (pump->last_service_result != WL_RPC_OK) return 0U;\n  if (pump->last_service.response.message_id != 0U && pump->on_result != NULL)\n    pump->on_result(pump->user_data, &pump->last_service.response);\n  return pump->last_service.responses_submitted != 0U || pump->last_service.responses_deferred != 0U ? 1U : 0U;\n}}\n\nstatic wl_readiness_t {module}_runtime_pump_readiness(const void *user_data, const wl_ctx_t *ctx, wl_time_ms_t now_ms) {{\n  const {module}_runtime_pump_t *pump = (const {module}_runtime_pump_t *)user_data;\n  if (pump == NULL || pump->runtime == NULL) return wl_readiness_idle();\n  return {module}_runtime_readiness(ctx, pump->runtime, now_ms);\n}}\n\n"
         )
         .unwrap();
     }
@@ -32,7 +32,7 @@ pub(super) fn emit_pump_implementation(
     if !profile.rpc_services.is_empty() {
         write!(
             output,
-            "  hooks.application_progress = {module}_runtime_pump_progress;\n  hooks.application_deadline_hint = {module}_runtime_pump_deadline;\n"
+            "  hooks.application_step = {module}_runtime_pump_step;\n  hooks.application_readiness = {module}_runtime_pump_readiness;\n"
         )
         .unwrap();
     }

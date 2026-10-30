@@ -6,13 +6,15 @@ use super::rpc::{
     emit_rpc_implementation, emit_rpc_request_case, emit_rpc_response_case,
     emit_rpc_runtime_progress_implementation,
 };
-use crate::codegen::{type_name, upper_snake};
-use crate::profile_semantic::{BindingProfileModel, RpcService};
-use std::collections::{HashMap, HashSet};
+use crate::codegen::{c_identifier, type_name, upper_snake};
+use crate::profile_semantic::{BindingProfileModel, RpcGuarantee, RpcService};
+use crate::rpc_plan::RpcEndpointPlan;
+use std::collections::HashSet;
 use std::fmt::Write;
 
 pub(super) fn emit_source(
-    maxima: &HashMap<u16, Option<u64>>,
+    schema: &crate::semantic::SemanticModel,
+    rpc_plan: &RpcEndpointPlan,
     profile: &BindingProfileModel,
     codec_module: &str,
     module: &str,
@@ -21,9 +23,13 @@ pub(super) fn emit_source(
     let mut output = format!(
         "#include \"{module}_runtime.h\"\n\n#include <string.h>\n\nstatic {module}_runtime_result_t {module}_runtime_result(const wl_event_t *event) {{\n  {module}_runtime_result_t result = {{0}};\n  result.domain = {prefix}_RUNTIME_INVALID_ARGUMENT;\n  if (event != NULL) {{\n    result.message_id = event->message_id;\n    result.event_type = event->type;\n  }}\n  return result;\n}}\n\n"
     );
+    writeln!(output, "_Static_assert({prefix}_SCHEMA_IDENTITY == UINT64_C(0x{:016X}) && {prefix}_BINDING_PROFILE_IDENTITY == UINT64_C(0x{:016X}), \"Runtime source/header profile mismatch; regenerate the matched artifacts.\");\n", crate::schema_identity(schema), crate::binding_profile_identity(profile)).unwrap();
     emit_result_str_implementation(&mut output, module, &prefix);
     if profile.rpc_services.iter().any(RpcService::is_managed) {
-        output.push_str(&crate::managed_rpc_codegen::helpers(module));
+        output.push_str(&crate::managed_rpc_codegen::private_source(
+            schema, module, profile,
+        ));
+        output.push_str(&crate::managed_rpc_codegen::helpers(module, profile));
     }
     if !profile.rpc_services.is_empty() {
         // These declarations are private to the matched codec/runtime pair.
@@ -33,7 +39,7 @@ pub(super) fn emit_source(
             .fold(0xcbf29ce484222325_u64, |hash, byte| {
                 (hash ^ u64::from(*byte)).wrapping_mul(0x00000100000001b3)
             });
-        if profile.has_rpc_server() {
+        if profile.has_rpc_server() && profile.has_replay() {
             writeln!(
                 output,
                 "static const uint64_t {module}_rpc_fingerprint_seed = UINT64_C({seed:#018x});"
@@ -45,7 +51,15 @@ pub(super) fn emit_source(
             let name = type_name(&service.request_name);
             if requests.insert(name.clone()) {
                 let request_prefix = upper_snake(&service.request_name);
-                writeln!(output, "wl_codec_status_t {name}_wlc_detail_fingerprint(const {name}_t *, uint64_t *, size_t *);\n#if {request_prefix}_HAS_VALUE\nvoid {name}_wlc_detail_value_copy(const {name}_t *, {name}_value_t *);\n#endif\n").unwrap();
+                if profile.has_rpc_server()
+                    && profile.rpc_services.iter().any(|s| {
+                        s.request_name == service.request_name
+                            && s.guarantee == RpcGuarantee::Replay
+                    })
+                {
+                    writeln!(output, "wl_codec_status_t {name}_wlc_detail_fingerprint(const {name}_t *, uint64_t *, size_t *);").unwrap();
+                }
+                writeln!(output, "#if {request_prefix}_HAS_VALUE\nvoid {name}_wlc_detail_value_copy(const {name}_t *, {name}_value_t *);\n#endif\n").unwrap();
             }
         }
         write!(
@@ -54,9 +68,12 @@ pub(super) fn emit_source(
         )
         .unwrap();
     }
-    emit_assembly_source(&mut output, maxima, profile, module);
+    emit_assembly_source(&mut output, rpc_plan, profile, module);
     if !profile.rpc_services.is_empty() {
         emit_rpc_runtime_progress_implementation(&mut output, module, &prefix, profile);
+        // RPC dispatch includes request admission, response matching and cache
+        // handling. Keep that body out of the pump's hot loop when using LTO.
+        output.push_str("/* Keep RPC routing separate from the pump under LTO. */\n#if defined(_MSC_VER)\n__declspec(noinline)\n#elif defined(__GNUC__) || defined(__clang__)\n__attribute__((noinline))\n#endif\n");
     }
     write!(
         output,
@@ -125,10 +142,19 @@ pub(super) fn emit_source(
             &upper_snake(codec_module),
             service,
         );
+        if profile.has_rpc_client() {
+            let name = c_identifier(&service.name);
+            let response = crate::codegen::type_name(&service.response_name);
+            writeln!(output, "wl_rpc_err_t {module}_{name}_client_response(const {module}_runtime_t *runtime, uint32_t operation_id, const {response}_value_t **out_response) {{\n  wl_rpc_client_result_t client;\n  wl_rpc_err_t error;\n  if (out_response == NULL) return WL_RPC_ERR_INVALID_ARG;\n  *out_response = NULL;\n  error = {module}_{name}_client_inspect(runtime, operation_id, &client);\n  if (error != WL_RPC_OK) return error;\n  if (!client.response_valid || runtime->rpc_results == NULL || client.result_index >= runtime->rpc_result_count) return WL_RPC_ERR_INVALID_STATE;\n  *out_response = &runtime->rpc_results[client.result_index].{name};\n  return WL_RPC_OK;\n}}\n").unwrap();
+        }
     }
     output.push('\n');
     emit_pump_implementation(&mut output, profile, module);
-    output
+    if !profile.rpc_services.is_empty() {
+        super::layout::mark_rpc(output, module, profile)
+    } else {
+        output
+    }
 }
 
 // Preserve diagnostics and RX ownership for known messages in an omitted role.

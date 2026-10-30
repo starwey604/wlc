@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use super::RuntimeCodegenError;
 use crate::ast::Cardinality;
+use crate::codec_plan::CodecProfile;
 use crate::codegen::{c_identifier, type_name, upper_snake};
 use crate::profile::BINDING_PROFILE_VERSION;
 use crate::profile_semantic::{
@@ -13,14 +14,25 @@ pub(super) fn validate_runtime_names(
     schema: &SemanticModel,
     profile: &BindingProfileModel,
     module: &str,
+    codec_module: &str,
 ) -> Result<(), RuntimeCodegenError> {
     let prefix = upper_snake(module);
+    if prefix == "WLC" && !profile.rpc_services.is_empty() {
+        return Err(RuntimeCodegenError(
+            "RPC runtime namespace `wlc` collides with global RPC layout configuration".into(),
+        ));
+    }
     let mut member_names = BTreeSet::from([
         "_reserved".to_owned(),
         "rpc_client".to_owned(),
+        "rpc_results".to_owned(),
+        "rpc_result_count".to_owned(),
+        "rpc_mapped_scratch".to_owned(),
         "rpc_encode_scratch".to_owned(),
         "rpc_server".to_owned(),
         "rpc_retiring_tx".to_owned(),
+        "rpc_response_retry_generation".to_owned(),
+        "rpc_response_retry_blocked".to_owned(),
     ]);
     if profile.rpc_services.iter().any(RpcService::is_managed) {
         member_names.insert("rpc_incarnation".to_owned());
@@ -72,6 +84,8 @@ pub(super) fn validate_runtime_names(
         format!("{module}_runtime_requirements_t"),
         format!("{module}_runtime_storage_t"),
         format!("{module}_runtime_instance_t"),
+        format!("{module}_rpc_result_value_t"),
+        format!("{module}_runtime_result_storage_validate"),
         format!("{module}_runtime_storage_cursor_t"),
         format!("{module}_runtime_layout_t"),
         format!("{module}_runtime_storage_region"),
@@ -131,6 +145,7 @@ pub(super) fn validate_runtime_names(
             format!("{module}_rpc_fingerprint_seed"),
             format!("{module}_runtime_get_deadline_hint"),
             format!("{prefix}_RPC_REQUEST_FINGERPRINT_ALGORITHM"),
+            format!("{prefix}_RPC_MANAGED_WIRE_FORMAT"),
         ] {
             runtime_names.insert(symbol);
         }
@@ -169,11 +184,13 @@ pub(super) fn validate_runtime_names(
     ] {
         runtime_names.insert(format!("{prefix}_RUNTIME_{suffix}"));
     }
+    runtime_names.insert(format!("{module}_rpc_response_writable"));
     if profile.rpc_services.iter().any(RpcService::is_managed) {
         for suffix in [
             "rpc_response_encoder_fn",
             "rpc_request_prepare",
             "rpc_request_begin",
+            "rpc_request_begin_correlate",
             "rpc_finish_response",
         ] {
             runtime_names.insert(format!("{module}_{suffix}"));
@@ -198,7 +215,7 @@ pub(super) fn validate_runtime_names(
             format!("{module}_{name}_client_start"),
             format!("{module}_{name}_client_finish_start"),
             format!("{module}_{name}_client_inspect"),
-            format!("{module}_{name}_client_decode"),
+            format!("{module}_{name}_client_response"),
             format!("{module}_{name}_client_release"),
             format!("{module}_{name}_server_complete"),
             format!("{module}_{name}_server_reject"),
@@ -223,6 +240,10 @@ pub(super) fn validate_runtime_names(
         .iter()
         .filter(|service| service.is_managed())
     {
+        runtime_names.insert(format!(
+            "{prefix}_{}_RPC_BODY_FORMAT",
+            upper_snake(&service.name)
+        ));
         let name = c_identifier(&service.name);
         if name == "result" {
             return Err(RuntimeCodegenError(
@@ -336,6 +357,8 @@ pub(super) fn validate_runtime_names(
         schema_names.insert(format!("{name}_t"));
         match symbol {
             Symbol::Message(message) => {
+                schema_names.insert(format!("{codec_module}_{name}_handler_fn"));
+                schema_names.insert(format!("{codec_module}_{name}_send"));
                 schema_names.insert(format!("{name}_clear"));
                 schema_names.insert(format!("{name}_encoded_size"));
                 schema_names.insert(format!("{name}_encode"));
@@ -363,6 +386,18 @@ pub(super) fn validate_runtime_names(
             }
         }
     }
+    let layout_prefix = super::layout::prefix(module);
+    for name in &schema_names {
+        if name == "WLC_RPC_LAYOUT_ENABLE"
+            || name == &format!("{layout_prefix}_RPC_LAYOUT")
+            || name.starts_with(&format!("{layout_prefix}_RPC_LAYOUT_"))
+            || name.starts_with(&format!("WLC_{layout_prefix}_RPC_LAYOUT_"))
+        {
+            return Err(RuntimeCodegenError(format!(
+                "schema symbol `{name}` collides with reserved RPC layout configuration"
+            )));
+        }
+    }
     if let Some(collision) = runtime_names.intersection(&schema_names).next() {
         return Err(RuntimeCodegenError(format!(
             "schema and generated runtime collide as C identifier `{collision}`"
@@ -371,10 +406,49 @@ pub(super) fn validate_runtime_names(
     Ok(())
 }
 
+pub(crate) fn validate_execution_policies(
+    profile: &BindingProfileModel,
+) -> Result<(), RuntimeCodegenError> {
+    // Semantic planning can describe a future profile; execution is enabled
+    // only when the corresponding generated path actually exists.
+    for codec in profile
+        .send_routes
+        .iter()
+        .chain(&profile.direct_routes)
+        .map(|r| r.codec)
+        .chain(profile.retained_routes.iter().map(|r| r.codec))
+    {
+        if !matches!(codec, CodecProfile::SchemaV1 | CodecProfile::PositionalV1) {
+            return Err(RuntimeCodegenError(format!(
+                "{} route generation is not implemented",
+                codec.name()
+            )));
+        }
+    }
+    for service in &profile.rpc_services {
+        let expected = if service.is_managed() {
+            CodecProfile::ManagedTagged
+        } else {
+            CodecProfile::SchemaV1
+        };
+        if service.codec != expected
+            && !(service.is_managed() && service.codec == CodecProfile::PositionalV1)
+        {
+            return Err(RuntimeCodegenError(format!(
+                "RPC `{}`: {} generation is not implemented for this metadata mode",
+                service.name,
+                service.codec.name()
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn validate_profile_model(
     schema: &SemanticModel,
     profile: &BindingProfileModel,
 ) -> Result<(), RuntimeCodegenError> {
+    validate_execution_policies(profile)?;
     if profile.version != BINDING_PROFILE_VERSION {
         return Err(RuntimeCodegenError(format!(
             "unsupported binding profile version {}; only version {} is supported",

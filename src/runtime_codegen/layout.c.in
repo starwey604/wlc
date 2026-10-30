@@ -1,0 +1,60 @@
+/* RPC layout is a compilation setting, independent of schema/wire identity.
+ * ELF markers preserve one input section per function. They do not select
+ * a memory region or guarantee ordering. See wlc/docs/rpc-layout.md. */
+#ifndef WLC_RPC_LAYOUT_ENABLE
+#define WLC_RPC_LAYOUT_ENABLE 1
+#define WLC_@PREFIX@_RPC_LAYOUT_GLOBAL_DEFAULT
+#endif
+#ifndef @PREFIX@_RPC_LAYOUT_ENABLE
+#define @PREFIX@_RPC_LAYOUT_ENABLE WLC_RPC_LAYOUT_ENABLE
+#define WLC_@PREFIX@_RPC_LAYOUT_MODULE_DEFAULT
+#endif
+
+/* Check in the preprocessor too: a C enum may be 1 in a static assertion
+ * but is an unknown identifier (and therefore 0) in the layout #if. */
+#define WLC_@PREFIX@_RPC_LAYOUT_VALUE_0 1
+#define WLC_@PREFIX@_RPC_LAYOUT_VALUE_1 1
+#define WLC_@PREFIX@_RPC_LAYOUT_VALUE_(value) WLC_@PREFIX@_RPC_LAYOUT_VALUE_##value
+#define WLC_@PREFIX@_RPC_LAYOUT_VALUE(value) WLC_@PREFIX@_RPC_LAYOUT_VALUE_(value)
+#if !(WLC_@PREFIX@_RPC_LAYOUT_VALUE(WLC_RPC_LAYOUT_ENABLE))
+#error "WLC_RPC_LAYOUT_ENABLE must be literal 0 or 1"
+#endif
+#if !(WLC_@PREFIX@_RPC_LAYOUT_VALUE(@PREFIX@_RPC_LAYOUT_ENABLE))
+#error "@PREFIX@_RPC_LAYOUT_ENABLE must be literal 0 or 1"
+#endif
+#undef WLC_@PREFIX@_RPC_LAYOUT_VALUE
+#undef WLC_@PREFIX@_RPC_LAYOUT_VALUE_
+#undef WLC_@PREFIX@_RPC_LAYOUT_VALUE_0
+#undef WLC_@PREFIX@_RPC_LAYOUT_VALUE_1
+
+#define WLC_@PREFIX@_RPC_LAYOUT_STRING_(value) #value
+#define WLC_@PREFIX@_RPC_LAYOUT_STRING(value) WLC_@PREFIX@_RPC_LAYOUT_STRING_(value)
+#if defined(__cplusplus)
+#define WLC_@PREFIX@_RPC_LAYOUT_ASSERT static_assert
+#else
+#define WLC_@PREFIX@_RPC_LAYOUT_ASSERT _Static_assert
+#endif
+/* Check the whole expanded value: token-pasting alone only checks its first
+ * token and can accidentally accept expressions such as 4/2. */
+WLC_@PREFIX@_RPC_LAYOUT_ASSERT(
+    sizeof(WLC_@PREFIX@_RPC_LAYOUT_STRING(WLC_RPC_LAYOUT_ENABLE)) == 2 &&
+    (WLC_RPC_LAYOUT_ENABLE == 0 || WLC_RPC_LAYOUT_ENABLE == 1),
+    "WLC_RPC_LAYOUT_ENABLE must be literal 0 or 1");
+WLC_@PREFIX@_RPC_LAYOUT_ASSERT(
+    sizeof(WLC_@PREFIX@_RPC_LAYOUT_STRING(@PREFIX@_RPC_LAYOUT_ENABLE)) == 2 &&
+    (@PREFIX@_RPC_LAYOUT_ENABLE == 0 || @PREFIX@_RPC_LAYOUT_ENABLE == 1),
+    "@PREFIX@_RPC_LAYOUT_ENABLE must be literal 0 or 1");
+#undef WLC_@PREFIX@_RPC_LAYOUT_ASSERT
+#undef WLC_@PREFIX@_RPC_LAYOUT_STRING
+#undef WLC_@PREFIX@_RPC_LAYOUT_STRING_
+
+#if @PREFIX@_RPC_LAYOUT_ENABLE && defined(__ELF__) && (defined(__GNUC__) || defined(__clang__))
+#define WLC_@PREFIX@_RPC_LAYOUT_ACTIVE 1
+#ifndef @PREFIX@_RPC_LAYOUT
+#define @PREFIX@_RPC_LAYOUT(function) __attribute__((section(".text.wlc.@MODULE@.rpc." #function)))
+#define WLC_@PREFIX@_RPC_LAYOUT_DEFAULT
+#endif
+#else
+#define WLC_@PREFIX@_RPC_LAYOUT_ACTIVE 0
+#endif
+
