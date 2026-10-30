@@ -4,6 +4,7 @@ use crate::{
     KernelProfile, SemanticModel,
     codec_plan::{CodecPlan, CodecProfile},
     codegen::{CModel, type_name, upper_snake},
+    endpoint_layout::EndpointEnvelope,
     kernel_profile::KernelError,
 };
 use std::{
@@ -35,9 +36,16 @@ pub fn generate_kernel_c(
     }
     if p.endpoint.is_none() {
         return Err(KernelError(
-            "a native_packet endpoint declaration is required".into(),
+            "an endpoint deployment declaration is required".into(),
         ));
     }
+    let envelope = p.endpoint.unwrap().envelope;
+    let (wire_envelope, integrity, connector) = match envelope {
+        EndpointEnvelope::NativePacket => ("native_packet", "none", None),
+        EndpointEnvelope::CobsStream => ("cobs_stream", "crc16", Some("cobs_crc16")),
+        EndpointEnvelope::BusLength16 => ("bus_length16", "none", Some("length16_none")),
+        EndpointEnvelope::Any => return Err(KernelError("select an explicit deployment".into())),
+    };
     let mut capacities = BTreeMap::new();
     let mut req_max = 17u64;
     let mut resp_max = 21u64;
@@ -77,11 +85,24 @@ pub fn generate_kernel_c(
             "selected message exceeds the 2048-byte native payload limit".into(),
         ));
     }
+    let packet_max = capacities
+        .values()
+        .map(|(_, n, _)| *n)
+        .max()
+        .unwrap_or(4)
+        .max(req_max)
+        .max(resp_max)
+        .max(msg_max);
+    let wire_max = match envelope {
+        EndpointEnvelope::CobsStream => packet_max + 2 + (packet_max + 2) / 254 + 2,
+        EndpointEnvelope::BusLength16 => packet_max + 2,
+        _ => packet_max,
+    };
     let public =
         crate::codegen::generate_c_with_fingerprints(schema, m, Some(&BTreeSet::new()), None)
             .map_err(|e| KernelError(e.to_string()))?;
     let mut header = format!(
-        "/* SPDX-License-Identifier: Apache-2.0 */\n#ifndef {upper}_KERNEL_H\n#define {upper}_KERNEL_H\n#include \"{m}.h\"\n#include \"wirelink/kernel.h\"\n#if WL_KERNEL_CONTRACT != 1\n#error \"static kernel contract mismatch\"\n#endif\n#ifdef __cplusplus\nextern \"C\" {{\n#endif\n#define {upper}_KERNEL_PROFILE_VERSION 2U\n#define {upper}_KERNEL_REQUEST_FRAME_MAX {req_max}U\n#define {upper}_KERNEL_REPLY_FRAME_MAX {resp_max}U\n#define {upper}_KERNEL_MESSAGE_FRAME_MAX {msg_max}U\n"
+        "/* SPDX-License-Identifier: Apache-2.0 */\n#ifndef {upper}_KERNEL_H\n#define {upper}_KERNEL_H\n#include \"{m}.h\"\n#include \"wirelink/kernel.h\"\n#if WL_KERNEL_CONTRACT != 1\n#error \"static kernel contract mismatch\"\n#endif\n#ifdef __cplusplus\nextern \"C\" {{\n#endif\n#define {upper}_KERNEL_PROFILE_VERSION 2U\n#define {upper}_KERNEL_PACKET_FRAME_MAX {packet_max}U\n#define {upper}_KERNEL_WIRE_FRAME_MAX {wire_max}U\n#define {upper}_KERNEL_REQUEST_FRAME_MAX {req_max}U\n#define {upper}_KERNEL_REPLY_FRAME_MAX {resp_max}U\n#define {upper}_KERNEL_MESSAGE_FRAME_MAX {msg_max}U\n"
     );
     for service in &p.rpc_services {
         let name = type_name(&service.name);
@@ -183,13 +204,69 @@ pub fn generate_kernel_c(
         (format!("{m}_kernel_codecs.h"), private),
     ]);
     let mut deployment = format!(
-        "{{\n  \"format\": \"wirelink-static-kernel-manifest-v1\",\n  \"kernel_contract\": 1,\n  \"profile_version\": 2,\n  \"envelope\": \"native_packet\",\n  \"integrity\": \"none\",\n  \"rpc_role\": \"both\",\n  \"call_slots\": 4,\n  \"reply_slots\": 4,\n  \"event_budget\": 16,\n  \"request_frame_capacity\": {req_max},\n  \"reply_frame_capacity\": {resp_max},\n  \"message_frame_capacity\": {msg_max},\n  \"messages\": [\n"
+        "{{\n  \"format\": \"wirelink-static-kernel-manifest-v1\",\n  \"kernel_contract\": 1,\n  \"profile_version\": 2,\n  \"envelope\": \"{wire_envelope}\",\n  \"integrity\": \"{integrity}\",\n  \"rpc_role\": \"both\",\n  \"call_slots\": 4,\n  \"reply_slots\": 4,\n  \"event_budget\": 16,\n  \"request_frame_capacity\": {req_max},\n  \"reply_frame_capacity\": {resp_max},\n  \"message_frame_capacity\": {msg_max},\n  \"messages\": [\n"
     );
     for (n, (id, (body, frame, codec))) in capacities.iter().enumerate() {
         writeln!(deployment, "    {{\"id\": {id}, \"codec\": \"{codec}\", \"body_max\": {body}, \"frame_max\": {frame}}}{}", if n + 1 == capacities.len() { "" } else { "," }).unwrap();
     }
     deployment.push_str("  ]\n}\n");
     files.insert(format!("{m}_kernel_deployment.json"), deployment);
+    if let Some(connector) = connector {
+        let transport_header = format!(
+            r#"/* SPDX-License-Identifier: Apache-2.0 */
+#ifndef {upper}_KERNEL_TRANSPORT_H
+#define {upper}_KERNEL_TRANSPORT_H
+#include "wirelink/packet_stream.h"
+#ifdef __cplusplus
+extern "C" {{
+#endif
+/* Stop the I/O producer and acknowledge physical drain before destroying
+ * stream, port, RX or wire storage. Generated routing uses canonical DATA;
+ * only this selected framing connector handles the external wire. */
+wl_err_t {m}_kernel_transport_init(wl_packet_stream_t *, wl_packet_port_t *, uint64_t,
+    wl_span_t rx, size_t rx_unit_size, wl_span_t wire, wl_packet_sink_fn,
+    wl_packet_notify_fn, void *);
+wl_err_t {m}_kernel_transport_feed(wl_packet_stream_t *, const uint8_t *, size_t, size_t *);
+#ifdef __cplusplus
+}}
+#endif
+#endif
+"#
+        );
+        let transport_source = format!(
+            r#"/* SPDX-License-Identifier: Apache-2.0 */
+#include "{m}_kernel_transport.h"
+#include "{m}_kernel.h"
+#include <string.h>
+wl_err_t {m}_kernel_transport_init(wl_packet_stream_t *stream, wl_packet_port_t *port,
+    uint64_t instance, wl_span_t rx, size_t unit_size, wl_span_t wire,
+    wl_packet_sink_fn submit, wl_packet_notify_fn notify, void *user) {{
+  if (stream == NULL || port == NULL || submit == NULL ||
+      wire.length < {wire_max}U || unit_size < {wire_max}U) return WL_ERR_INVALID_ARG;
+  wl_packet_stream_config_t transport = {{.port = port, .tx_storage = wire,
+      .physical_submit = submit, .notify = notify, .user = user,
+      .maximum_frame_size = {packet_max}U}};
+  memset(stream, 0, sizeof(*stream)); stream->config = transport;
+  wl_packet_config_t config = {{.instance = instance, .rx_storage = rx.data,
+      .rx_unit_size = unit_size, .rx_storage_size = rx.length,
+      .submit = wl_packet_stream_{connector}_submit,
+      .notify = wl_packet_stream_notify, .user = stream}};
+  wl_err_t error = wl_packet_init(port, &config);
+  if (error != WL_OK) return error;
+  error = wl_packet_stream_{connector}_init(stream, &transport);
+  if (error != WL_OK) wl_packet_stop(port);
+  return error;
+}}
+wl_err_t {m}_kernel_transport_feed(wl_packet_stream_t *stream,
+    const uint8_t *data, size_t length, size_t *consumed) {{
+  return wl_packet_stream_{connector}_feed(stream, data, length, consumed);
+}}
+"#
+        );
+        files.insert(format!("{m}_kernel_transport.h"), transport_header);
+        files.insert(format!("{m}_kernel_transport.c"), transport_source);
+    }
+
     let artifacts = files
         .iter()
         .map(|(path, content)| crate::ManifestArtifact {

@@ -111,11 +111,13 @@ pub fn compose_kernel_profiles(profiles: &[KernelProfile]) -> Result<KernelProfi
 }
 
 fn validate(bindings: &BindingProfileModel) -> Result<(), KernelError> {
-    if bindings.endpoint.is_some_and(|e| {
-        e.envelope != EndpointEnvelope::NativePacket || e.rpc_role != EndpointRpcRole::Both
-    }) {
+    if bindings
+        .endpoint
+        .is_some_and(|e| e.envelope == EndpointEnvelope::Any || e.rpc_role != EndpointRpcRole::Both)
+    {
         return Err(KernelError(
-            "K1 supports native_packet, integrity NONE and both RPC roles".into(),
+            "select native_packet/NONE, cobs_stream/CRC16 or bus_length16/NONE with both RPC roles"
+                .into(),
         ));
     }
     for route in bindings.send_routes.iter().chain(&bindings.direct_routes) {

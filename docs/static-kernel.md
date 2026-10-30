@@ -21,8 +21,19 @@ direct Sample { delivery = unreliable; }
 Version 2 defaults RPC delivery to unreliable. Explicit reliable, guarantee
 (including replay/correlate), mapped field declarations, LATEST/FIFO and unknown
 deferred declarations fail. Version 1 keeps its old defaults and is rejected by
-this command. K1 supports native packets, NONE integrity and both RPC roles;
-other deployments fail explicitly. Selected messages need finite codec bounds
+this command. K3 supports explicit native_packet/NONE, cobs_stream/CRC16 and
+bus_length16/NONE deployments, with both RPC roles. Other deployments fail
+explicitly. Stream deployments emit `<module>_kernel_transport.h/.c` with direct
+calls to the selected framing connector; compile these with the matching
+`wirelink_stream_cobs_crc16` or `wirelink_stream_length16_none` target.
+`<module>_kernel_transport_init` binds caller-supplied port, two RX units, a wire
+TX buffer and physical sink. `_transport_feed` retains an unconsumed input suffix
+on backpressure. Stop the byte producer and confirm physical drain before
+reinitialization. The packet kernel uses canonical ordinary DATA internally;
+the connector validates external framing/integrity before publishing RX and
+encodes selected external wire bytes on TX. The manifest distinguishes the
+external envelope/integrity from canonical packet storage capacities. There is
+no all-mode framing dispatcher in this path. Selected messages need finite codec bounds
 and must fit the native payload limit. RPC uses the existing managed tagged
 business codec and metadata; ordinary messages use the unchanged Schema-v1
 codec. There is no wire negotiation or automatic downgrade.

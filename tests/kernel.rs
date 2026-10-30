@@ -47,8 +47,8 @@ fn removed_contracts_are_errors_and_v1_defaults_are_unchanged() {
         ),
         (PROFILE.replace("send Tick", "fifo Tick"), "LATEST/FIFO"),
         (
-            PROFILE.replace("native_packet", "cobs_stream"),
-            "K1 supports",
+            PROFILE.replace("native_packet;", "native_packet; rpc_role = server;"),
+            "both RPC roles",
         ),
     ] {
         let parsed = parse_binding_profile(&profile).unwrap();
@@ -233,4 +233,139 @@ int main(void) {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn selected_stream_connectors_run_the_same_rpc_kernel() {
+    let root = std::env::var_os("WIRELINK_SOURCE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .into()
+        });
+    let schema = analyze_schema(&parse_schema(SCHEMA).unwrap()).unwrap();
+    for (envelope, connector, integrity) in [
+        ("cobs_stream", "cobs_crc16", "crc16"),
+        ("bus_length16", "length16_none", "none"),
+    ] {
+        let profile = analyze_kernel_profile(
+            &parse_binding_profile(&PROFILE.replace("native_packet", envelope)).unwrap(),
+            &schema,
+        )
+        .unwrap();
+        let generated = generate_kernel_c(&schema, &profile, "demo").unwrap();
+        let manifest = &generated.files["demo_kernel_deployment.json"];
+        assert!(manifest.contains(&format!("\"envelope\": \"{envelope}\"")));
+        assert!(manifest.contains(&format!("\"integrity\": \"{integrity}\"")));
+        let transport = &generated.files["demo_kernel_transport.c"];
+        assert!(transport.contains(&format!("wl_packet_stream_{connector}_submit")));
+        assert!(!transport.contains("wl_frame_encode"));
+        assert!(!transport.contains(if connector == "cobs_crc16" {
+            "length16_none"
+        } else {
+            "cobs_crc16"
+        }));
+        let directory = tempdir().unwrap();
+        for (name, content) in generated.files {
+            fs::write(directory.path().join(name), content).unwrap();
+        }
+        fs::write(directory.path().join("test.c"), r#"
+#include "demo_kernel.h"
+#include "demo_kernel_transport.h"
+#include <stdlib.h>
+#include <string.h>
+static demo_kernel_t endpoint;
+static wl_packet_port_t port;
+static wl_packet_stream_t stream;
+static unsigned completed, effects;
+static wl_packet_submit_t sink(void *user, const uint8_t *data, size_t length, wl_packet_token_t token) {
+  (void)user; (void)token;
+  size_t consumed = 0;
+  if (demo_kernel_transport_feed(&stream, data, length, &consumed) || consumed != length) abort();
+  return WL_PACKET_SENT;
+}
+static int32_t execute(void *user, const request_t *request, response_value_t *response) {
+  (void)user;
+  if (request->input != INT32_MIN || request->name.length != 3 ||
+      memcmp(request->name.data, "a\0b", 3)) abort();
+  ++effects;
+  response->has_data = true; response->data.length = 32;
+  for (unsigned i = 0; i < 32; ++i) response->data.data[i] = (uint8_t)i;
+  return 0;
+}
+static void done(void *user, wl_kernel_result_t result, const response_t *response) {
+  (void)user;
+  if (result.outcome != WL_KERNEL_SUCCESS || !response || response->data.length != 32) abort();
+  for (unsigned i = 0; i < 32; ++i) if (response->data.data[i] != (uint8_t)i) abort();
+  ++completed;
+}
+int main(void) {
+  static uint8_t rx[2][256], wire[256];
+  if (demo_kernel_transport_init(&stream, &port, 8877, (wl_span_t){&rx[0][0], sizeof(rx)},
+      256, (wl_span_t){wire,sizeof(wire)}, sink, NULL, NULL)) abort();
+  demo_kernel_handlers_t handlers = {.on_rpc_execute = execute};
+  if (demo_kernel_init(&endpoint, &port, &handlers, NULL, NULL)) abort();
+  request_value_t request = {.has_input=true, .input=INT32_MIN, .has_name=true,
+      .name={.length=3, .data={'a',0,'b'}}};
+  wl_kernel_call_handle_t call;
+  if (demo_kernel_execute_start(&endpoint, &request, 0, 100, done, NULL, &call)) abort();
+  memset(&request, 0, sizeof(request));
+  for (unsigned i = 0; i < 10 && !completed; ++i) if (demo_kernel_step(&endpoint, 0)) abort();
+  if (completed != 1 || effects != 1 || wl_kernel_close(&endpoint.core) ||
+      demo_kernel_step(&endpoint, 0) || !wl_kernel_quiescent(&endpoint.core)) abort();
+  return 0;
+}
+"#).unwrap();
+        let prototype = root.join("experimental/static_kernel");
+        let mut cc = Command::new(std::env::var("CC").unwrap_or_else(|_| "cc".into()));
+        cc.args([
+            "-std=c11",
+            "-Os",
+            "-Wall",
+            "-Wextra",
+            "-Wpedantic",
+            "-Werror",
+        ]);
+        if std::env::var_os("WLC_TEST_SANITIZE").is_some() {
+            cc.args(["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]);
+        }
+        for include in [
+            root.join("include"),
+            prototype.join("include"),
+            directory.path().into(),
+        ] {
+            cc.arg("-I").arg(include);
+        }
+        for file in [
+            "demo.c",
+            "demo_kernel.c",
+            "demo_kernel_transport.c",
+            "test.c",
+        ] {
+            cc.arg(directory.path().join(file));
+        }
+        for file in [
+            "kernel.c",
+            "packet_port.c",
+            "native_none.c",
+            "rpc_wire.c",
+            "packet_stream.c",
+        ] {
+            cc.arg(prototype.join("src").join(file));
+        }
+        cc.arg(prototype.join("src").join(format!("{connector}_stream.c")));
+        if connector == "cobs_crc16" {
+            cc.arg(root.join("src/cobs.c")).arg(root.join("src/crc.c"));
+        }
+        let binary = directory.path().join("test");
+        let output = cc.arg("-o").arg(&binary).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(Command::new(binary).status().unwrap().success());
+    }
 }
