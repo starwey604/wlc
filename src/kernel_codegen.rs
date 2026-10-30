@@ -135,6 +135,7 @@ pub fn generate_kernel_c(
             type_name(&route.message_name)
         )
         .unwrap();
+        writeln!(header, "/* Borrowed input is encoded before return; no view or source bytes are retained. */\nwl_err_t {m}_kernel_send_{}_view({m}_kernel_t *, const {}_t *);", type_name(&route.message_name), type_name(&route.message_name)).unwrap();
     }
     header.push_str("#endif\n");
     let mut private = format!(
@@ -159,6 +160,7 @@ pub fn generate_kernel_c(
     for route in &p.send_routes {
         let name = type_name(&route.message_name);
         writeln!(source, "static wl_err_t {m}_kernel_encode_{name}(const void *value, uint8_t *data, size_t capacity, size_t *length) {{\n  return {name}_value_encode(value, data, capacity, length) == WL_CODEC_OK ? WL_OK : WL_ERR_CORRUPT_PAYLOAD;\n}}\nwl_err_t {m}_kernel_send_{name}({m}_kernel_t *endpoint, const {name}_value_t *value) {{\n  if (endpoint == NULL || value == NULL) return WL_ERR_INVALID_ARG;\n  return wl_kernel_send(&endpoint->core, {}U, value, {m}_kernel_encode_{name});\n}}", route.message_id).unwrap();
+        writeln!(source, "static wl_err_t {m}_kernel_encode_{name}_view(const void *value, uint8_t *data, size_t capacity, size_t *length) {{\n  return {name}_encode(value, data, capacity, length) == WL_CODEC_OK ? WL_OK : WL_ERR_CORRUPT_PAYLOAD;\n}}\nwl_err_t {m}_kernel_send_{name}_view({m}_kernel_t *endpoint, const {name}_t *value) {{\n  if (endpoint == NULL || value == NULL) return WL_ERR_INVALID_ARG;\n  return wl_kernel_send(&endpoint->core, {}U, value, {m}_kernel_encode_{name}_view);\n}}", route.message_id).unwrap();
     }
     writeln!(source, "static wl_err_t {m}_kernel_route(wl_kernel_t *core, const wl_kernel_frame_t *frame) {{\n  {m}_kernel_t *endpoint = ({m}_kernel_t *)core;\n  (void)endpoint;\n  switch (frame->message_id) {{").unwrap();
     for service in &p.rpc_services {

@@ -67,3 +67,9 @@ nonzero instance, an idle owner and stopped I/O.
 This command does not yet supply product USB adapters, a host executor, SDKs or
 COBS connectors. Software fixtures do not establish K1 hardware integration or
 K2 performance acceptance.
+
+Ordinary messages also have `<module>_kernel_send_<message>_view` entry points.
+They borrow input only during the call and encode directly into the same final
+TX buffer before returning success. This avoids constructing a large owned
+bytes value in an adapter. It is a codec input form, not another execution
+engine; BUSY and physical lease handling are identical to owned-value sends.

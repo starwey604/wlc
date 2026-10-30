@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add borrowed-view ordinary sends to static kernel generation. Encode input
+  into the same owned final frame before acceptance returns, without an extra
+  bounded-bytes copy or a separate TX engine.
+
 - Add the isolated `compile-kernel` prototype: profile version 2, typed synchronous
   handlers, nonblocking clients, static codec/frame bounds and deployment contract
   1 for the compact C kernel. Reuse managed tagged RPC and Schema-v1 codecs;
