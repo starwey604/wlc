@@ -1,5 +1,18 @@
 # wlc 中文指南
 
+端点初始化现在显式接收按值传递的 `wl_link_defaults_t`：
+`*_endpoint_config_defaults(&config, environment, wl_link_defaults())` 和
+`*_endpoint_init(&endpoint, environment, wl_link_defaults())` 选择 CRC16；
+USB 接入从 `<wirelink/usb_bulk_defaults.h>` 传入
+`wl_usb_bulk_link_defaults()`，选择 NONE。两端的 integrity 必须一致，没有协商或回退。
+用户在 defaults 后、`*_endpoint_init_config()`／`*_endpoint_create()` 前显式覆盖
+`config.link.integrity`，完整 config 的最终值始终优先。envelope 仍由生成 profile 决定
+（`any` 默认 native packet），存储仍预留最大 CRC32C trailer。
+默认 `multi` 支持这些选择；固定 `cobs-crc16` 对 USB NONE 返回
+`WL_ERR_NOT_SUPPORTED`。裸 core 可使用
+`wl_config_apply_link_defaults(&config, defaults)`，它不重置其他字段。
+新签名替代旧的双参数入口，当前生成物须由匹配的 WLC 重新生成；协议版本和 schema identity 不变。
+
 ## C++ / Python SDK 生成
 
 ```sh
@@ -11,9 +24,9 @@ wlc sdk calculator.wl --profile calculator.bind.wl --out-dir sdk \
 
 业务值支持有界字符串和字节串、可选字段及默认值、保留未知值的枚举、固定长度 packed 数组和嵌套消息。可选值保留缺失状态，显式默认值通过 `<field>_or_default` 读取。响应数据在关闭连接后仍可使用。
 
-源码构建需安装匹配的 Wirelink 0.8.0 开发包，启用 `WIRELINK_BUILD_CPP_BINDINGS`、`WIRELINK_BUILD_PLATFORM` 和静态 PIC 构建，并提供 standalone Asio 头文件。wheel 用户无需 WLC、Rust 或 C++ 编译器。生成包版本由 SDK 维护者自行决定。
+源码构建需安装匹配的 Wirelink 0.12.0 开发包，启用 `WIRELINK_BUILD_CPP_BINDINGS`、`WIRELINK_BUILD_PLATFORM` 和静态 PIC 构建，并提供 standalone Asio 头文件。wheel 用户无需 WLC、Rust 或 C++ 编译器。生成包版本由 SDK 维护者自行决定。
 
-重复生成相同内容可直接执行；替换已有生成文件须显式指定 `--overwrite`，修改 SDK 名称须使用新目录。Binding source API revision 为 2，生成 C ABI 为 32；不承诺跨编译器的稳定 C++ 二进制 ABI。暂不提供订阅、Python 服务端、Serial/USB、Bulk、动态 schema、free-threaded Python 或子解释器支持。详见 [SDK 契约](docs/sdk.md)。
+重复生成相同内容可直接执行；替换已有生成文件须显式指定 `--overwrite`，修改 SDK 名称须使用新目录。Binding source API revision 为 2，生成 C 契约为 0.12；不承诺跨编译器的稳定 C++ 二进制 ABI。暂不提供订阅、Python 服务端、Serial/USB、Bulk、动态 schema、free-threaded Python 或子解释器支持。详见 [SDK 契约](docs/sdk.md)。
 
 `wlc` 是 Wirelink schema compiler：解析/验证 `.wl` schema、对照前一 revision 检查
 兼容性，并生成无动态分配的 C11 payload codec 及可选 typed binding/runtime。
@@ -21,6 +34,11 @@ wlc sdk calculator.wl --profile calculator.bind.wl --out-dir sdk \
 > 英文版 [`README.md`](README.md) 是规范来源。本文件用于中文 API 审阅。
 
 ## Codec 编译期规划
+
+`wlc plan device.wl --profile device.bind.wl` 输出确定性 JSON，列出字段编码、最大长度、
+客户端 owned result union 和 replay/pending 资源。profile 可声明 `guarantee` 与 `codec`；
+合同 0.12 已实现 tagged/positional 与 replay/correlate 的显式组合；默认 tagged/replay 字节和
+identity 保持不变。不支持的位置类型在写产物前拒绝，详见[静态 plan](docs/codegen.md#codec-and-rpc-plans)。
 
 维护编译器时先看 [生成器源码导航与正确性验收](docs/codegen.md)。
 `codegen.rs`/`runtime_codegen.rs` 是入口；编译期规划、校验、C 输出和存储组装分属私有模块。
@@ -33,6 +51,10 @@ fixed32/fixed64/float32/float64 数组的消息才生成专用入口，长度与
 这些是可继续调整的实现策略，不是新的
 schema 属性或稳定阈值，不改变 codec 的线上字节。
 
+共享编码、解码、清零与规范指纹引擎按完整 schema（含导入）使用的字段类型裁剪。
+未使用的 UTF-8、嵌套消息与 packed 路径不进入生成 C，没有运行时功能开关。
+未知字段仍支持跳过全部合法 wire type；编码字节、规范指纹和公开布局不变。
+
 ## 预编译 Compiler
 
 
@@ -43,7 +65,7 @@ compiler version 与生成契约是两个兼容轴。`wlc --version` 报告 rele
 manifest 的 `compiler.codegen_contract` 记录生成契约；build 必须同时 pin 两者，不能跟随 branch
 或自动使用最新版。
 
-当前正式版为 `0.8.0`，`wlc codegen-contract` 输出 0.8；发布包提供五个平台的主机工具和 SHA256SUMS。核心和所有生成
+当前开发树为 `0.12.0`，`wlc codegen-contract` 输出 0.12；请使用匹配的本地源码构建 compiler，0.12 发布归档尚未固定。历史 0.8 发布包属于独立源码配对。核心和所有生成
 消费者必须配套重建。此轮支持根 schema 的 `import "arm.wl";` 静态组合，以及
 profile 的 `direct BulkChunk { delivery = reliable; }` 借用式接收路由。
 导入相对当前文件解析，共享文件去重，循环与全局 ID/名称冲突在编译期拒绝；根版本
@@ -69,7 +91,7 @@ wlc compile-runtime device.wl --profile services.bind.wl --profile server.bind.w
 它生成类型化发送函数并参与端点容量推导，但不分配接收邮箱。对端独立声明 `latest/fifo`。
 原有 retained 声明仍提供对称发送助手；同消息显式 `send` 负责选择出站 delivery。
 RPC 请求/响应不能再声明为普通消息路由；无界或过大的 send 会禁用默认端点组装。
-没有 send 声明的 profile 保持原 identity。ABI 27 不改变 ABI 26 的 codec 和线上格式。
+没有 send 声明的 profile 保持原 identity。send 声明不改变已有消息的 codec；当前生成契约为 0.12。
 
 ## 自持业务值与高级视图
 
@@ -90,15 +112,14 @@ required、presence 与默认值不变，解码失败不修改输出。
 
 ## 默认 RPC 端点
 
-有默认静态存储配方的 RPC profile 解码暂存跨服务共用。ABI 29 边遍历规范化编码
+有默认静态存储配方的 RPC profile 解码暂存跨服务共用。replay 边遍历规范化编码
 边计算指纹，删除规范化请求缓冲及容量配置。含无界消息的高级 runtime 保留逐服务解码对象，
 避免覆盖用户设置的 repeated backing。每个服务的配置上限继续生效；同一 runtime
 不能重入分发，延迟工作须复制回调输入，不能保存暂存区指针。线上格式不变。
 
-`endpoint_init(endpoint, wl_platform_environment())` 自动生成实例身份并配置时钟。
+`endpoint_init(endpoint, wl_platform_environment(), wl_link_defaults())` 自动生成实例身份并配置时钟。
 自定义 `wl_environment_t.session.next` 可接入裸机身份来源；业务无需传 session ID。
-托管 RPC 元数据 v2 为 20 字节，回送客户端身份以隔离旧实例响应；所有 delivery 组合
-适用。v1/v2 须两端成对升级；显式字段映射和 Compact-v1 帧格式不变。
+managed wire v4 的请求／成功元数据为 9–13 字节，拒绝为 13–17 字节；BE64 原客户端身份隔离旧实例响应，适用于所有 delivery 组合。两端配套升级，显式字段映射和 Compact-v1 帧格式不变。
 
 `<runtime>_endpoint.h` 是普通入口；因静态布局传递包含 runtime 头，
 不承诺所有高级声明都不可见。使用 `endpoint_<service>_async()` 提交自持请求，
@@ -118,7 +139,7 @@ TTL 是最长保留而非保留窗口承诺。统一构建定义 `<PREFIX>_ENDPO
 `endpoint { rpc_role = server; }` / `client` 也裁剪接收分发中的对侧 RPC 路径。
 已知但角色不支持的消息仍报告 delivery mismatch / missing route，并释放 RX，
 不执行 codec。managed RPC 的请求校验、去重/重放和响应完成共用私有实现，
-不改变业务 codec、公共布局或 ABI 32，也不需要开启 `-Os`。
+不改变业务 codec、公共业务类型布局，也不需要开启 `-Os`。
 测量和回归门槛见 [RPC Flash](docs/rpc-flash.md)。
 
 `config.advanced` 保留手动角色、容量和缓存策略；原 call/token 是高级路径。
@@ -278,13 +299,10 @@ RPC 请求、响应各自默认 `reliable`。有特殊需要才覆盖一个方�
 `request = HomeRequest @delivery(unreliable);`。属性属于绑定，不属于 schema 消息。
 省略默认值、显式可靠属性、旧 `request_delivery`／`response_delivery` 属性生成相同的
 代码、manifest 和标识。同一方向重复声明一律报错，即使值相同。LATEST／FIFO 仍显式指定策略。
-这些属性在 ABI 20 期间作为语法扩展加入，时钟注入在 ABI 21 引入；当前配对为 ABI 29。
-属性语法本身仍不改变编码字节，需使用配套提交。
+属性语法本身不改变编码字节；当前配对为生成契约 0.12，须使用匹配 compiler/core。
 
 三个编号／状态映射全部省略，即选择托管 RPC，`.wl` 只定义业务参数。
-runtime 管理 20 字节前缀：零区分字节、版本、请求／响应类型、保留零、
-大端 uint32 调用编号、大端 int32 状态和大端 uint64 原客户端 session。
-ABI 26 使用元数据 v2，所有可靠性组合均须成对升级。成功响应带业务体，非零拒绝只带前缀。
+runtime 管理 BE64 原客户端 session 和 canonical varuint33 `(call_id << 1) | rejection`，保留完整 operation32。请求／成功元数据为 9–13 字节；拒绝追加非零 BE32 int32 状态且无业务体，共 13–17 字节。默认私有 tagged 业务体把 scalar fixed32 编为完整 uint32 varint，packed fixed32 保持定宽；公开 Schema-v1 codec 不变。显式 positional 的字段顺序、presence 和演进规则另行定义。旧 metadata 不提供回退，两端须配套重生成。
 默认端点生成 `*_call_t`、`*_result_t` 和回复 token，使用
 `call/inspect/release/cancel/complete/reject`。端点发起／回复统一返回 `wl_rpc_err_t`，
 普通 handler 无需创建通用 runtime result；详细失败保留在 `endpoint_result()`。
@@ -295,7 +313,7 @@ ABI 26 使用元数据 v2，所有可靠性组合均须成对升级。成功响�
 `response_status` 三个映射，保持旧编码；只写部分会报错。托管与映射两种模式不能直接
 互通，模式进入 profile identity，迁移需同步两端。仅 retained 策略和本地角色不同仍可共享 codec。
 调用关联与有界重放不等于持久化业务幂等。本地 token 在 runtime 重建后应丢弃，
-默认端点增加归属／代次检查；托管 v2 响应必须同时匹配本地 session 和调用编号。
+默认端点增加归属／代次检查；托管响应必须同时匹配本地 session 和调用编号。
 自动编号耗尽会拒绝新调用，安全 close/reinit 后才恢复。映射 RPC 保留原新鲜度限制；
 两者都不提供持久 exactly-once 或认证。
 
@@ -356,13 +374,10 @@ ABI 20 的托管 RPC 使用 call/inspect/release/cancel/complete/reject 和生�
 
 `endpoint_handle()` 用于连接适配器，`endpoint_runtime()` 保留高级借用接口。
 容量根据 profile 选中的消息推导；消息无界或超过单帧上限时，
-`*_HAS_DEFAULT_ENDPOINT=0`，继续使用高级自定义存储。默认整包传输和 CRC32C，
+`*_HAS_DEFAULT_ENDPOINT=0`，继续使用高级自定义存储。使用通用 defaults 时为 profile 选择的 envelope 和 CRC16，
 RPC 角色与过期策略仍显式选择。生成产物必须与支持端点 API 的 Wirelink 配套。
 
-Cortex-M4/Thumb/`-Os` regression fixture 当前 gate：dispatch/RPC/consumer 3328 bytes、
-assembly helper 1200、pump 320、optional diagnostic 288、完整 object 5088；retained-only
-result 24 bytes，RPC/combined result 112 bytes。它们是 generator regression，不是整机估算；
-每个函数独立 section，`--gc-sections` 移除未引用 API。
+Flash regression fixture 检查生成对象及多方法共享控制流，实际固件段尺寸与 IRAM 覆盖由独立 map/ELF 审计。历史 ABI 的 Cortex-M4 数值见 [RPC Flash](docs/rpc-flash.md)，不能用作当前合同的整机资源估算。
 
 ### Retained 与 RPC
 
@@ -375,19 +390,15 @@ WLC 拒绝把含 bytes/string/repeated（包括嵌套）的 message 放进 retai
 LATEST coalescing、codec/handler/RPC failure 不会 NACK 或重启 ARQ。peer-visible completion
 必须通过 RPC response/status 和应用 deadline 表达。
 
-每个 RPC service 生成 client start/inspect/decode/release、request handler 和 server
-complete/reject；默认端点还提供句柄与类型化结果。request/response input 为 `const`，
-只有映射模式在 shared typed scratch 上注入 ID/status，纯托管模式不分配这个暂存区。
-client response 原始字节保留到 release；借用字段也只在此前有效。server 解码验证成功后，
-复用普通编码器的规范化字段遍历，直接计算指纹；RPC domain 由 runtime 提供，codec 不承载
-RPC 策略，也不直接哈希收到的原始字节。按 NEW/PENDING_DUPLICATE/REPLAY/CONFLICT
-处理；complete/reject 先 cache 后 send。普通 owned handler 走生成器私有转换，避免再次
-检查 UTF-8；公开视图转换仍完整检查，失败不改输出。owned 输出整体清零一次（含未用容量
-和 padding），嵌套复制不重复清零。业务不承担新的缓冲或生命周期责任。
+每个 RPC service 生成 client start/inspect/release、typed response 访问、request handler 和 server complete/reject。成功响应只解码一次，保存为每调用 owned result；inspect 借用此值到 release/close，复制整个值后可独立保留。async 先复制到独立 completion，再释放容量，最后通知；sync 不再解码。客户端 encoded response 池和 decode helper 已删除。
 
-异步 completion 必须复制包含 peer session 的 identity。ABI 18 在可靠 request 前自动观察
+托管 RX 先验证 metadata，再 prepare、直接解码到调用槽，最后 commit。映射模式一次解码到 owned scratch 以读取 ID/status，再复制到验证后的调用槽。映射发送保留用于注入字段的 typed scratch；纯托管请求／响应直接编码到 TX／预留服务器响应区。
+
+仅 replay 在成功解码后遍历公开 Schema-v1 canonical 业务值计算 fingerprint，按 NEW/PENDING_DUPLICATE/REPLAY/CONFLICT 处理。correlate 每次合法到达独立执行，不保留完成历史。两者均预留 pending/稳定响应容量，保留 generation 和背压。私有 codec 只生成 managed 消息及嵌套依赖，不再生成私有 canonical hash 或普通消息副本。普通 owned handler 的私有转换避免重复 UTF-8 检查；公开 view 转换仍验证且失败不修改输出。
+
+异步 completion 必须复制包含 peer session 的 identity。runtime 在可靠 request 前自动观察
 session；切换清理旧工作并请求取消 detached response，`peer_changed` 和 take API 通知产品。
-ABI 21 引入初始化时钟；ABI 26 使用 `wl_environment_t`，可覆盖 `config.environment.clock`，
+初始化使用 `wl_environment_t`，可覆盖 `config.environment.clock`，
 step/call/complete/reject 不再传 `now_ms`。每轮取一次时间，立即回复复用它；
 step 外可靠提交取一次供链路/RPC 共用，unreliable 端点发送不取时钟。
 描述符复制，上下文借用到 close；核心不选择操作系统时钟。
@@ -413,3 +424,6 @@ workspace 产生 byte-identical manifest。digest 用于诊断完整性，不是
 symbol，`insta` 用于 golden snapshot，`proptest` 用于 parser/property，`assert_cmd`/
 `tempfile` 用于隔离 CLI 和 generated-C test。parser 手写以保持 grammar 明确；生成 codec C
 只依赖 `wirelink/codec.h`，typed binding 只依赖 public Wirelink header。
+
+RPC ELF 布局标记默认开启，可在编译生成的 runtime 时关闭。
+模块／函数覆盖、链接集成和预编译 SDK 的重建要求见 [RPC 布局配置](docs/rpc-layout.md)。

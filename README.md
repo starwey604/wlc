@@ -1,5 +1,22 @@
 # wlc
 
+Endpoint setup now takes a `wl_link_defaults_t` value explicitly:
+`*_endpoint_config_defaults(&config, environment, wl_link_defaults())` and
+`*_endpoint_init(&endpoint, environment, wl_link_defaults())` select CRC16.
+USB integrations can pass `wl_usb_bulk_link_defaults()` from
+`<wirelink/usb_bulk_defaults.h>` to select NONE instead. Both peers must use the
+same integrity; there is no negotiation or fallback. Apply application overrides
+such as `config.link.integrity = WL_INTEGRITY_CRC32C` after defaults and before
+`*_endpoint_init_config()` or `*_endpoint_create()`. Complete configs remain
+final. Envelope selection still follows the profile (`any` defaults to native
+packets), and storage still reserves the maximum CRC32C trailer. The default
+core build remains `multi`; fixed `cobs-crc16` rejects USB NONE with
+`WL_ERR_NOT_SUPPORTED`. Raw core configurations can use
+`wl_config_apply_link_defaults(&config, defaults)` without resetting other
+fields. These signatures replace the old two-argument entry points; regenerate
+current code with the matching WLC. Protocol version and schema identities do
+not change.
+
 `wlc` is the Wirelink schema compiler. It parses and validates `.wl` schemas,
 checks a revision against its predecessor, and generates allocation-free C11
 payload codecs plus optional typed Wirelink bindings.
@@ -24,16 +41,23 @@ it returns sorted relative paths and contents without writing files.
 The target is managed synchronous and asynchronous RPC over UDP with bounded owned
 messages, including strings/bytes, optional fields/defaults, open enums, fixed
 packed numeric arrays and nested messages. C codecs remain the only wire
-implementation; generated C ABI stays 32. Binding source API revision 2 is
+implementation; generated C uses contract 0.12. Binding source API revision 2 is
 recorded independently in `wlc-sdk-info.json` and the Python module.
 
-Build native SDKs against a matching Wirelink 0.8.0 installation
+Build native SDKs against a matching Wirelink 0.12.0 installation
 with `WIRELINK_BUILD_CPP_BINDINGS` and `WIRELINK_BUILD_PLATFORM` enabled. Source
 wheel builds require static PIC native libraries plus C++/CMake/Python build
 tools; generated C ships in the sdist so WLC/Rust is unnecessary there. Wheel
 users only install the matching wheel. See [SDK contracts and build workflow](docs/sdk.md).
 
 ## Codec implementation planning
+
+`wlc plan device.wl --profile device.bind.wl` prints deterministic JSON for field
+encodings, maximum sizes, client owned-result unions and replay/pending resources.
+Profiles can declare `guarantee = replay|correlate` and explicit codec choices;
+contract 0.12 generates tagged or explicit positional business codecs with either guarantee.
+Default tagged/replay wire bytes and identities remain unchanged. Unsupported positional
+shapes fail before artifact emission. See [codec and RPC plans](docs/codegen.md#codec-and-rpc-plans).
 
 For compiler changes, follow the [generator source map and correctness gates](docs/codegen.md).
 Codec/runtime facades delegate to private planning, validation, emission and
@@ -48,6 +72,12 @@ elements; clearing and other shapes retain the common engine. These are implemen
 not schema annotations or stable thresholds. Strategy selection does not change
 public ownership or encoded bytes; validation and unknown-field behavior still apply.
 
+The shared encoder, decoder, clearer and canonical fingerprint emitter contain
+only the field-type handlers used by the complete schema (including imports).
+Unused UTF-8, nested-message and packed helpers are omitted at generation time;
+there are no runtime feature flags. Unknown-field skipping still supports every
+legal wire type. Encoded bytes, canonical fingerprints and public layouts are unchanged.
+
 ## Prebuilt compiler
 
 
@@ -61,9 +91,9 @@ axes. `wlc --version` reports the release version, while every generated manifes
 records `compiler.codegen_contract`. Build integrations should pin both rather
 than following a branch or the newest release.
 
-`wlc codegen-contract` prints this contract without requiring a schema. WLC 0.8.0
-declares contract 0.8 and pairs with Wirelink 0.8.0. The v0.8.0 release
-publishes verified host packages and a pinned source archive. Regenerate all codec/runtime artifacts
+`wlc codegen-contract` prints this contract without requiring a schema. The development tree reports WLC 0.12.0 / contract 0.12 and pairs with
+Wirelink 0.12.0. Build the matching local compiler; no 0.12 host/source archive
+pair is pinned. The historical v0.8.0 release has its own verified packages. Regenerate all codec/runtime artifacts
 and use the matching Wirelink core. `<module>_values.h` supplies bounded self-owning
 business values. `<runtime>_endpoint.h` is the ordinary endpoint entry; it
 transitively includes runtime declarations for static layout, not an opaque ABI.
@@ -193,8 +223,8 @@ RPC request/response messages cannot also be plain send/retained routes. Unbound
 or oversized sends disable default endpoint assembly just like retained messages.
 Profiles without explicit sends preserve their existing identity.
 
-ABI 27 also adds shared ordinary-handler context inheritance, with no codec,
-Compact-v1 or managed RPC v2 wire change. Rebuild generated consumers together.
+Ordinary handlers can inherit shared context. Rebuild generated consumers
+together with the current 0.12 contract; see the migration guide in Wirelink.
 
 ## Schema grammar
 
@@ -466,7 +496,7 @@ source snippet at the invalid token.
 
 ## Optional binding profiles
 
-ABI 30 adds local endpoint layout selection. Compose shared RPC definitions with
+Profiles support local endpoint layout selection. Compose shared RPC definitions with
 one deployment fragment:
 
 ```text
@@ -517,15 +547,22 @@ Attributes belong to bindings, not schema messages. Explicit reliable attributes
 omitted defaults and legacy `request_delivery`/`response_delivery` properties
 generate identical code, manifests and identities. Declaring the same direction's
 policy twice is an error, even when values agree. LATEST/FIFO delivery remains
-explicit. These attributes were introduced without an ABI bump during ABI 20;
-the clock API now requires ABI 21. The syntax itself still does not change wire bytes.
+explicit. The attribute spellings do not change wire bytes. The current generated
+contract is 0.12; regenerate consumers with the matching compiler/core.
 
 Omitting all three operation/status mappings selects managed RPC: the `.wl`
-messages contain only business fields. The runtime owns a versioned 20-byte
-prefix (zero discriminator, version, kind, reserved zero, BE32 call ID, BE32
-status, BE64 originating client session). ABI 26 uses metadata version 2;
-both peers must upgrade, regardless of delivery policy. Successful responses carry a business body; nonzero rejections carry
-only the prefix. Default endpoints provide `*_call_t`, `*_result_t`, and reply
+messages contain only business fields. Managed wire format
+`managed-rpc-v4-tagged-varuint32` carries BE64 originating client session followed
+by canonical varuint33 `(call_id << 1) | rejection` (9–13 bytes total). The native
+message ID selects request/response; rejection adds a nonzero BE32 signed status
+and no body (13–17 bytes). Scalar fixed32 business fields use full-domain uint32
+varints with their original field numbers in this private tagged RPC body;
+packed fixed32 arrays and the other types retain their encodings. Public TLV
+codec APIs, business types and canonical fingerprints remain unchanged.
+This unreleased format directly replaces the previous managed format: regenerate
+and rebuild both peers together; no fallback is provided. Bounds include full
+integer domains, and runtime manifests name the managed wire format separately
+from the ordinary schema identity. Default endpoints provide `*_call_t`, `*_result_t`, and reply
 tokens, with `call/inspect/release/cancel/complete/reject` operations.
 Endpoint call/reply operations return `wl_rpc_err_t`; generic runtime result
 unions stay out of ordinary handlers. Detailed failures remain in `endpoint_result()`.
@@ -539,7 +576,7 @@ and mapped modes cannot interoperate without an explicit peer migration, and
 have different profile identities. Different retained storage/role policies
 can still share one codec. Call correlation and bounded replay are not durable
 business idempotency. Local tokens expire on runtime reinit; default endpoints
-add ownership/incarnation checks. Managed v2 replies must match the local session
+add ownership/incarnation checks. Managed replies must match the local session
 as well as the call ID; automatic IDs stop at exhaustion until safe close/reinit.
 Mapped RPC retains its previous freshness limitations. Neither mode guarantees
 durable exactly-once execution or authentication.
@@ -550,7 +587,7 @@ Use `--profile path/to/device.bind.wl` with `validate`, or use
 `compile-runtime` after compiling the schema. Runtime compilation writes only
 `<runtime-name>_runtime.h/.c` and its own manifest; `--runtime-name` gives
 asymmetric roles independent C namespaces while they include and call the
-schema-stem codec/binding artifacts. The legacy `compile --profile` composition
+schema-stem codec/binding artifacts. The combined `compile --profile` command
 remains available for one-runtime callers. The runtime header embeds the
 separate schema/profile diagnostic identities. Its generated dispatcher
 decodes a retained message directly into a `wl_latest_t` or `wl_fifo_t` write
@@ -691,42 +728,28 @@ and status. Reusing an explicit ID with the same canonical request lets an
 application retry address the server's bounded replay cache without adding a
 second generated start API.
 An encode or local submit failure releases the allocated client slot and returns
-operation ID zero. Each service emits a nonblocking client-inspect helper that returns
-generic operation metadata, a typed response decoder, and a service-checked
-release helper. Borrowed `bytes`/`string` response fields point into client
-response storage and remain valid only until that release. Response dispatch
-validates the mapped ID and status, copies the raw payload into
-`wl_rpc_client_t` before releasing the RX event, and leaves typed response
-scratch under caller ownership.
+operation ID zero. Inspection returns operation metadata and a pointer to the
+already decoded owned response; service-checked release ends that borrow.
+Client responses must be bounded. Managed RX validates metadata and grants
+prepare authority before decoding directly into the call's typed union member.
+Mapped RX decodes once into owned scratch to inspect its schema correlation
+fields, then copies into the validated call. Neither retains encoded client
+response bytes nor decodes again at inspection/completion.
 
-ABI 29 static instances with default bounded storage share one cross-service decode
-union; unbounded profiles retain per-service decode objects so caller-configured
-repeated backing is not overwritten. Mapped services additionally share RPC encode
-scratch. ABI 29 computes fingerprints while visiting canonical encoded fields;
-no canonical-request byte buffer or capacity setting is needed. Dispatch must not recursively
-reenter the same runtime, and deferred work must copy callback-scoped inputs.
-With manual
-runtime assembly, the caller supplies those objects directly and sets
-`runtime.rpc_encode_scratch`. Borrowed `bytes` and `string`
-fields in request/response scratch remain valid only until the callback or
-dispatcher returns. If an RPC message contains a `repeated` field, its element
-pointer and capacity are still application policy and must be set on the
-instance scratch object after init and before dispatch. Canonical scratch must
-be writable and large enough for the complete decoded request; re-encoding
-drops unknown fields and makes field order irrelevant to duplicate
-classification. Client start requires a Wirelink envelope with direct TX
-support. The shared encoder scratch is used synchronously on the runtime owner
-thread and no pointer into it escapes the generated call.
+Static instances share a server request/response workspace across services,
+separate from per-call results and async completion storage. Advanced server
+requests with unbounded/repeated fields retain caller-configured view backing;
+deferred handlers must copy data needed after return. Mapped services also use
+shared typed encode scratch for operation ID/status injection. Manual assembly
+supplies these typed objects and `runtime.rpc_encode_scratch`. The owner cannot
+recursively dispatch the same runtime.
 
-Response dispatch copies the original encoded bytes into the client's fixed
-response storage before releasing RX. That copy remains valid until client
-release; decode it again for a durable typed view rather than retaining
-borrowed pointers from response scratch. Server complete/reject copy the const
-response into shared encode scratch and set operation ID/status only on that
-private copy in mapped mode. Managed requests encode directly into the TX claim;
-managed responses encode directly into the reserved cache segment.
+Server complete/reject preserve const inputs. Mapped responses use private
+scratch for injected ID/status; managed responses encode directly into reserved
+stable response storage. Request snapshots and detached link TX reclamation
+remain independent of client result release.
 
-Server dispatch validates during decode, then feeds canonical encoded fields
+For replay methods, server dispatch validates during decode, then feeds canonical encoded fields
 directly into a domain-seeded fingerprint sink. The runtime owns the RPC domain;
 the codec uses the same field emitter as public encoding and does not hash raw
 input bytes. `NEW` invokes the
@@ -755,8 +778,9 @@ nonzero peer session. A transition discards the preceding session's pending
 and cached server work and asks the link to cancel any detached in-flight
 response. `result.detail.rpc.peer_changed` identifies that dispatch; call
 `<module>_runtime_peer_observation_take()` to obtain the transition and revoke
-product leases or other non-RPC authority. Unreliable requests have no peer
-session and do not trigger this point-to-point transition path.
+product leases or other non-RPC authority. Unreliable events have no link peer
+session and do not trigger this point-to-point transition path; managed metadata
+still carries the originating client session for call matching.
 Steady-state requests compare the already observed session inline and skip the
 observer/cancellation path entirely.
 
@@ -839,3 +863,17 @@ The hand-written parser keeps the grammar explicit. Generated codec C is
 emitted with a small self-contained runtime and depends only on
 `wirelink/codec.h` for status and borrowed byte/string types. Typed bindings
 remain separately linkable and use only Wirelink public headers.
+
+The [positional-v1 specification](../docs/positional-v1.md) describes presence, full-domain
+encodings, validation and matching peer identities. `wirelink_wlc_generate_codec(PROFILE ...)`
+selects ordinary route codecs; use the same profile with the runtime target.
+
+Explicit `correlate` uses independent execution generations without canonical
+duplicate/history handling. Private wire codecs are emitted only for managed
+messages and nested dependencies; public Schema-v1 values remain the replay
+canonical representation. See [codegen planning](docs/codegen.md) and the
+Wirelink 0.12 migration guide for codec selection and ownership.
+
+RPC ELF layout defaults ON and can be disabled when compiling generated runtimes.
+See [RPC layout configuration](docs/rpc-layout.md) for module/function overrides,
+linker integration and SDK rebuild requirements.

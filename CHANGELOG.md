@@ -1,5 +1,101 @@
 # Changelog
 
+## Unreleased
+
+- **Breaking API:** generated `*_endpoint_config_defaults()` and quick
+  `*_endpoint_init()` now require a `wl_link_defaults_t` argument. Generic
+  `wl_link_defaults()` selects CRC16; the shared USB integration preset
+  `wl_usb_bulk_link_defaults()` selects NONE. Explicit overrides and complete
+  configs remain authoritative. Regenerate current SDKs with matching WLC;
+  envelope/storage bounds, wire version and schema identities are unchanged.
+
+- **Breaking default:** generated ordinary endpoints using generic defaults use CRC16 (CCITT-FALSE).
+  Update both peers together or explicitly select CRC32C before initialization.
+  Maximum storage bounds, explicit CRC32C support, ABI and identities are unchanged.
+
+- Share RPC body/wire bounds across runtime defaults, server guarantee groups
+  and default endpoints. C array minimums, u16 limits and target ABI sizing stay
+  in the backend; generated artifacts and plan JSON remain unchanged.
+
+- Remove the Rust `RpcEndpointPlan::client_result_union` API. Plans expose pure
+  `validate_client_results` validation; the C runtime backend emits owned-result
+  unions from the same validated plan. Generated C and codegen contract stay unchanged.
+
+- Preserve underscores in RPC layout configuration prefixes so CMake OFF also
+  applies to keyword-escaped runtime names such as `switch_`. Validate the whole
+  expanded setting in both C and the preprocessor; reject expressions like `4/2`
+  and C enum constants while allowing macro aliases that expand to `0` or `1`.
+- Add optional `ISOLATE_LITERALS` grouping to bound literal colocation without
+  merging function inputs or retaining dead code.
+
+- Make WLC RPC ELF layout default ON with global/module OFF controls, independent
+  function input sections, module/function placement hooks and optional linker
+  grouping. Add native SDK build metadata; changing a prebuilt SDK's layout
+  requires rebuilding its archive/wheel. Preserve codegen 0.12, SDK binding API 2
+  and schema/binding/wire identities.
+- Supply Zephyr UART IRQ memory attributes from the platform build, removing
+  the generic adapter's ESP-IDF header and SoC dependency.
+
+- Emit runtime-local canonical Schema-v1 fingerprints for small scalar managed
+  replay requests from the shared field/key plan, keeping the ordinary encoder
+  output unchanged. Skip a duplicate pump readiness query; preserve checked
+  service/backpressure paths, complex-message hashing and contract 0.12.
+
+- Keep route/method codec selection local to its top-level message. Generate
+  separate tagged descriptors when a nested child also uses positional-v1,
+  preserving enclosing wire bytes, owned decoding, canonical fingerprints and
+  standalone runtime capacities regardless of message IDs or service order.
+
+- Remove private codec copies for non-RPC messages and the unused private
+  fingerprint/validated-measure path. Replay continues to hash canonical public
+  Schema-v1 values. Preserve contract 0.12 and regenerate checked-in artifacts.
+
+- Require matched core/codegen contract 0.12. Generate managed tagged and
+  positional-v1 directly from borrowed field plans and explicit symbol policy;
+  delete private model cloning and generated-source rewriting. Add strict
+  positional bitmap/scalar/packed readers, direct small scalar shapes, owned
+  transactional decode vectors, independent ordinary route profiles and
+  source/header identity guards. Record formats in provenance manifests.
+
+- Generate replay, correlate, and mixed RPC servers with different resource
+  groups. Retain replay by default and prune canonical helpers for correlate
+  methods in matched codec/profile generation. Keep stable response/TX storage
+  and generation-scoped deferred tokens for every execution. Move mapped peer
+  observation after successful business/metadata validation. Require contract
+  0.11 in P3; P4 adds positional execution under contract 0.12.
+
+- Share TLV traversal and primitive readers for owned decoding; write managed replies
+  into their final typed fields and encode scalar owned values without temporary views.
+  Keep RPC execution functions together on ELF targets, with a portable fallback.
+
+- Generate actual per-call typed result unions and checked caller-owned pools.
+  Decode managed replies directly once; mapped replies decode once into owned
+  scratch before correlation. Completion and retained access copy/borrow values.
+  Remove client raw response pools and repeat decoding APIs; require bounded
+  client responses and regenerate SDK provenance for contract 0.10.
+
+- Add explicit codec/RPC resource plans and the `plan` JSON command. Parse and
+  validate static `guarantee`/`codec` choices; keep implicit tagged/replay bytes
+  and identities unchanged. Reject execution generation for unimplemented
+  positional paths. Share checked bounds without cloning the schema,
+  and reject codec/runtime handler name collisions before emitting C.
+- Prune the generated shared codec and canonical fingerprint engine to the field
+  types used by the complete schema, including imports. Omit unused UTF-8,
+  nested-message, packed and scalar helpers at generation time. Preserve wire
+  bytes, canonical fingerprints, unknown-field validation and public layouts;
+  initialize the empty owned-to-view placeholder. Regenerate checked-in SDKs.
+
+- Generate direct codecs and canonical fingerprint paths for small scalar
+  messages, preserving public TLV bytes and codec semantics while avoiding
+  descriptor type/cardinality dispatch on their hot paths.
+- Replace unreleased managed RPC wire encoding with BE64 originating sessions
+  and varuint33 correlation/rejection metadata (9–13 bytes; rejection 13–17).
+  Encode scalar fixed32 RPC business fields as full-range tagged uint32 varints
+  in a runtime-private codec; retain public codecs, canonical fingerprints,
+  mapped RPC and Compact-v1. Preserve full operation/session IDs, replay,
+  deferred completion and stale-response isolation. Include private maximum
+  sizes and wire-format provenance; regenerate both peers without fallback.
+
 ## 0.8.0 — 2026-09-13
 
 - Add `wlc sdk` and the `generate_sdk` API for deterministic standalone C++20 /
