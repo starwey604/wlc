@@ -2,16 +2,15 @@
   "format": "wirelink-codegen-manifest-v1",
   "compiler": {
     "name": "wlc",
-    "version": "0.12.0",
-    "codegen_contract": {"major": 0, "minor": 12}
+    "version": "0.13.0",
+    "codegen_contract": {"major": 0, "minor": 13}
   },
   "module": "business",
   "identity": {
     "algorithm": "fnv1a64-v1",
     "schema": "0xcf57edfa09599916",
-    "binding_profile": "0x3d97817d6eb3a291"
+    "binding_profile": "0xf088a69907ec56c6"
   },
-  "managed_rpc_wire_format": "managed-rpc-v4-tagged-varuint32",
   "codec_formats": {
     "EVENT_CODEC_FORMAT": "schema-v1",
     "LEGACY_REQUEST_CODEC_FORMAT": "schema-v1",
@@ -20,8 +19,6 @@
     "QUERY_RESPONSE_CODEC_FORMAT": "schema-v1",
     "REQUEST_CODEC_FORMAT": "schema-v1",
     "RESPONSE_CODEC_FORMAT": "schema-v1",
-    "STATION_APPLY_RPC_BODY_FORMAT": "managed-rpc-v4-tagged-varuint32",
-    "STATION_QUERY_RPC_BODY_FORMAT": "managed-rpc-v4-tagged-varuint32",
     "TELEMETRY_CODEC_FORMAT": "schema-v1"
   },
   "bounded_fields": [
@@ -32,14 +29,13 @@
   ],
   "artifact_digest_algorithm": "fnv1a64-domain-bytes-v1",
   "artifacts": [
-    {"path": "business.c", "size": 82094, "digest": "0x77cc01acdd86c24f"},
+    {"path": "business.c", "size": 72320, "digest": "0x4a6c59600795dd8a"},
     {"path": "business.h", "size": 6205, "digest": "0x112d02a350ba8dbe"},
-    {"path": "business_bindings.c", "size": 18286, "digest": "0x544ca75a291d9500"},
-    {"path": "business_bindings.h", "size": 5546, "digest": "0x200171b4829e995b"},
-    {"path": "business_values.h", "size": 6612, "digest": "0x7eeb8ee1a26cf1a1"},
-    {"path": "station_advanced.h", "size": 13545, "digest": "0x47a56f5e7c7cb771"},
-    {"path": "station_endpoint.h", "size": 398, "digest": "0xbaffac443d555187"},
-    {"path": "station_runtime.c", "size": 185174, "digest": "0x1cd6115903988040"},
-    {"path": "station_runtime.h", "size": 57333, "digest": "0x7811a150b9b1f76d"}
+    {"path": "business_kernel.c", "size": 7781, "digest": "0xbdf6068c6ea40f70"},
+    {"path": "business_kernel.h", "size": 2174, "digest": "0x020bb597cb6a6ce6"},
+    {"path": "business_kernel_codecs.h", "size": 53182, "digest": "0x7cba205d936a6d9e"},
+    {"path": "business_kernel_deployment.json", "size": 863, "digest": "0xe62340ff31dc1a05"},
+    {"path": "business_kernel_manifest.json", "size": 1858, "digest": "0xbab84552977038fb"},
+    {"path": "business_values.h", "size": 6612, "digest": "0x7eeb8ee1a26cf1a1"}
   ]
 }

@@ -1,9 +1,8 @@
 use proptest::prelude::*;
 use wlc::{
-    ManifestArtifact, analyze_binding_profile, analyze_schema,
+    analyze_schema,
     ast::{Cardinality, Declaration, Literal},
-    binding_profile_identity, check_compatibility, generate_c, generate_codegen_manifest,
-    generate_runtime_c, parse_binding_profile, parse_schema, schema_identity,
+    check_compatibility, generate_c, parse_schema, schema_identity,
 };
 
 const ATTRIBUTES: &str = r#"
@@ -104,53 +103,11 @@ fn attributes_and_legacy_syntax_have_identical_generated_artifacts_and_identitie
     check_compatibility(&legacy, &next_attributes).unwrap();
     check_compatibility(&attributes, &next_legacy).unwrap();
 
-    let profile =
-        parse_binding_profile("profile version 1; latest Telemetry { delivery = unreliable; }")
-            .unwrap();
-    let mut outputs = Vec::new();
-    for schema in [&legacy, &attributes] {
-        let profile = analyze_binding_profile(&profile, schema).unwrap();
-        let identity = binding_profile_identity(&profile);
-        let codec = generate_c(schema, "id_syntax").unwrap();
-        let runtime = generate_runtime_c(schema, &profile, "id_syntax").unwrap();
-        let manifest = generate_codegen_manifest(
-            "id_syntax",
-            schema,
-            Some(identity),
-            &[
-                ManifestArtifact {
-                    path: "id_syntax.h",
-                    contents: codec.header.as_bytes(),
-                },
-                ManifestArtifact {
-                    path: "id_syntax_values.h",
-                    contents: codec.values_header.as_bytes(),
-                },
-                ManifestArtifact {
-                    path: "id_syntax.c",
-                    contents: codec.source.as_bytes(),
-                },
-                ManifestArtifact {
-                    path: "id_syntax_bindings.h",
-                    contents: codec.bindings_header.as_bytes(),
-                },
-                ManifestArtifact {
-                    path: "id_syntax_bindings.c",
-                    contents: codec.bindings_source.as_bytes(),
-                },
-                ManifestArtifact {
-                    path: "id_syntax_runtime.h",
-                    contents: runtime.header.as_bytes(),
-                },
-                ManifestArtifact {
-                    path: "id_syntax_runtime.c",
-                    contents: runtime.source.as_bytes(),
-                },
-            ],
-        );
-        outputs.push((identity, codec, runtime, manifest));
-    }
-    assert_eq!(outputs[0], outputs[1]);
+    assert_eq!(
+        generate_c(&legacy, "id_syntax").unwrap(),
+        generate_c(&attributes, "id_syntax").unwrap()
+    );
+    assert_eq!(schema_identity(&legacy), schema_identity(&attributes));
 }
 
 #[test]

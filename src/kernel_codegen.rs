@@ -2,7 +2,7 @@
 //! Static routing over the compact C kernel; no old runtime code generation.
 use crate::{
     KernelProfile, SemanticModel,
-    codec_plan::{CodecPlan, CodecProfile},
+    codec_plan::CodecPlan,
     codegen::{CModel, type_name, upper_snake},
     endpoint_layout::EndpointEnvelope,
     kernel_profile::KernelError,
@@ -69,7 +69,7 @@ pub fn generate_kernel_c(
         }
     }
     for route in p.send_routes.iter().chain(&p.direct_routes) {
-        let plan = CodecPlan::selected(schema, CodecProfile::SchemaV1, [route.message_id])
+        let plan = CodecPlan::selected(schema, route.codec, [route.message_id])
             .map_err(|e| KernelError(e.to_string()))?;
         let body = bounded(plan.messages[&route.message_id].max_encoded_size)?;
         capacities.insert(route.message_id, (body, body + 4, route.codec.name()));
@@ -99,7 +99,7 @@ pub fn generate_kernel_c(
         _ => packet_max,
     };
     let public =
-        crate::codegen::generate_c_with_fingerprints(schema, m, Some(&BTreeSet::new()), None)
+        crate::codegen::generate_c_with_fingerprints(schema, m, Some(&BTreeSet::new()), Some(p))
             .map_err(|e| KernelError(e.to_string()))?;
     let mut header = format!(
         "/* SPDX-License-Identifier: Apache-2.0 */\n#ifndef {upper}_KERNEL_H\n#define {upper}_KERNEL_H\n#include \"{m}.h\"\n#include \"wirelink/kernel.h\"\n#if WL_KERNEL_CONTRACT != 1\n#error \"static kernel contract mismatch\"\n#endif\n#ifdef __cplusplus\nextern \"C\" {{\n#endif\n#define {upper}_KERNEL_PROFILE_VERSION 2U\n#define {upper}_KERNEL_PACKET_FRAME_MAX {packet_max}U\n#define {upper}_KERNEL_WIRE_FRAME_MAX {wire_max}U\n#define {upper}_KERNEL_REQUEST_FRAME_MAX {req_max}U\n#define {upper}_KERNEL_REPLY_FRAME_MAX {resp_max}U\n#define {upper}_KERNEL_MESSAGE_FRAME_MAX {msg_max}U\n"
@@ -198,7 +198,7 @@ pub fn generate_kernel_c(
     let mut files = BTreeMap::from([
         (format!("{m}.h"), public.header),
         (format!("{m}_values.h"), public.values_header),
-        (format!("{m}.c"), public.source),
+        (format!("{m}.c"), format!("{}\n", public.source.trim_end())),
         (format!("{m}_kernel.h"), header),
         (format!("{m}_kernel.c"), source),
         (format!("{m}_kernel_codecs.h"), private),

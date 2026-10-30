@@ -1,86 +1,55 @@
-# Static endpoint kernel prototype
+# Static endpoint kernel
 
-`compile-kernel` generates the isolated K1 endpoint for Wirelink's static kernel
-contract 1. It requires a matching core with `experimental/static_kernel/` and
-an explicitly migrated profile version 2. Existing `compile`, `compile-runtime`
-and SDK generation continue to accept version 1 during prototype evaluation.
-This is temporary isolation, not a permanent legacy/fast product switch.
+This is the default generated execution path in WLC 0.13.0. `compile-kernel`
+is an alias of `compile --profile`; there is no prototype/legacy engine switch.
 
 ```sh
-wlc compile-kernel usb.wl --profile usb.bind.wl --out-dir generated
+wlc compile device.wl --profile device.bind.wl --out-dir generated
 ```
 
 ```text
 profile version 2;
-endpoint { envelope = native_packet; rpc_role = both; }
-rpc Setpoint { request = SetpointRequest; response = SetpointResponse; }
+endpoint { envelope = native_packet; }
+rpc Read { request = ReadRequest; response = ReadResponse; }
 send Sample { delivery = unreliable; }
 direct Sample { delivery = unreliable; }
 ```
 
-Version 2 defaults RPC delivery to unreliable. Explicit reliable, guarantee
-(including replay/correlate), mapped field declarations, LATEST/FIFO and unknown
-deferred declarations fail. Version 1 keeps its old defaults and is rejected by
-this command. K3 supports explicit native_packet/NONE, cobs_stream/CRC16 and
-bus_length16/NONE deployments, with both RPC roles. Other deployments fail
-explicitly. Stream deployments emit `<module>_kernel_transport.h/.c` with direct
-calls to the selected framing connector; compile these with the matching
-`wirelink_stream_cobs_crc16` or `wirelink_stream_length16_none` target.
-`<module>_kernel_transport_init` binds caller-supplied port, two RX units, a wire
-TX buffer and physical sink. `_transport_feed` retains an unconsumed input suffix
-on backpressure. Stop the byte producer and confirm physical drain before
-reinitialization. The packet kernel uses canonical ordinary DATA internally;
-the connector validates external framing/integrity before publishing RX and
-encodes selected external wire bytes on TX. The manifest distinguishes the
-external envelope/integrity from canonical packet storage capacities. There is
-no all-mode framing dispatcher in this path. Selected messages need finite codec bounds
-and must fit the native payload limit. RPC uses the existing managed tagged
-business codec and metadata; ordinary messages use the unchanged Schema-v1
-codec. There is no wire negotiation or automatic downgrade.
+The profile selects native_packet/NONE, cobs_stream/CRC16 or
+bus_length16/NONE. Both RPC roles remain enabled. Ordinary routes use public
+Schema-v1 or explicit positional-v1 codecs; managed tagged RPC keeps the prior
+metadata/body wire. Removed delivery/guarantee/mapped/policy declarations fail
+before output. Positional RPC requires explicit migration and is never downgraded.
 
-Output includes ordinary codec/value headers and source, a typed kernel
-header/source, a private inline RPC codec header, deployment JSON, and a
-provenance manifest. It emits no bindings to the old link, RPC server/client or
-pump. Codec generation shares the existing plans and emitters. The private
-header is an implementation artifact, not a new application API.
+`<module>_kernel.h/.c` connects typed routes to the one `wl_kernel_t` in the
+Wirelink C core. `_kernel_codecs.h` is generator-private; `_kernel_deployment.json`
+reports actual bounds/roles/storage, and `_kernel_manifest.json` records inputs
+and artifact digests. Stream deployments emit only their selected connector.
 
-The generated endpoint embeds a single call table through `wl_kernel_t`, four
-request frame buffers, four reply buffers, one ordinary frame buffer, typed
-handler pointers and one reply value union. Bounds come from each selected
-codec, including managed metadata and the native prefix. RX buffers and the
-packet port are supplied separately. Deployment JSON reports capacities and
-all selected message IDs/codecs. The contract guard requires kernel contract 1;
-profile version 2 is recorded independently of the business schema identity.
+The application owns the port, two RX units, generated endpoint and clock source.
+Initialize `wl_packet_port_t` from C with a nonzero fresh instance identity and
+real sink/notify callbacks, then call `<module>_kernel_init`. The owner calls
+`wl_kernel_step(core, now, budget)`, queries `wl_kernel_ready` and merges that
+with physical I/O readiness using a latched event. There is no hidden clock.
 
-`<module>_kernel_<method>_start` snapshots a pointer-free request before return.
-Its typed callback receives `wl_kernel_result_t` and a borrowed response view,
-valid until callback return. Submission never invokes the callback inline.
-Business rejection, local failure, timeout, cancel and close remain distinct.
-Callback function pointers are erased by a C11 function-pointer conversion and
-converted back to their original type before invocation; they are not stored
-as object pointers or invoked through an incompatible signature.
+There are four call slots, four reply slots and one ordinary TX snapshot. A
+successful typed `_start` encodes the request before return. A failure creates
+no call or later callback. Pass `now` and a relative timeout in 1..INT32_MAX;
+time waiting for physical submission is included. Physical TX leases remain
+separate from logical call completion and require consumed/drained acknowledgments.
 
-Handlers receive a borrowed request and writable owned response, returning zero
-or a nonzero business rejection status. No reply token or late completion API
-is exposed to application handlers. Reply storage is reserved before invoking
-the handler; BUSY retains the encoded reply and never repeats side effects.
-Encoding failure releases the reservation and is returned by step and through
-the optional diagnostic callback. It does not produce a success response.
+Callbacks run on the owner and borrow response views until return. Copy with
+`<response>_value_from_view` when retaining them. Cancel is local; timeout/cancel
+cannot undo remote execution. Each admitted call has one terminal outcome;
+its generation handle then becomes invalid. Callbacks may submit/cancel, but
+must not recurse into step/close. Close, stop/join real I/O, and step until
+`wl_kernel_quiescent` before freeing or reinitializing storage.
 
-All endpoint operations run on one owner. The owner passes a monotonic u32 tick
-snapshot to step/start; timeouts must be 1..INT32_MAX ticks. Callbacks may submit
-or cancel other calls; recursive step/close fails. The outer runtime supplies
-latched notifications, waiting and an adapter stop acknowledgement. Core close
-terminates waiting calls locally, then physical I/O must drain before storage
-or instance identity can be reused. Reinitialization requires a new unique
-nonzero instance, an idle owner and stopped I/O.
+Handlers are synchronous short business functions and fill an owned response.
+They return int32 status (zero success, nonzero business rejection). There are
+no deferred reply tokens, replay cache, ARQ or service scheduler. Applications
+handle idempotency/retry and use job IDs/status messages for long operations.
 
-This command does not yet supply product USB adapters, a host executor, SDKs or
-COBS connectors. Software fixtures do not establish K1 hardware integration or
-K2 performance acceptance.
-
-Ordinary messages also have `<module>_kernel_send_<message>_view` entry points.
-They borrow input only during the call and encode directly into the same final
-TX buffer before returning success. This avoids constructing a large owned
-bytes value in an adapter. It is a codec input form, not another execution
-engine; BUSY and physical lease handling are identical to owned-value sends.
+See the [full API](../../docs/static-endpoint-kernel-api.md),
+[plan](../../docs/static-endpoint-kernel-refactor-plan-20261030-cn.md), and
+[migration record](../../docs/static-endpoint-kernel-k5-migration-20261031-cn.md).

@@ -152,7 +152,7 @@ pub(super) fn validate_names(
 pub(crate) fn type_name(name: &str) -> String {
     c_identifier(name)
 }
-pub(crate) fn c_identifier(name: &str) -> String {
+pub fn c_identifier(name: &str) -> String {
     let mut output: String = name
         .to_snake_case()
         .chars()

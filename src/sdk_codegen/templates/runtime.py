@@ -16,17 +16,11 @@ class WirelinkError(Exception):
     def __init__(self, error: _native.Error) -> None:
         self.kind = error.kind
         self.status = error.status
-        self.rejection = error.rejection
-        self.local_error = error.local_error
-        self.transport_error = error.transport_error
-        self.runtime_error = error.runtime_error
-        self.codec_error = error.codec_error
+        self.outcome = error.outcome
         self.os_error = error.os_error
         self.os_message = error.os_message
         super().__init__(
-            f"{self.kind}: status={self.status}, rejection={self.rejection}, "
-            f"local={self.local_error}, transport={self.transport_error}, "
-            f"runtime={self.runtime_error}, codec={self.codec_error}, os={self.os_error}"
+            f"{self.kind}: outcome={self.outcome}, status={self.status}, os={self.os_error}"
         )
 
 
@@ -39,11 +33,11 @@ class RpcTimeoutError(WirelinkError, TimeoutError):
 
 
 class CancelledError(WirelinkError):
-    """An admitted call was cancelled by connection shutdown."""
+    """An admitted call was cancelled locally."""
 
 
 class RejectedError(WirelinkError):
-    """The service rejected the request; rejection contains its business code."""
+    """The service rejected the request; status contains its business code."""
 
 
 class QueueFullError(WirelinkError):
@@ -51,7 +45,7 @@ class QueueFullError(WirelinkError):
 
 
 class TransportError(WirelinkError):
-    """A local transport operation or link transaction failed."""
+    """A local transport operation or packet I/O operation failed."""
 
 
 class CodecError(WirelinkError):

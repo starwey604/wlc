@@ -1,7 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-#include "demo_runtime.c"
-#include "test_environment.h"
-#include "wirelink/loopback.h"
+#include "demo_kernel_codecs.h"
+#include <string.h>
 #include <assert.h>
 #include <limits.h>
 
@@ -95,49 +94,15 @@ static void bitmap_and_errors(void) {
   empty_t empty={0}; assert(empty_encode(&empty,NULL,0,&size)==WL_CODEC_OK && size==0);
   assert(empty_decode(NULL,0,&empty)==WL_CODEC_OK && empty_decode(out,1,&empty)==WL_CODEC_ERR_MALFORMED);
   request_t request={.has_a=true,.has_b=true,.a=1,.b=UINT32_MAX}, decoded;
-  assert(demo_rpc_request_encode(&request,out,sizeof(out),&size)==WL_CODEC_OK);
-  assert(demo_rpc_request_decode(out,size,&decoded)==WL_CODEC_OK && decoded.a==1 && decoded.b==UINT32_MAX && !decoded.has_c && decoded.c==19);
-#if POSITIONAL_RPC
+  assert(request_encode(&request,out,sizeof(out),&size)==WL_CODEC_OK);
+  assert(request_decode(out,size,&decoded)==WL_CODEC_OK && decoded.a==1 && decoded.b==UINT32_MAX && !decoded.has_c && decoded.c==19);
+#if 1
   const uint8_t vector[]={0,1,0xFF,0xFF,0xFF,0xFF,15};
   assert(size==sizeof(vector) && memcmp(out,vector,size)==0);
   const uint8_t noncanonical[]={0,0x80,0,1}, overflow[]={0,0xFF,0xFF,0xFF,0xFF,0x1F,1};
-  assert(demo_rpc_request_decode(noncanonical,sizeof(noncanonical),&decoded)==WL_CODEC_ERR_MALFORMED);
-  assert(demo_rpc_request_decode(overflow,sizeof(overflow),&decoded)==WL_CODEC_ERR_OVERFLOW);
+  assert(request_decode(noncanonical,sizeof(noncanonical),&decoded)==WL_CODEC_ERR_MALFORMED);
+  assert(request_decode(overflow,sizeof(overflow),&decoded)==WL_CODEC_ERR_OVERFLOW);
 #endif
-  request.has_b=false; assert(demo_rpc_request_encode(&request,out,sizeof(out),&size)==WL_CODEC_ERR_MISSING_REQUIRED_FIELD);
+  request.has_b=false; assert(request_encode(&request,out,sizeof(out),&size)==WL_CODEC_ERR_MISSING_REQUIRED_FIELD);
 }
-static demo_endpoint_t client, server;
-static wl_loopback_t cable;
-static unsigned completed, executed;
-static wl_time_ms_t now;
-static wl_time_ms_t read_clock(void *unused) {(void)unused;return now;}
-static int32_t execute(void *unused,const request_value_t *req,response_value_t *res) {
-  (void)unused;++executed;assert(req->a==UINT32_MAX && req->b==1 && !req->has_c && req->c==19);
-  res->has_result=true;res->result=req->a;return 0;
-}
-static void done(void *unused,const wl_rpc_completion_t *result,const response_value_t *value) {
-  (void)unused;assert(result->status==WL_RPC_SUCCESS && value && value->has_result && value->result==UINT32_MAX);++completed;
-}
-static void endpoints(void) {
-  demo_endpoint_config_t config;
-  assert(demo_endpoint_init(&client,test_environment_id(1,(wl_clock_t){read_clock,NULL}), wl_link_defaults())==WL_OK);
-  assert(demo_endpoint_config_defaults(&config,test_environment_id(2,(wl_clock_t){read_clock,NULL}), wl_link_defaults())==WL_OK);
-  config.on_execute=execute;
-  assert(demo_endpoint_init_config(&server,&config)==WL_OK);
-  assert(wl_loopback_connect(&cable,demo_endpoint_handle(&client),demo_endpoint_handle(&server))==WL_OK);
-  request_value_t value;request_value_clear(&value);value.has_a=value.has_b=true;value.a=UINT32_MAX;value.b=1;
-  for (unsigned call=0;call<12;++call) {
-    assert(demo_endpoint_execute_async(&client,&value,100,done,NULL,NULL)==WL_OK);
-    for (unsigned step=0;step<100 && completed!=call+1;++step) {assert(demo_endpoint_step(&client)==WL_OK);assert(demo_endpoint_step(&server)==WL_OK);++now;}
-    assert(completed==call+1 && executed==call+1);
-    for (unsigned step=0;step<5;++step) {assert(demo_endpoint_step(&client)==WL_OK);assert(demo_endpoint_step(&server)==WL_OK);++now;}
-  }
-  sample_t sample={.has_samples=true,.samples={1.0f,-0.0f},.has_sequence=true,.sequence=UINT32_MAX};
-  assert(demo_sample_send(wl_endpoint_link(demo_endpoint_handle(&client)),&sample,WL_DELIVERY_UNRELIABLE,now).domain==DEMO_SEND_OK);
-  for(unsigned i=0;i<5;++i){assert(demo_endpoint_step(&client)==WL_OK);assert(demo_endpoint_step(&server)==WL_OK);++now;}
-  demo_sample_latest_view_t received; assert(demo_sample_latest_acquire(demo_endpoint_runtime(&server),&received)==WL_OK);
-  assert(received.value->sequence==UINT32_MAX && memcmp(received.value->samples,sample.samples,sizeof(sample.samples))==0);
-  assert(demo_sample_latest_release(demo_endpoint_runtime(&server),&received)==WL_OK);
-  assert(demo_endpoint_close(&client)==WL_OK && demo_endpoint_close(&server)==WL_OK);
-}
-int main(void) {scalar_vectors();small_floats();primitive_errors();bitmap_and_errors();endpoints();return 0;}
+int main(void) { scalar_vectors(); small_floats(); primitive_errors(); bitmap_and_errors(); return 0; }

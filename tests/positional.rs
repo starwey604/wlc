@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 use std::{fs, path::PathBuf, process::Command};
 use wlc::{
-    analyze_binding_profile, analyze_schema, generate_c_for_profile, generate_runtime_c,
-    parse_binding_profile, parse_schema,
+    analyze_binding_profile, analyze_schema, generate_c_for_profile, parse_binding_profile,
+    parse_schema,
 };
-
 const SCHEMA: &str = "version 1;
 enum Mode @id(20) { ZERO = 0; ONE = 1; }
 message Request @id(1) { required fixed32 a @id(1); required fixed32 b @id(2); optional fixed32 c @id(3) [default=19]; }
@@ -26,148 +25,74 @@ message RpcFloatReply @id(12) {}
 message Sample @id(6) { required packed float32 samples[2] @id(1); required fixed32 sequence @id(2); }";
 
 #[test]
-fn positional_vectors_and_rpc_guarantees_compile_and_run_without_fallback() {
+fn positional_public_vectors_preserve_the_full_legal_value_domain() {
+    let schema = analyze_schema(&parse_schema(SCHEMA).unwrap()).unwrap();
+    let mut text = String::from("profile version 2; endpoint { envelope=native_packet; }");
+    for name in [
+        "Request", "Values", "Bits", "Empty", "Small", "Narrow", "Wide", "OpenEnum", "Sample",
+    ] {
+        text.push_str(&format!(
+            "send {name} {{ delivery=unreliable; codec=positional_v1; }}"
+        ));
+    }
+    text.push_str("rpc FloatProbe { request=RpcFloat; response=RpcFloatReply; }");
+    let profile = analyze_binding_profile(&parse_binding_profile(&text).unwrap(), &schema).unwrap();
+    let kernel = wlc::KernelProfile::from_bindings(profile.clone()).unwrap();
+    let c = wlc::generate_kernel_c(&schema, &kernel, "demo").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    for (name, contents) in c.files {
+        fs::write(dir.path().join(name), contents).unwrap();
+    }
+    fs::write(
+        dir.path().join("test.c"),
+        include_str!("fixtures/positional.c"),
+    )
+    .unwrap();
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .to_owned();
-    for guarantee in ["replay", "correlate"] {
-        for codec in ["managed_tagged", "positional_v1"] {
-            for reliable in [false, true] {
-                let delivery = if reliable { "reliable" } else { "unreliable" };
-                let schema = analyze_schema(&parse_schema(SCHEMA).unwrap()).unwrap();
-                let profile = analyze_binding_profile(&parse_binding_profile(&format!("profile version 1;
-      rpc Execute {{request=Request;response=Response;guarantee={guarantee};codec={codec};request_delivery={delivery};response_delivery={delivery};}}
-      rpc FloatProbe {{request=RpcFloat;response=RpcFloatReply;guarantee={guarantee};codec={codec};request_delivery={delivery};response_delivery={delivery};}}
-      send Small {{delivery=unreliable;codec=positional_v1;}} send Narrow {{delivery=unreliable;codec=positional_v1;}} send Wide {{delivery=unreliable;codec=positional_v1;}} send OpenEnum {{delivery=unreliable;codec=positional_v1;}}
-      send Values {{delivery=unreliable;codec=positional_v1;}} send Bits {{delivery=unreliable;codec=positional_v1;}} send Empty {{delivery=unreliable;codec=positional_v1;}}
-      send Sample {{delivery=unreliable;codec=positional_v1;}} latest Sample {{delivery=unreliable;codec=positional_v1;}}"
-    )).unwrap(), &schema).unwrap();
-                let c = generate_c_for_profile(&schema, &profile, "demo").unwrap();
-                assert_eq!(
-                    c,
-                    generate_c_for_profile(&schema, &profile, "demo").unwrap()
-                );
-                let rt = generate_runtime_c(&schema, &profile, "demo").unwrap();
-                assert!(!rt.source.contains("demo_rpc_values_value_encode"));
-                assert!(rt.header.contains(if codec == "positional_v1" {
-                    "managed-rpc-v4-positional-v1"
-                } else {
-                    "managed-rpc-v4-tagged-varuint32"
-                }));
-                let dir = tempfile::tempdir().unwrap();
-                for (file, data) in [
-                    ("demo.h", c.header),
-                    ("demo_values.h", c.values_header),
-                    ("demo.c", c.source),
-                    ("demo_bindings.h", c.bindings_header),
-                    ("demo_bindings.c", c.bindings_source),
-                    ("demo_runtime.h", rt.header),
-                    ("demo_advanced.h", rt.advanced_header),
-                    ("demo_runtime.c", rt.source),
-                    ("test.c", include_str!("fixtures/positional.c").into()),
-                ] {
-                    fs::write(dir.path().join(file), data).unwrap();
-                }
-                let binary = dir.path().join("test");
-                let mut cc = Command::new("cc");
-                cc.args([
-                    "-std=c11",
-                    "-O2",
-                    "-fstrict-aliasing",
-                    "-Wall",
-                    "-Wextra",
-                    "-Wpedantic",
-                    "-Werror",
-                ]);
-                cc.arg(format!(
-                    "-DPOSITIONAL_RPC={}",
-                    u8::from(codec == "positional_v1")
-                ));
-                cc.arg(format!("-DREPLAY={}", u8::from(guarantee == "replay")));
-                cc.arg("-I").arg(dir.path());
-                for path in [
-                    "include",
-                    "tests/support",
-                    "runtime/storage/include",
-                    "adapters/loopback/include",
-                ] {
-                    cc.arg("-I").arg(root.join(path));
-                }
-                for path in fs::read_dir(root.join("src"))
-                    .unwrap()
-                    .map(|e| e.unwrap().path())
-                    .filter(|p| p.extension().is_some_and(|e| e == "c"))
-                {
-                    cc.arg(path);
-                }
-                for path in [
-                    "runtime/storage/src/fixed_pool.c",
-                    "adapters/loopback/src/loopback.c",
-                ] {
-                    cc.arg(root.join(path));
-                }
-                for path in ["demo.c", "demo_bindings.c", "test.c"] {
-                    cc.arg(dir.path().join(path));
-                }
-                if std::env::var_os("WLC_TEST_X87").is_some() {
-                    cc.args(["-mfpmath=387", "-mno-sse"]);
-                }
-                if std::env::var_os("WLC_TEST_SANITIZE").is_some() {
-                    cc.args([
-                        "-fsanitize=address,undefined",
-                        "-fno-omit-frame-pointer",
-                        "-g",
-                    ]);
-                }
-                let out = cc.arg("-o").arg(&binary).output().unwrap();
-                assert!(
-                    out.status.success(),
-                    "{guarantee}/{codec}/{delivery}: {}",
-                    String::from_utf8_lossy(&out.stderr)
-                );
-                let out = Command::new(&binary).output().unwrap();
-                assert!(
-                    out.status.success(),
-                    "{guarantee}/{codec}/{delivery}: {}",
-                    String::from_utf8_lossy(&out.stderr)
-                );
-                // An unprofiled Schema-v1 codec must fail when paired with positional routes.
-                let old = wlc::generate_c(&schema, "demo").unwrap();
-                fs::write(dir.path().join("demo.c"), &old.source).unwrap();
-                let mismatch = Command::new("cc")
-                    .args(["-std=c11", "-fsyntax-only", "-I"])
-                    .arg(dir.path())
-                    .arg("-I")
-                    .arg(root.join("include"))
-                    .arg(dir.path().join("demo.c"))
-                    .output()
-                    .unwrap();
-                assert!(!mismatch.status.success());
-                assert!(
-                    String::from_utf8_lossy(&mismatch.stderr)
-                        .contains("Codec source/header profile mismatch")
-                );
-                fs::write(dir.path().join("demo_values.h"), old.values_header).unwrap();
-                let out = Command::new("cc")
-                    .args(["-std=c11", "-fsyntax-only", "-I"])
-                    .arg(dir.path())
-                    .arg("-I")
-                    .arg(root.join("include"))
-                    .arg("-I")
-                    .arg(root.join("runtime/storage/include"))
-                    .arg("-I")
-                    .arg(root.join("tests/support"))
-                    .arg("-I")
-                    .arg(root.join("adapters/loopback/include"))
-                    .arg(dir.path().join("test.c"))
-                    .output()
-                    .unwrap();
-                assert!(!out.status.success());
-                assert!(
-                    String::from_utf8_lossy(&out.stderr).contains("Route codec/profile mismatch")
-                );
-            }
-        }
+    let mut cc = Command::new(std::env::var("CC").unwrap_or("cc".into()));
+    cc.args(["-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Werror"]);
+    if std::env::var_os("WLC_TEST_SANITIZE").is_some() {
+        cc.args(["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]);
     }
+    let out = cc
+        .arg("-I")
+        .arg(root.join("include"))
+        .arg("-I")
+        .arg(dir.path())
+        .arg(dir.path().join("demo.c"))
+        .arg(dir.path().join("test.c"))
+        .arg("-o")
+        .arg(dir.path().join("test"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        Command::new(dir.path().join("test"))
+            .status()
+            .unwrap()
+            .success()
+    );
+    let old = wlc::generate_c(&schema, "demo").unwrap();
+    fs::write(dir.path().join("demo.c"), old.source).unwrap();
+    let out = Command::new("cc")
+        .args(["-std=c11", "-fsyntax-only", "-I"])
+        .arg(root.join("include"))
+        .arg("-I")
+        .arg(dir.path())
+        .arg(dir.path().join("demo.c"))
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("Codec source/header profile mismatch"));
+    assert_eq!(
+        generate_c_for_profile(&schema, &profile, "demo").unwrap(),
+        generate_c_for_profile(&schema, &profile, "demo").unwrap()
+    );
 }

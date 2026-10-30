@@ -41,7 +41,7 @@ Use a different SDK name for each independently distributed schema package.
 
 ## SDK maintainers
 
-Build/install the matching Wirelink 0.12.0 checkout with
+Build/install the matching Wirelink 0.13.0 checkout with
 `WIRELINK_BUILD_CPP_BINDINGS=ON`, `WIRELINK_BUILD_PLATFORM=ON`,
 `WIRELINK_BUILD_EXAMPLES=OFF`, `BUILD_SHARED_LIBS=OFF` and
 `CMAKE_POSITION_INDEPENDENT_CODE=ON`. Provide standalone Asio headers through
@@ -92,7 +92,12 @@ Check admission, then use `operation.done()`, `wait()`, `wait_for(duration)`,
 `result()` waits and returns an owned copy, including after client destruction.
 Requests are copied before `_async` returns. Dropping an operation does not
 cancel it. A successful `cancel()` means the request was queued; completion may
-already have won the race. Sync/async calls share eight host admission slots.
+already have won the race. Sync/async calls share the kernel's four call slots. Admission encodes before
+return; an admission error creates no future callback. Close completes pending
+calls with ClosedError; explicit cancellation completes with CancelledError.
+Neither cancellation nor timeout rolls back remote execution. There is no
+automatic retry or replay suppression: applications own idempotency and retries.
+Long work should return a job ID and complete through ordinary application messages.
 The installed C++ package requires the matching native Wirelink development package.
 
 ## Values and compatibility
@@ -110,7 +115,7 @@ The installed C++ package requires the matching native Wirelink development pack
   and `self`/`timeout`/`session` gain a trailing underscore. Collisions, unsupported
   profiles and unbounded messages fail generation. Required Python fields precede
   optional fields in positional constructors; prefer keywords for evolving schemas.
-- Python failures retain status/rejection/local/transport/runtime/codec/OS details.
+- Python failures retain outcome/status/OS details.
   Parameter validation raises TypeError/ValueError; native RPC errors have distinct
   classes. Blocking native operations release the GIL.
 

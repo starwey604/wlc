@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Version-2 profile contract for the isolated static-kernel prototype.
+//! Version-2 profile contract for the default static endpoint kernel.
 use miette::Diagnostic;
 use thiserror::Error;
 
@@ -79,16 +79,17 @@ pub fn analyze_kernel_profile(
         }
     }
     normalized.version.value = 1;
-    let mut bindings = crate::analyze_binding_profile(&normalized, schema).map_err(|errors| {
-        KernelError(
-            errors
-                .errors()
-                .iter()
-                .map(|e| e.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; "),
-        )
-    })?;
+    let mut bindings = crate::profile_semantic::resolve_binding_profile(&normalized, schema)
+        .map_err(|errors| {
+            KernelError(
+                errors
+                    .errors()
+                    .iter()
+                    .map(|e| e.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            )
+        })?;
     bindings.version = 2;
     validate(&bindings)?;
     Ok(KernelProfile { bindings })
@@ -103,8 +104,8 @@ pub fn compose_kernel_profiles(profiles: &[KernelProfile]) -> Result<KernelProfi
             p
         })
         .collect::<Vec<_>>();
-    let mut bindings =
-        crate::compose_binding_profiles(&shared).map_err(|e| KernelError(e.to_string()))?;
+    let mut bindings = crate::profile_semantic::resolve_composition(&shared)
+        .map_err(|e| KernelError(e.to_string()))?;
     bindings.version = 2;
     validate(&bindings)?;
     Ok(KernelProfile { bindings })
@@ -121,18 +122,44 @@ fn validate(bindings: &BindingProfileModel) -> Result<(), KernelError> {
         ));
     }
     for route in bindings.send_routes.iter().chain(&bindings.direct_routes) {
-        if route.delivery != DeliveryPolicy::Unreliable || route.codec != CodecProfile::SchemaV1 {
+        if route.delivery != DeliveryPolicy::Unreliable
+            || !matches!(
+                route.codec,
+                CodecProfile::SchemaV1 | CodecProfile::PositionalV1
+            )
+        {
             return Err(KernelError(
-                "K1 ordinary messages require unreliable Schema-v1 codecs".into(),
+                "ordinary messages require unreliable delivery and a public codec".into(),
             ));
         }
     }
     for service in &bindings.rpc_services {
         if service.codec != CodecProfile::ManagedTagged {
             return Err(KernelError(
-                "K1 RPC preserves the managed tagged wire codec".into(),
+                "RPC requires managed_tagged; positional RPC is unsupported and must be explicitly migrated".into(),
             ));
         }
     }
     Ok(())
+}
+
+impl KernelProfile {
+    pub fn bindings(&self) -> &BindingProfileModel {
+        &self.bindings
+    }
+    pub fn from_bindings(bindings: BindingProfileModel) -> Result<Self, KernelError> {
+        if bindings.version != 2
+            || !bindings.retained_routes.is_empty()
+            || bindings.rpc_services.iter().any(|s| {
+                !s.is_managed()
+                    || s.guarantee != crate::profile_semantic::RpcGuarantee::Correlate
+                    || s.request_delivery != DeliveryPolicy::Unreliable
+                    || s.response_delivery != DeliveryPolicy::Unreliable
+            })
+        {
+            return Err(KernelError("requires the current profile v2 contract; removed execution declarations are unsupported".into()));
+        }
+        validate(&bindings)?;
+        Ok(Self { bindings })
+    }
 }

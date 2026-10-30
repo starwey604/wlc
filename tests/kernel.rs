@@ -9,7 +9,7 @@ const SCHEMA: &str = "version 1; message Request @id(2) { required int32 input @
 const PROFILE: &str = "profile version 2; endpoint { envelope = native_packet; } rpc Execute { request = Request; response = Response; } send Tick { delivery = unreliable; } direct Tick { delivery = unreliable; }";
 
 #[test]
-fn removed_contracts_are_errors_and_v1_defaults_are_unchanged() {
+fn removed_contracts_are_errors_on_every_public_frontend() {
     let schema = analyze_schema(&parse_schema(SCHEMA).unwrap()).unwrap();
     for (profile, diagnostic) in [
         (PROFILE.replace("version 2", "version 1"), "version 2"),
@@ -65,13 +65,9 @@ fn removed_contracts_are_errors_and_v1_defaults_are_unchanged() {
         .is_err()
     );
     let legacy = parse_binding_profile(&PROFILE.replace("version 2", "version 1")).unwrap();
-    let old = wlc::analyze_binding_profile(&legacy, &schema).unwrap();
-    assert_eq!(
-        old.rpc_services[0].request_delivery,
-        wlc::profile_semantic::DeliveryPolicy::Reliable
-    );
+    assert!(wlc::analyze_binding_profile(&legacy, &schema).is_err());
     assert!(
-        wlc::analyze_binding_profile(&parse_binding_profile(PROFILE).unwrap(), &schema).is_err()
+        wlc::analyze_binding_profile(&parse_binding_profile(PROFILE).unwrap(), &schema).is_ok()
     );
 }
 
@@ -122,7 +118,7 @@ fn kernel_cli_generates_versioned_artifacts_and_rejects_reliable() {
     let run = || {
         assert_cmd::Command::cargo_bin("wlc")
             .unwrap()
-            .arg("compile-kernel")
+            .arg("compile")
             .arg(&schema)
             .arg("--profile")
             .arg(&profile)
@@ -368,4 +364,85 @@ int main(void) {
         );
         assert!(Command::new(binary).status().unwrap().success());
     }
+}
+
+#[test]
+fn default_frontend_rejects_legacy_outputs_and_reports_current_plan() {
+    let dir = tempdir().unwrap();
+    let schema = dir.path().join("demo.wl");
+    let profile = dir.path().join("demo.bind.wl");
+    let output = dir.path().join("out");
+    fs::create_dir(&output).unwrap();
+    fs::write(&schema, SCHEMA).unwrap();
+    fs::write(&profile, PROFILE).unwrap();
+    fs::write(output.join("demo_runtime.c"), "preserve user bytes").unwrap();
+    let run = |command: &str| {
+        assert_cmd::Command::cargo_bin("wlc")
+            .unwrap()
+            .arg(command)
+            .arg(&schema)
+            .arg("--profile")
+            .arg(&profile)
+            .arg("--out-dir")
+            .arg(&output)
+            .output()
+            .unwrap()
+    };
+    let failed = run("compile");
+    assert!(!failed.status.success());
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("legacy execution artifacts"));
+    assert_eq!(
+        fs::read_to_string(output.join("demo_runtime.c")).unwrap(),
+        "preserve user bytes"
+    );
+    assert!(!output.join("demo_kernel.c").exists());
+    let failed = run("compile-runtime");
+    assert!(!failed.status.success());
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("compile-runtime was removed"));
+    let result = assert_cmd::Command::cargo_bin("wlc")
+        .unwrap()
+        .arg("plan")
+        .arg(&schema)
+        .arg("--profile")
+        .arg(&profile)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let text = String::from_utf8(result.stdout).unwrap();
+    assert!(text.contains("wirelink-binding-plan-v2") && text.contains("\"call_slots\": 4"));
+    assert!(!text.contains("replay_methods") && !text.contains("pending_response_methods"));
+}
+
+#[test]
+fn cli_and_build_tools_share_c_module_name_normalization() {
+    let dir = tempdir().unwrap();
+    let schema = dir.path().join("switch.wl");
+    fs::write(&schema, "version 1; message Empty @id(1) {}").unwrap();
+    let name = assert_cmd::Command::cargo_bin("wlc")
+        .unwrap()
+        .arg("module-name")
+        .arg(&schema)
+        .output()
+        .unwrap();
+    assert!(name.status.success());
+    assert_eq!(name.stdout, b"switch_\n");
+    let out = dir.path().join("out");
+    assert_cmd::Command::cargo_bin("wlc")
+        .unwrap()
+        .arg("compile")
+        .arg(&schema)
+        .arg("--out-dir")
+        .arg(&out)
+        .assert()
+        .success();
+    assert!(out.join("switch_.c").exists() && out.join("switch_.h").exists());
+    assert!(
+        fs::read_to_string(out.join("switch_.c"))
+            .unwrap()
+            .contains("#include \"switch_.h\"")
+    );
 }

@@ -113,7 +113,9 @@ pub(super) fn emit_source(
             continue;
         }
         if plan.profile != crate::codec_plan::CodecProfile::PositionalV1 {
-            source.push_str(&format!("static inline wl_codec_status_t {name}_wlc_detail_measure(const {ty}_t *value, size_t *size) {{ return {p}measure(&{name}_desc, value, size); }}\n"));
+            if codecs.messages[&message.id].max_encoded_size.is_some() {
+                source.push_str(&format!("static inline wl_codec_status_t {name}_wlc_detail_measure(const {ty}_t *value, size_t *size) {{ return {p}measure(&{name}_desc, value, size); }}\n"));
+            }
             source.push_str(&format!("{storage}void {name}_clear({ty}_t *value) {{ if (value != NULL) {p}clear(&{name}_desc, value); }}\n"));
             if let Some(specialized) = super::packed::source(plan, symbols) {
                 source.push_str(&specialized);

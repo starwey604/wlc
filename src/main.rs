@@ -15,7 +15,7 @@ struct Arguments {
 
 #[derive(clap::Subcommand)]
 enum Command {
-    /// Generate the isolated static endpoint kernel (profile version 2).
+    /// Generate the static endpoint kernel (alias of compile --profile) (profile version 2).
     CompileKernel {
         schema: PathBuf,
         #[arg(long, required = true)]
@@ -43,6 +43,8 @@ enum Command {
     },
     /// Print the generated-code contract version for build-tool compatibility checks.
     CodegenContract,
+    /// Print the canonical C filename/symbol prefix, including keyword escaping.
+    ModuleName { schema: PathBuf },
     /// Print canonical transitive schema inputs, one path per line.
     Dependencies { schema: PathBuf },
     /// Validate a schema and optionally check it against its predecessor.
@@ -55,7 +57,7 @@ enum Command {
         #[arg(long)]
         profile: Vec<PathBuf>,
     },
-    /// Generate C and a deterministic manifest; --profile also generates the application runtime.
+    /// Generate C and a deterministic manifest; --profile generates the static endpoint kernel.
     Compile {
         schema: PathBuf,
         /// Destination directory for generated artifacts.
@@ -64,7 +66,7 @@ enum Command {
         /// Check SCHEMA for compatibility with this predecessor.
         #[arg(long)]
         previous: Option<PathBuf>,
-        /// Resolve PROFILE and generate <module>_runtime.h/.c; repeat to compose bindings.
+        /// Resolve PROFILE and generate <module>_kernel.h/.c; repeat to compose bindings.
         #[arg(long)]
         profile: Vec<PathBuf>,
     },
@@ -108,18 +110,8 @@ enum Operation {
     },
     Validate,
     Compile(PathBuf),
-    CompileRuntime {
-        output: PathBuf,
-        runtime_name: Option<String>,
-    },
     Identity,
     Plan,
-}
-
-fn is_portable_c_identifier(value: &str) -> bool {
-    let mut characters = value.chars();
-    matches!(characters.next(), Some('_' | 'a'..='z' | 'A'..='Z'))
-        && characters.all(|character| character == '_' || character.is_ascii_alphanumeric())
 }
 
 fn main() -> Result<()> {
@@ -129,34 +121,7 @@ fn main() -> Result<()> {
             schema,
             profile,
             out_dir,
-        } => {
-            let loaded = wlc::load_schema(&schema)?;
-            let model = wlc::analyze_schema(&loaded.schema).map_err(miette::Report::new)?;
-            let mut fragments = Vec::new();
-            for path in &profile {
-                let source = fs::read_to_string(path).into_diagnostic()?;
-                let parsed = wlc::parse_binding_profile(&source).map_err(miette::Report::new)?;
-                fragments.push(
-                    wlc::analyze_kernel_profile(&parsed, &model).map_err(miette::Report::new)?,
-                );
-            }
-            let profile = wlc::compose_kernel_profiles(&fragments).map_err(miette::Report::new)?;
-            let module = schema
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("schema");
-            let generated =
-                wlc::generate_kernel_c(&model, &profile, module).map_err(miette::Report::new)?;
-            fs::create_dir_all(&out_dir).into_diagnostic()?;
-            for (name, content) in generated.files {
-                fs::write(out_dir.join(name), content).into_diagnostic()?;
-            }
-            println!(
-                "generated static kernel contract 1, profile version 2 in {}",
-                out_dir.display()
-            );
-            return Ok(());
-        }
+        } => (schema, None, profile, Operation::Compile(out_dir)),
         Command::Sdk {
             schema,
             profile,
@@ -182,6 +147,17 @@ fn main() -> Result<()> {
             }
             return Ok(());
         }
+        Command::ModuleName { schema } => {
+            let stem = schema.file_stem().and_then(|v| v.to_str()).unwrap_or("");
+            let module = wlc::codegen::c_module_name(stem);
+            if module.is_empty() {
+                return Err(miette::miette!(
+                    "schema filename has no C identifier characters"
+                ));
+            }
+            println!("{module}");
+            return Ok(());
+        }
         Command::CodegenContract => {
             println!(
                 "{}.{}",
@@ -201,21 +177,11 @@ fn main() -> Result<()> {
             previous,
             profile,
         } => (schema, previous, profile, Operation::Compile(out_dir)),
-        Command::CompileRuntime {
-            schema,
-            profile,
-            out_dir,
-            runtime_name,
-            previous,
-        } => (
-            schema,
-            previous,
-            profile,
-            Operation::CompileRuntime {
-                output: out_dir,
-                runtime_name,
-            },
-        ),
+        Command::CompileRuntime { .. } => {
+            return Err(miette::miette!(
+                "compile-runtime was removed; migrate profile to version 2 and use compile --profile"
+            ));
+        }
         Command::Identity { schema, profile } => (schema, None, profile, Operation::Identity),
         Command::Plan { schema, profile } => (schema, None, profile, Operation::Plan),
     };
@@ -299,6 +265,21 @@ fn main() -> Result<()> {
             .map_err(miette::Report::new)?;
             // Preflight every path before touching an existing project. Invalid
             // schemas/options and accidental edits never cause partial generation.
+            if output.join("generated").exists() {
+                let entries = fs::read_dir(output.join("generated")).into_diagnostic()?;
+                for entry in entries {
+                    let path = entry.into_diagnostic()?.path();
+                    let name = path.file_name().and_then(|v| v.to_str()).unwrap_or("");
+                    if name.ends_with("_runtime.c")
+                        || name.ends_with("_endpoint.h")
+                        || name.ends_with("_bindings.c")
+                    {
+                        return Err(miette::miette!(
+                            "legacy SDK execution artifacts: generate into a fresh directory and explicitly migrate application files"
+                        ));
+                    }
+                }
+            }
             let marker = output.join("wlc-sdk-name.txt");
             if marker.exists()
                 && fs::read_to_string(&marker).into_diagnostic()?
@@ -335,138 +316,61 @@ fn main() -> Result<()> {
         Operation::Compile(output) => {
             let stem = schema_path
                 .file_stem()
-                .and_then(|value| value.to_str())
+                .and_then(|v| v.to_str())
                 .unwrap_or("wirelink_generated");
-            let generated = match &profile_model {
-                Some(profile) => wlc::generate_c_for_profile(&model, profile, stem),
-                None => wlc::generate_c(&model, stem),
-            }
-            .map_err(miette::Report::new)?;
-            let generated_runtime = profile_model
-                .as_ref()
-                .map(|profile| wlc::generate_runtime_c(&model, profile, stem))
-                .transpose()
-                .map_err(miette::Report::new)?;
-            let has_runtime = generated_runtime.is_some();
-            let mut artifacts = vec![
-                (format!("{stem}.h"), generated.header),
-                (format!("{stem}_values.h"), generated.values_header),
-                (format!("{stem}.c"), generated.source),
-                (format!("{stem}_bindings.h"), generated.bindings_header),
-                (format!("{stem}_bindings.c"), generated.bindings_source),
-            ];
-            if let Some(generated_runtime) = generated_runtime {
-                artifacts.push((
-                    format!("{stem}_advanced.h"),
-                    generated_runtime.advanced_header,
-                ));
-                artifacts.push((
-                    format!("{stem}_endpoint.h"),
-                    generated_runtime.endpoint_header,
-                ));
-                artifacts.push((format!("{stem}_runtime.h"), generated_runtime.header));
-                artifacts.push((format!("{stem}_runtime.c"), generated_runtime.source));
-            }
-            let manifest_artifacts = artifacts
-                .iter()
-                .map(|(path, contents)| wlc::ManifestArtifact {
-                    path,
-                    contents: contents.as_bytes(),
-                })
-                .collect::<Vec<_>>();
-            let manifest = wlc::generate_codegen_manifest(
-                stem,
-                &model,
-                profile_model.as_ref().map(wlc::binding_profile_identity),
-                &manifest_artifacts,
-            );
-            fs::create_dir_all(&output).into_diagnostic()?;
-            for (path, contents) in artifacts {
-                fs::write(output.join(path), contents).into_diagnostic()?;
-            }
-            fs::write(output.join(format!("{stem}_manifest.json")), manifest).into_diagnostic()?;
-            if has_runtime {
-                println!(
-                    "generated {}.h/.c, {}_values.h, {}_bindings.h/.c, {}_runtime.h/.c, {stem}_endpoint.h, {stem}_advanced.h, and {}_manifest.json in {}",
-                    stem,
-                    stem,
-                    stem,
-                    stem,
-                    stem,
-                    output.display()
-                );
-            } else {
-                println!(
-                    "generated {}.h/.c, {}_values.h, {}_bindings.h/.c, and {}_manifest.json in {}",
-                    stem,
-                    stem,
-                    stem,
-                    stem,
-                    output.display()
-                );
-            }
-        }
-        Operation::CompileRuntime {
-            output,
-            runtime_name,
-        } => {
-            let codec_module = schema_path
-                .file_stem()
-                .and_then(|value| value.to_str())
-                .unwrap_or("wirelink_generated");
-            let runtime_name = runtime_name.as_deref().unwrap_or(codec_module);
-            if !is_portable_c_identifier(runtime_name) {
-                return Err(miette::miette!(
-                    "runtime name `{runtime_name}` must be a portable C identifier"
-                ));
-            }
-            let profile = profile_model
-                .as_ref()
-                .expect("compile-runtime always resolves a required profile");
-            let generated =
-                wlc::generate_runtime_c_named(&model, profile, codec_module, runtime_name)
+            let module = wlc::codegen::c_module_name(stem);
+            let stem = module.as_str();
+            let mut files = if let Some(profile) = &profile_model {
+                let kernel = wlc::KernelProfile::from_bindings(profile.clone())
                     .map_err(miette::Report::new)?;
-            let artifacts = [
-                (
-                    format!("{runtime_name}_advanced.h"),
-                    generated.advanced_header,
-                ),
-                (
-                    format!("{runtime_name}_endpoint.h"),
-                    generated.endpoint_header,
-                ),
-                (format!("{runtime_name}_runtime.h"), generated.header),
-                (format!("{runtime_name}_runtime.c"), generated.source),
-            ];
-            let manifest_artifacts = artifacts
-                .iter()
-                .map(|(path, contents)| wlc::ManifestArtifact {
-                    path,
-                    contents: contents.as_bytes(),
-                })
-                .collect::<Vec<_>>();
-            let manifest = wlc::generate_codegen_manifest(
-                runtime_name,
-                &model,
-                Some(wlc::binding_profile_identity(profile)),
-                &manifest_artifacts,
-            );
-            fs::create_dir_all(&output).into_diagnostic()?;
-            for (path, contents) in artifacts {
-                fs::write(output.join(path), contents).into_diagnostic()?;
+                wlc::generate_kernel_c(&model, &kernel, stem)
+                    .map_err(miette::Report::new)?
+                    .files
+            } else {
+                let c = wlc::generate_c(&model, stem).map_err(miette::Report::new)?;
+                std::collections::BTreeMap::from([
+                    (format!("{stem}.h"), c.header),
+                    (format!("{stem}_values.h"), c.values_header),
+                    (format!("{stem}.c"), c.source),
+                ])
+            };
+            if profile_model.is_none() {
+                let artifacts = files
+                    .iter()
+                    .map(|(path, contents)| wlc::ManifestArtifact {
+                        path,
+                        contents: contents.as_bytes(),
+                    })
+                    .collect::<Vec<_>>();
+                let manifest = wlc::generate_codegen_manifest(
+                    stem,
+                    &model,
+                    profile_model.as_ref().map(wlc::binding_profile_identity),
+                    &artifacts,
+                );
+                files.insert(format!("{stem}_manifest.json"), manifest);
             }
-            fs::write(
-                output.join(format!("{runtime_name}_runtime_manifest.json")),
-                manifest,
-            )
-            .into_diagnostic()?;
-            println!(
-                "generated {}_runtime.h/.c, {runtime_name}_endpoint.h, {runtime_name}_advanced.h and {}_runtime_manifest.json against codec module {} in {}",
-                runtime_name,
-                runtime_name,
-                codec_module,
-                output.display()
-            );
+            // Reject stale legacy execution output rather than leave a second engine.
+            for suffix in ["_runtime.c", "_endpoint.h", "_bindings.c", "_advanced.h"] {
+                if output.join(format!("{stem}{suffix}")).exists() {
+                    return Err(miette::miette!(
+                        "legacy execution artifacts in output directory; use a fresh directory"
+                    ));
+                }
+            }
+            if profile_model.is_some()
+                && !files.contains_key(&format!("{stem}_kernel_transport.c"))
+                && output.join(format!("{stem}_kernel_transport.c")).exists()
+            {
+                return Err(miette::miette!(
+                    "stale stream deployment artifacts: use a fresh output directory"
+                ));
+            }
+            fs::create_dir_all(&output).into_diagnostic()?;
+            for (name, content) in files {
+                fs::write(output.join(name), content).into_diagnostic()?;
+            }
+            println!("generated current C contract in {}", output.display());
         }
         Operation::Validate => println!(
             "validated {} (version {}, {} declaration(s))",

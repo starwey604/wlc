@@ -9,7 +9,7 @@ use thiserror::Error;
 use crate::{
     ast::{Cardinality, Span, Spanned},
     codec_plan::{CodecPlan, CodecProfile},
-    profile::{BINDING_PROFILE_VERSION, BindingDeclaration, BindingProfile, RpcBinding},
+    profile::{BindingDeclaration, BindingProfile, RpcBinding},
     semantic::{FieldSymbol, MessageSymbol, ResolvedType, SemanticModel, Symbol},
 };
 
@@ -169,7 +169,7 @@ impl ProfileSemanticErrors {
 }
 
 /// Resolve a sidecar profile against an already validated wire schema.
-pub fn analyze_binding_profile(
+pub(crate) fn resolve_binding_profile(
     profile: &BindingProfile,
     schema: &SemanticModel,
 ) -> Result<BindingProfileModel, ProfileSemanticErrors> {
@@ -201,12 +201,12 @@ pub fn analyze_binding_profile(
         }
         layout
     });
-    if profile.version.value != BINDING_PROFILE_VERSION {
+    if profile.version.value != 1 {
         errors.push(ProfileSemanticError::new(
             profile.version.span,
             format!(
                 "unsupported binding profile version {}; only version {} is supported",
-                profile.version.value, BINDING_PROFILE_VERSION
+                profile.version.value, 1
             ),
         ));
     }
@@ -532,7 +532,7 @@ pub fn analyze_binding_profile(
 /// Compose independently validated profile fragments. There are no overrides:
 /// duplicates and RPC/plain-message conflicts are errors, even across files.
 /// Fragment order and filenames do not affect the resulting identity.
-pub fn compose_binding_profiles(
+pub(crate) fn resolve_composition(
     profiles: &[BindingProfileModel],
 ) -> Result<BindingProfileModel, ProfileCompositionError> {
     if profiles.is_empty() {
@@ -541,7 +541,7 @@ pub fn compose_binding_profiles(
         ));
     }
     let mut merged = BindingProfileModel {
-        version: BINDING_PROFILE_VERSION,
+        version: 1,
         endpoint: None,
         send_routes: Vec::new(),
         direct_routes: Vec::new(),
@@ -561,7 +561,7 @@ pub fn compose_binding_profiles(
                 "duplicate endpoint layout across profiles".into(),
             ));
         }
-        if profile.version != BINDING_PROFILE_VERSION {
+        if profile.version != 1 {
             return Err(ProfileCompositionError(
                 "incompatible profile version".into(),
             ));
@@ -935,4 +935,29 @@ fn field_mapping(field: &FieldSymbol) -> RpcFieldMapping {
         name: field.name.clone(),
         number: field.number,
     }
+}
+
+/// Analyze only the current execution contract. Legacy syntax never downgrades.
+pub fn analyze_binding_profile(
+    profile: &BindingProfile,
+    schema: &SemanticModel,
+) -> Result<BindingProfileModel, ProfileSemanticErrors> {
+    crate::analyze_kernel_profile(profile, schema)
+        .map(|p| p.bindings)
+        .map_err(|e| ProfileSemanticErrors {
+            errors: vec![ProfileSemanticError::new(
+                profile.version.span,
+                e.to_string(),
+            )],
+        })
+}
+pub fn compose_binding_profiles(
+    profiles: &[BindingProfileModel],
+) -> Result<BindingProfileModel, crate::kernel_profile::KernelError> {
+    let profiles = profiles
+        .iter()
+        .cloned()
+        .map(crate::kernel_profile::KernelProfile::from_bindings)
+        .collect::<Result<Vec<_>, _>>()?;
+    crate::compose_kernel_profiles(&profiles).map(|p| p.bindings)
 }

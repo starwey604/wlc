@@ -45,6 +45,7 @@ impl<'a> Plan<'a> {
         profile: &'a BindingProfileModel,
         options: &'a SdkOptions,
     ) -> Result<Self, SdkCodegenError> {
+        crate::KernelProfile::from_bindings(profile.clone()).map_err(|e| error(e.to_string()))?;
         let name = &options.name;
         if name.is_empty()
             || !name.as_bytes()[0].is_ascii_lowercase()
@@ -90,15 +91,15 @@ impl<'a> Plan<'a> {
             || !profile.retained_routes.is_empty()
         {
             return Err(error(
-                "SDK generation currently supports RPC-only profiles; use a separate host profile for send/direct/latest/fifo routes",
+                "SDK generation currently supports RPC-only profiles; use a separate host profile for ordinary message routes",
             ));
         }
         if !matches!(
             profile.endpoint_layout().envelope,
-            EndpointEnvelope::Any | EndpointEnvelope::NativePacket
+            EndpointEnvelope::NativePacket
         ) {
             return Err(error(
-                "UDP SDK generation requires envelope any or native_packet",
+                "UDP SDK generation requires explicit envelope=native_packet deployment",
             ));
         }
         let c = CModel::new(schema, name).map_err(|e| error(e.to_string()))?;
@@ -195,8 +196,17 @@ impl<'a> Plan<'a> {
                 insert(&mut names, enum_name(&value.name), &enumeration.name)?;
             }
         }
-        let mut methods =
-            BTreeSet::from_iter(["connect", "close", "is_open", "local_port"].map(str::to_owned));
+        let mut methods = BTreeSet::from_iter(
+            [
+                "connect",
+                "close",
+                "is_open",
+                "local_port",
+                "notify",
+                "last_error",
+            ]
+            .map(str::to_owned),
+        );
         let mut bridge = BTreeSet::from_iter(
             [
                 "endpoint_size",

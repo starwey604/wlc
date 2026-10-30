@@ -262,40 +262,6 @@ fn emit_scalar_fields(
     }
 }
 
-// The runtime consumes the same canonical field/key plan as the ordinary
-// fingerprint. It never fingerprints the managed wire profile. Keeping this
-// small byte emitter at the validated request consumer avoids a second codec
-// traversal and a cross-translation-unit call, without expanding the hash loop.
-pub(super) fn canonical_fingerprint(
-    plan: &MessagePlan<'_>,
-    name: &str,
-    symbols: &Symbols,
-) -> String {
-    debug_assert!(supports(plan));
-    debug_assert_eq!(plan.profile, crate::codec_plan::CodecProfile::SchemaV1);
-    let ty = type_name(&plan.message.name);
-    let maximum: usize = plan
-        .message
-        .fields
-        .iter()
-        .zip(&plan.keys)
-        .map(|(field, key)| {
-            key.length
-                + if plan.varuint32(field) {
-                    5
-                } else {
-                    width(&field.ty)
-                }
-        })
-        .sum();
-    let mut out = format!(
-        "/* Private canonical Schema-v1 fingerprint, after successful decode. */\nstatic inline wl_codec_status_t {name}(const {ty}_t *value, uint64_t *hash, size_t *length) {{\n  uint8_t bytes[{maximum}];\n  uint8_t *cursor = bytes;\n"
-    );
-    emit_scalar_fields(&mut out, plan, symbols, true);
-    out.push_str("  size_t size = (size_t)(cursor - bytes);\n  uint64_t h = *hash;\n  for (size_t i = 0U; i < size; ++i) {\n    h = (h ^ bytes[i]) * UINT64_C(0x00000100000001b3);\n  }\n  *hash = h;\n  *length = size;\n  return WL_CODEC_OK;\n}\n\n");
-    out
-}
-
 pub(super) fn emit_bits(
     out: &mut String,
     field: &crate::semantic::FieldSymbol,

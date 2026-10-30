@@ -9,12 +9,14 @@ _Static_assert(CHILD_MAX_ENCODED_SIZE == (PACKED ? (POSITIONAL ? 14U : 15U) : 5U
 _Static_assert(PARENT_MAX_ENCODED_SIZE == (PACKED ? 17U : 7U), "Parent nested bound");
 _Static_assert(GRANDPARENT_MAX_ENCODED_SIZE == (PACKED ? 19U : 9U), "Transitive bound");
 
+#if !POSITIONAL
 static uint64_t fingerprint(const uint8_t *bytes, size_t length) {
   uint64_t hash = UINT64_C(0xcbf29ce484222325);
   for (size_t i = 0U; i < length; ++i) hash = (hash ^ bytes[i]) * UINT64_C(0x100000001b3);
   return hash;
 }
 
+#endif
 int main(void) {
   const uint8_t tagged_child[] = {0x0d, 0x12, 0x34, 0x56, 0x78,
 #if PACKED
@@ -79,14 +81,14 @@ int main(void) {
   assert(length == sizeof(expected_grandparent) && memcmp(bytes, expected_grandparent, length) == 0);
   assert(parent_value_to_view(&owned_parent, &decoded) == WL_CODEC_OK);
   assert(parent_value_from_view(&decoded, &owned_parent) == WL_CODEC_OK);
-  uint64_t hash = UINT64_C(0xcbf29ce484222325);
 #if !POSITIONAL
+  uint64_t hash = UINT64_C(0xcbf29ce484222325);
   assert(parent_wlc_detail_fingerprint(&decoded, &hash, &length) == WL_CODEC_OK);
   assert(length == sizeof(expected_parent) && hash == fingerprint(expected_parent, length));
   hash = UINT64_C(0xcbf29ce484222325);
-#endif
   assert(grandparent_wlc_detail_fingerprint(&grand_decoded, &hash, &length) == WL_CODEC_OK);
   assert(length == sizeof(expected_grandparent) && hash == fingerprint(expected_grandparent, length));
+#endif
   // Failed owned decode must preserve the complete output, including nesting.
   parent_value_t before;
   memcpy(&before, &owned_parent, sizeof(before));

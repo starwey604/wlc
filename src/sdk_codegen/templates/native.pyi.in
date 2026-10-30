@@ -7,12 +7,8 @@ binding_api: int
 
 class Error:
     kind: str
+    outcome: int
     status: int
-    rejection: int
-    local_error: int
-    transport_error: int
-    runtime_error: int
-    codec_error: int
     os_error: int
     os_message: str
 

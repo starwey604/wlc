@@ -73,7 +73,7 @@ static wl_codec_status_t @C@getv(const uint8_t *in, size_t length, size_t *at,
   }
   return *at == length ? WL_CODEC_ERR_MALFORMED : WL_CODEC_ERR_OVERFLOW;
 }
-// WLC_IF U32
+// WLC_IF DIRECT_U32
 static inline size_t @C@vsize32(uint32_t value) {
   size_t size = 1U;
   while (value >= 128U) { value >>= 7U; ++size; }

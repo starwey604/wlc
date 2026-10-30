@@ -10,7 +10,7 @@ use thiserror::Error;
 use crate::ast::{Span, Spanned};
 
 /// The currently supported binding-profile language revision.
-pub const BINDING_PROFILE_VERSION: u32 = 1;
+pub const BINDING_PROFILE_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BindingProfile {

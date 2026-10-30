@@ -6,8 +6,8 @@ use miette::Diagnostic;
 use thiserror::Error;
 
 use crate::{
-    BindingProfileModel, ManifestArtifact, SemanticModel, binding_profile_identity,
-    generate_c_for_profile, generate_codegen_manifest, generate_runtime_c,
+    BindingProfileModel, KernelProfile, ManifestArtifact, SemanticModel, binding_profile_identity,
+    generate_codegen_manifest, generate_kernel_c,
 };
 
 mod cpp;
@@ -16,7 +16,7 @@ mod plan;
 mod python;
 
 /// Host source API revision, independent of the generated-code contract.
-pub const BINDING_API_VERSION: u32 = 2;
+pub const BINDING_API_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SdkOptions {
@@ -45,23 +45,11 @@ pub fn generate_sdk(
 ) -> Result<GeneratedSdk, SdkCodegenError> {
     let plan = plan::Plan::new(schema, profile, options)?;
     let name = &options.name;
-    let c = generate_c_for_profile(schema, profile, name)
+    let kernel = KernelProfile::from_bindings(profile.clone())
         .map_err(|e| SdkCodegenError(e.to_string()))?;
-    let runtime =
-        generate_runtime_c(schema, profile, name).map_err(|e| SdkCodegenError(e.to_string()))?;
-    let mut artifacts = BTreeMap::from([
-        (format!("{name}.h"), c.header),
-        (format!("{name}.c"), c.source),
-        (format!("{name}_values.h"), c.values_header),
-        (format!("{name}_bindings.h"), c.bindings_header),
-        (format!("{name}_bindings.c"), c.bindings_source),
-        (format!("{name}_runtime.h"), runtime.header),
-        (format!("{name}_runtime.c"), runtime.source),
-        (format!("{name}_endpoint.h"), runtime.endpoint_header),
-        (format!("{name}_advanced.h"), runtime.advanced_header),
-    ]);
-    let c_manifest = manifest(schema, profile, name, &artifacts);
-    artifacts.insert(format!("{name}_manifest.json"), c_manifest);
+    let artifacts = generate_kernel_c(schema, &kernel, name)
+        .map_err(|e| SdkCodegenError(e.to_string()))?
+        .files;
     let mut files = artifacts
         .into_iter()
         .map(|(p, c)| (format!("generated/{p}"), c))

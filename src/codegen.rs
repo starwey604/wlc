@@ -5,7 +5,6 @@ use thiserror::Error;
 
 use crate::semantic::{SemanticModel, Symbol};
 
-mod bindings;
 mod descriptor;
 mod engine;
 mod features;
@@ -21,10 +20,10 @@ mod symbols;
 pub(crate) use symbols::Symbols;
 mod wire;
 
-use bindings::{emit_bindings_header, emit_bindings_source};
 pub(crate) use descriptor::{field_descriptor_data, tagged_dependencies, tagged_name};
 use engine::emit_source;
 use header::emit_message_definition;
+pub use names::c_identifier as c_module_name;
 use names::ieee_float_usage;
 pub(crate) use names::{c_identifier, c_type, type_name, upper_snake};
 pub(crate) use owned::{owned_decode_source, owned_descriptor, scalar_value_decode};
@@ -36,10 +35,6 @@ pub struct GeneratedC {
     /// Standalone, pointer-free business types and codec entry points.
     pub values_header: String,
     pub source: String,
-    /// Optional Wirelink-core bindings, kept in a separate translation unit so
-    /// codec-only users do not acquire link-core symbol dependencies.
-    pub bindings_header: String,
-    pub bindings_source: String,
 }
 
 #[derive(Clone, Debug, Diagnostic, Error, Eq, PartialEq)]
@@ -47,43 +42,22 @@ pub struct GeneratedC {
 #[diagnostic(code(wlc::codegen))]
 pub struct CodegenError(pub String);
 
-/// Emits standalone codec and Wirelink-binding translation units for one schema.
+/// Emits standalone public codecs, with no communication engine dependency.
 /// `module_name` controls output includes, symbols, and header guards.
 pub fn generate_c(model: &SemanticModel, module_name: &str) -> Result<GeneratedC, CodegenError> {
     generate_c_with_fingerprints(model, module_name, None, None)
 }
 
-/// Matched profile generation omits canonical fingerprint code for light methods.
-/// Standalone codecs retain their generator-private canonical helpers.
+/// Current profile selects public ordinary codec formats. Standalone canonical
+/// helpers remain pure codec tools and are never used by the kernel.
 pub fn generate_c_for_profile(
     model: &SemanticModel,
     profile: &crate::BindingProfileModel,
     module_name: &str,
 ) -> Result<GeneratedC, CodegenError> {
-    use crate::profile_semantic::RpcGuarantee;
-    if profile
-        .rpc_services
-        .iter()
-        .all(|s| s.guarantee == RpcGuarantee::Replay)
-        && profile
-            .send_routes
-            .iter()
-            .chain(&profile.direct_routes)
-            .all(|r| r.codec == crate::codec_plan::CodecProfile::SchemaV1)
-        && profile
-            .retained_routes
-            .iter()
-            .all(|r| r.codec == crate::codec_plan::CodecProfile::SchemaV1)
-    {
-        return generate_c(model, module_name);
-    }
-    let requests = profile
-        .rpc_services
-        .iter()
-        .filter(|s| profile.has_rpc_server() && s.guarantee == RpcGuarantee::Replay)
-        .map(|s| s.request_id)
-        .collect();
-    generate_c_with_fingerprints(model, module_name, Some(&requests), Some(profile))
+    crate::KernelProfile::from_bindings(profile.clone())
+        .map_err(|e| CodegenError(e.to_string()))?;
+    generate_c_with_fingerprints(model, module_name, Some(&Default::default()), Some(profile))
 }
 
 pub(crate) fn generate_c_with_fingerprints(
@@ -225,14 +199,10 @@ pub(crate) fn generate_c_with_fingerprints(
         &codecs,
         &symbols,
     );
-    let bindings_header = emit_bindings_header(&module, &guard, &messages);
-    let bindings_source = emit_bindings_source(&module, &messages);
     Ok(GeneratedC {
         header,
         values_header,
         source,
-        bindings_header,
-        bindings_source,
     })
 }
 
@@ -281,33 +251,8 @@ pub(crate) fn private_source(
         }
     }
     let empty = Default::default();
-    // Replay hashes the public Schema-v1 business representation. Private wire
-    // codecs never supply canonical fingerprints, including in replay-only profiles.
+    // Private RPC wire codecs have no replay or canonical hash dependency.
     out.push_str(&emit_source(&messages, &codecs, Some(&empty), &symbols));
     crate::value_codegen::source(&mut out, &messages, &c.maxima, &codecs, &symbols);
-    if profile.has_rpc_server() {
-        let requests = profile
-            .rpc_services
-            .iter()
-            .filter(|service| {
-                service.is_managed()
-                    && service.guarantee == crate::profile_semantic::RpcGuarantee::Replay
-            })
-            .map(|service| service.request_id)
-            .collect::<std::collections::BTreeSet<_>>();
-        for message in messages
-            .iter()
-            .filter(|message| requests.contains(&message.id))
-        {
-            let canonical = plan::MessagePlan::with_profile(message, CodecProfile::SchemaV1);
-            let name = format!("{}_wlc_detail_fingerprint", symbols.message(message));
-            if fixed::supports(&canonical) {
-                out.push_str(&fixed::canonical_fingerprint(&canonical, &name, &symbols));
-            } else {
-                let ty = type_name(&message.name);
-                writeln!(out, "wl_codec_status_t {ty}_wlc_detail_fingerprint(const {ty}_t *, uint64_t *, size_t *);\nstatic inline wl_codec_status_t {name}(const {ty}_t *value, uint64_t *hash, size_t *length) {{ return {ty}_wlc_detail_fingerprint(value, hash, length); }}\n").unwrap();
-            }
-        }
-    }
     out
 }

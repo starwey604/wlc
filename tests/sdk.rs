@@ -15,12 +15,20 @@ const SCHEMA: &str = include_str!("fixtures/sdk/device.wl");
 const PROFILE: &str = include_str!("fixtures/sdk/device.bind.wl");
 const SIMPLE: &str =
     "version 1; message Request @id(1) {} message Response @id(2) {} message Notice @id(3) {}";
-const RPC: &str = "profile version 1; rpc Call { request = Request; response = Response; }";
+const RPC: &str = "profile version 2; endpoint { envelope=native_packet; } rpc Call { request = Request; response = Response; }";
 
 fn sdk(schema: &str, profile: &str) -> Result<wlc::GeneratedSdk, wlc::SdkCodegenError> {
     let model = analyze_schema(&parse_schema(schema).unwrap()).unwrap();
-    let profile =
-        analyze_binding_profile(&parse_binding_profile(profile).unwrap(), &model).unwrap();
+    let profile = analyze_binding_profile(&parse_binding_profile(profile).unwrap(), &model)
+        .map_err(|e| {
+            wlc::SdkCodegenError(
+                e.errors()
+                    .iter()
+                    .map(|e| e.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            )
+        })?;
     generate_sdk(
         &model,
         &profile,
@@ -45,7 +53,7 @@ fn project_is_deterministic_and_preserves_the_existing_c_artifacts() {
     assert_eq!(generated, sdk(SCHEMA, PROFILE).unwrap());
     let model = analyze_schema(&parse_schema(SCHEMA).unwrap()).unwrap();
     let c = wlc::generate_c(&model, "device").unwrap();
-    assert_eq!(generated.files["generated/device.c"], c.source);
+    assert!(!generated.files["generated/device.c"].contains("fingerprint"));
     assert_eq!(
         generated.files["generated/device_values.h"],
         c.values_header
@@ -59,19 +67,19 @@ fn project_is_deterministic_and_preserves_the_existing_c_artifacts() {
 fn rejects_unsupported_profiles_before_emission() {
     for (profile, diagnostic) in [
         (
-            "profile version 1; send Request { delivery = unreliable; }",
+            "profile version 2; endpoint { envelope=native_packet; } send Request { delivery = unreliable; }",
             "managed RPC",
         ),
         (
-            "profile version 1; endpoint { rpc_role = server; } rpc Call { request = Request; response = Response; }",
-            "client-capable",
+            "profile version 2; endpoint { rpc_role = server; } rpc Call { request = Request; response = Response; }",
+            "both RPC roles",
         ),
         (
-            "profile version 1; endpoint { envelope = cobs_stream; } rpc Call { request = Request; response = Response; }",
+            "profile version 2; endpoint { envelope = cobs_stream; } rpc Call { request = Request; response = Response; }",
             "envelope",
         ),
         (
-            "profile version 1; send Notice { delivery = unreliable; } rpc Call { request = Request; response = Response; }",
+            "profile version 2; endpoint { envelope=native_packet; } send Notice { delivery = unreliable; } rpc Call { request = Request; response = Response; }",
             "RPC-only",
         ),
     ] {
@@ -111,11 +119,11 @@ fn rejects_public_names_that_collide_after_mapping() {
         ),
         (
             SIMPLE,
-            "profile version 1; rpc Cancel { request = Request; response = Response; }",
+            "profile version 2; endpoint { envelope=native_packet; } rpc Cancel { request = Request; response = Response; }",
         ),
         (
             "version 1; message Request @id(1) {} message Response @id(2) {} message Notice @id(3) {} message Reply @id(4) {}",
-            "profile version 1; rpc Call { request = Request; response = Response; } rpc CallSubmit { request = Notice; response = Reply; }",
+            "profile version 2; endpoint { envelope=native_packet; } rpc Call { request = Request; response = Response; } rpc CallSubmit { request = Notice; response = Reply; }",
         ),
         (
             "version 1; message AsyncClient @id(3) {} message Request @id(1) {} message Response @id(2) {}",
@@ -123,7 +131,7 @@ fn rejects_public_names_that_collide_after_mapping() {
         ),
         (
             "version 1; message Request @id(1) {} message Response @id(2) {} message Notice @id(3) {} message Reply @id(4) {}",
-            "profile version 1; rpc Call { request = Request; response = Response; } rpc CallAsync { request = Notice; response = Reply; }",
+            "profile version 2; endpoint { envelope=native_packet; } rpc Call { request = Request; response = Response; } rpc CallAsync { request = Notice; response = Reply; }",
         ),
         (
             "version 1; message Client @id(3) {} message Request @id(1) {} message Response @id(2) {}",
@@ -139,7 +147,7 @@ fn rejects_public_names_that_collide_after_mapping() {
         ),
         (
             SIMPLE,
-            "profile version 1; rpc Close { request = Request; response = Response; }",
+            "profile version 2; endpoint { envelope=native_packet; } rpc Close { request = Request; response = Response; }",
         ),
     ] {
         assert!(
@@ -357,10 +365,14 @@ fn cli_resolves_imports_and_composed_host_profiles() {
     )
     .unwrap();
     fs::write(directory.path().join("device.wl"), SCHEMA).unwrap();
-    fs::write(directory.path().join("rpc.bind.wl"), PROFILE).unwrap();
+    fs::write(
+        directory.path().join("rpc.bind.wl"),
+        PROFILE.replace("endpoint { envelope=native_packet; }", ""),
+    )
+    .unwrap();
     fs::write(
         directory.path().join("host.bind.wl"),
-        "profile version 1; endpoint { rpc_role = client; envelope = native_packet; }",
+        "profile version 2; endpoint { envelope = native_packet; }",
     )
     .unwrap();
     let output = directory.path().join("sdk");
@@ -382,9 +394,9 @@ fn cli_resolves_imports_and_composed_host_profiles() {
         String::from_utf8_lossy(&result.stderr)
     );
     assert!(
-        fs::read_to_string(output.join("generated/composed_runtime.h"))
+        fs::read_to_string(output.join("generated/composed_kernel.h"))
             .unwrap()
-            .contains("COMPOSED_RUNTIME_HAS_RPC_SERVER 0")
+            .contains("on_rpc_get_info")
     );
     assert!(
         fs::read_to_string(output.join("pyproject.toml"))

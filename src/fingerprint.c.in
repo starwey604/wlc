@@ -24,13 +24,6 @@ static inline void @C@hash_putv(@C@hash_state_t *out, uint64_t value) {
   @C@hash_copy_span(out, bytes, (size_t)(cursor - bytes));
 }
 // WLC_END
-// WLC_IF U32
-static inline void @C@hash_putv32(@C@hash_state_t *out, uint32_t value) {
-  uint8_t bytes[5], *cursor = bytes;
-  @C@putv32(&cursor, value);
-  @C@hash_copy_span(out, bytes, (size_t)(cursor - bytes));
-}
-// WLC_END
 static inline void @C@hash_put_key(@C@hash_state_t *out, const @C@field_t *f) {
   @C@hash_copy_span(out, f->key, f->key_size);
 }
