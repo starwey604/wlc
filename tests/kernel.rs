@@ -107,6 +107,7 @@ fn deterministic_composition_and_no_legacy_execution_artifacts() {
             "{forbidden}"
         );
     }
+    assert!(a.files["demo_kernel.h"].contains("extern \"C\" {"));
     assert_eq!(a.files.len(), 8);
 }
 

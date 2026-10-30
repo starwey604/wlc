@@ -81,7 +81,7 @@ pub fn generate_kernel_c(
         crate::codegen::generate_c_with_fingerprints(schema, m, Some(&BTreeSet::new()), None)
             .map_err(|e| KernelError(e.to_string()))?;
     let mut header = format!(
-        "/* SPDX-License-Identifier: Apache-2.0 */\n#ifndef {upper}_KERNEL_H\n#define {upper}_KERNEL_H\n#include \"{m}.h\"\n#include \"wirelink/kernel.h\"\n#if WL_KERNEL_CONTRACT != 1\n#error \"static kernel contract mismatch\"\n#endif\n#define {upper}_KERNEL_PROFILE_VERSION 2U\n#define {upper}_KERNEL_REQUEST_FRAME_MAX {req_max}U\n#define {upper}_KERNEL_REPLY_FRAME_MAX {resp_max}U\n#define {upper}_KERNEL_MESSAGE_FRAME_MAX {msg_max}U\n"
+        "/* SPDX-License-Identifier: Apache-2.0 */\n#ifndef {upper}_KERNEL_H\n#define {upper}_KERNEL_H\n#include \"{m}.h\"\n#include \"wirelink/kernel.h\"\n#if WL_KERNEL_CONTRACT != 1\n#error \"static kernel contract mismatch\"\n#endif\n#ifdef __cplusplus\nextern \"C\" {{\n#endif\n#define {upper}_KERNEL_PROFILE_VERSION 2U\n#define {upper}_KERNEL_REQUEST_FRAME_MAX {req_max}U\n#define {upper}_KERNEL_REPLY_FRAME_MAX {resp_max}U\n#define {upper}_KERNEL_MESSAGE_FRAME_MAX {msg_max}U\n"
     );
     for service in &p.rpc_services {
         let name = type_name(&service.name);
@@ -137,7 +137,7 @@ pub fn generate_kernel_c(
         .unwrap();
         writeln!(header, "/* Borrowed input is encoded before return; no view or source bytes are retained. */\nwl_err_t {m}_kernel_send_{}_view({m}_kernel_t *, const {}_t *);", type_name(&route.message_name), type_name(&route.message_name)).unwrap();
     }
-    header.push_str("#endif\n");
+    header.push_str("#ifdef __cplusplus\n}\n#endif\n#endif\n");
     let mut private = format!(
         "/* SPDX-License-Identifier: Apache-2.0 */\n#ifndef {upper}_KERNEL_CODECS_H\n#define {upper}_KERNEL_CODECS_H\n#include \"{m}.h\"\n"
     );
