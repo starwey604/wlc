@@ -1,0 +1,14 @@
+        case WL_RPC_SERVER_PENDING_DUPLICATE:
+          result.domain = @PREFIX@_RUNTIME_OK;
+          break;
+        case WL_RPC_SERVER_REPLAY:
+          result.detail.rpc.server_response = replay;
+          result.detail.rpc.application_result = replay.application_status;
+          result.detail.rpc.payload_length = replay.response_length;
+          result.detail.rpc.core_result = WL_OK;
+          result.domain = @PREFIX@_RUNTIME_OK;
+          break;
+        case WL_RPC_SERVER_CONFLICT:
+          result.detail.rpc.rpc_result = WL_RPC_ERR_OPERATION_CONFLICT;
+          result.domain = @PREFIX@_RUNTIME_RPC_ERROR;
+          break;

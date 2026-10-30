@@ -1,31 +1,26 @@
     case @REQ_ID@: {
-      wl_rpc_request_identity_t identity = {.request_fingerprint = @M@_rpc_fingerprint_seed};
+      wl_rpc_request_identity_t identity = {@FINGERPRINT_INIT@};
       wl_rpc_server_request_t server_request;
       @M@_@S@_request_token_t token;
-      size_t canonical_length = 0U;
+      size_t canonical_length = 0U, header_length = 0U;
       uint64_t session = 0U;
-      if (!@M@_rpc_request_prepare(event, runtime, @REQ_EVENT@, &result, &session)) break;
+      if (!@M@_rpc_request_prepare(event, runtime, @REQ_EVENT@, &result, &session, &header_length)) break;
       if (runtime->@S@.request_scratch == NULL) {
         result.domain = @P@_RUNTIME_MISSING_SCRATCH;
         break;
       }
-      result.detail.rpc.codec_status = @REQ@_decode(event->payload + 20U,
-          event->payload_len - 20U, runtime->@S@.request_scratch);
+      result.detail.rpc.codec_status = @M@_rpc_@REQ@_decode(event->payload + header_length,
+          event->payload_len - header_length, runtime->@S@.request_scratch);
       if (result.detail.rpc.codec_status != WL_CODEC_OK) {
         result.domain = @P@_RUNTIME_CODEC_ERROR;
         break;
       }
-      result.detail.rpc.codec_status = @REQ@_wlc_detail_fingerprint(runtime->@S@.request_scratch,
-          &identity.request_fingerprint, &canonical_length);
-      if (result.detail.rpc.codec_status != WL_CODEC_OK) {
-        result.domain = @P@_RUNTIME_CODEC_ERROR;
-        break;
-      }
+@FINGERPRINT@      result.detail.rpc.payload_length = event->payload_len;
       identity.operation_id = result.detail.rpc.operation_id;
       identity.request_message_id = @REQ_ID@;
       identity.response_message_id = @RES_ID@;
       identity.peer_session_id = session;
-      if (!@M@_rpc_request_begin(ctx, runtime, &identity, canonical_length, now_ms, &result)) break;
+      if (!@M@_rpc_request_begin@BEGIN_SUFFIX@(ctx, runtime, &identity, canonical_length, now_ms, &result)) break;
       server_request = result.detail.rpc.server_request;
       memset(&token, 0, sizeof(token));
       token.private_state.owner = runtime;

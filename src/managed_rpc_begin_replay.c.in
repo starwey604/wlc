@@ -1,0 +1,48 @@
+/* Return true only for a new request. Peer observation must remain after
+ * successful decoding/fingerprinting: malformed input cannot cancel a peer. */
+static bool @M@_rpc_request_begin(wl_ctx_t *ctx, @M@_runtime_t *runtime,
+    const wl_rpc_request_identity_t *identity, size_t canonical_length,
+    wl_time_ms_t now_ms, @M@_runtime_result_t *result) {
+  wl_rpc_server_request_t request = {0};
+  wl_rpc_server_response_t replay = {0};
+  if (runtime->rpc_peer.session_id != identity->peer_session_id) {
+    wl_rpc_peer_observation_t observation = {0};
+    result->detail.rpc.rpc_result = @M@_runtime_peer_observe(ctx, runtime,
+        identity->peer_session_id, &observation);
+    if (result->detail.rpc.rpc_result != WL_RPC_OK) {
+      result->domain = @P@_RUNTIME_RPC_ERROR;
+      return false;
+    }
+    result->detail.rpc.peer_changed = observation.changed;
+  }
+  (void)canonical_length; /* Fingerprinting uses the unchanged public canonical codec. */
+  result->detail.rpc.rpc_result = wl_rpc_server_begin(runtime->rpc_server,
+      identity, now_ms, &result->detail.rpc.rpc_disposition, &request, &replay);
+  if (result->detail.rpc.rpc_result != WL_RPC_OK) {
+    result->domain = @P@_RUNTIME_RPC_ERROR;
+    return false;
+  }
+  switch (result->detail.rpc.rpc_disposition) {
+    case WL_RPC_SERVER_NEW:
+      result->detail.rpc.server_request = request;
+      return true;
+    case WL_RPC_SERVER_PENDING_DUPLICATE:
+      result->domain = @P@_RUNTIME_OK;
+      break;
+    case WL_RPC_SERVER_REPLAY:
+      result->detail.rpc.server_response = replay;
+      result->detail.rpc.application_result = replay.application_status;
+      result->detail.rpc.payload_length = replay.response_length;
+      result->domain = @P@_RUNTIME_OK;
+      break;
+    case WL_RPC_SERVER_CONFLICT:
+      result->detail.rpc.rpc_result = WL_RPC_ERR_OPERATION_CONFLICT;
+      result->domain = @P@_RUNTIME_RPC_ERROR;
+      break;
+    default:
+      result->detail.rpc.rpc_result = WL_RPC_ERR_INVALID_STATE;
+      result->domain = @P@_RUNTIME_RPC_ERROR;
+      break;
+  }
+  return false;
+}

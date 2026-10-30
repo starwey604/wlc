@@ -1,0 +1,6 @@
+      result.detail.rpc.codec_status = @REQUEST@_wlc_detail_fingerprint(runtime->@SERVICE_NAME@.request_scratch, &identity.request_fingerprint, &canonical_length);
+      if (result.detail.rpc.codec_status != WL_CODEC_OK) {
+        result.domain = @PREFIX@_RUNTIME_CODEC_ERROR;
+        break;
+      }
+      result.detail.rpc.payload_length = canonical_length;

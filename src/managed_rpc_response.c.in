@@ -1,6 +1,8 @@
     case @RES_ID@: {
-      wl_rpc_client_result_t client;
+      wl_rpc_client_response_t authority;
+      uint16_t result_index;
       uint64_t session = 0U;
+      size_t header_length = 0U;
       result.detail_kind = @P@_RUNTIME_DETAIL_RPC;
       if (event->type != @RES_EVENT@) {
         result.domain = @P@_RUNTIME_DELIVERY_MISMATCH;
@@ -12,9 +14,8 @@
       }
       result.detail.rpc.rpc_result = @M@_rpc_header_read(event->payload,
           event->payload_len, 2U, &result.detail.rpc.operation_id,
-          &result.detail.rpc.application_result, &session);
-      if (result.detail.rpc.rpc_result != WL_RPC_OK ||
-          (result.detail.rpc.application_result != 0 && event->payload_len != 20U)) {
+          &result.detail.rpc.application_result, &session, &header_length);
+      if (result.detail.rpc.rpc_result != WL_RPC_OK) {
         result.detail.rpc.rpc_result = WL_RPC_ERR_MALFORMED_METADATA;
         result.domain = @P@_RUNTIME_RPC_ERROR;
         break;
@@ -25,46 +26,33 @@
         result.domain = @P@_RUNTIME_OK;
         break;
       }
-      if (runtime->rpc_async != NULL) {
-        uint16_t expired;
-        /* A reply received at/after the acceptance deadline cannot resurrect
-         * that call, even though event dispatch precedes owner progress. */
-        (void)wl_rpc_client_poll(runtime->rpc_client, now_ms, &expired);
-      }
-      result.detail.rpc.rpc_result = wl_rpc_client_get(runtime->rpc_client,
-          result.detail.rpc.operation_id, &client);
+      result.detail.rpc.rpc_result = wl_rpc_client_response_prepare(runtime->rpc_client,
+          @REQ_ID@, @RES_ID@, result.detail.rpc.operation_id, now_ms, &authority, &result_index);
       if (result.detail.rpc.rpc_result == WL_RPC_ERR_NOT_FOUND) {
         /* Unknown/late responses are observable, not failures of another call. */
         result.domain = @P@_RUNTIME_OK;
         break;
       }
-      if (result.detail.rpc.rpc_result != WL_RPC_OK ||
-          client.request_message_id != @REQ_ID@ || client.response_message_id != @RES_ID@) {
-        result.detail.rpc.rpc_result = WL_RPC_ERR_RESPONSE_MISMATCH;
-        result.domain = @P@_RUNTIME_RPC_ERROR;
+      if (result.detail.rpc.rpc_result != WL_RPC_OK) {
+        result.domain = result.detail.rpc.rpc_result == WL_RPC_ERR_INVALID_STATE ?
+            @P@_RUNTIME_OK : @P@_RUNTIME_RPC_ERROR;
         break;
       }
-      if (client.state != WL_RPC_CLIENT_LINK_PENDING && client.state != WL_RPC_CLIENT_WAIT_RESPONSE) {
-        result.detail.rpc.rpc_result = WL_RPC_ERR_INVALID_STATE;
-        result.domain = @P@_RUNTIME_OK;
+      if (runtime->rpc_results == NULL || result_index >= runtime->rpc_result_count) {
+        result.domain = @P@_RUNTIME_MISSING_SCRATCH;
         break;
       }
       if (result.detail.rpc.application_result == 0) {
-        if (runtime->@S@.response_scratch == NULL) {
-          result.domain = @P@_RUNTIME_MISSING_SCRATCH;
-          break;
-        }
-        result.detail.rpc.codec_status = @RES@_decode(event->payload + 20U,
-            event->payload_len - 20U, runtime->@S@.response_scratch);
+        result.detail.rpc.codec_status = @M@_rpc_@RES@_wlc_detail_value_decode(event->payload + header_length,
+            event->payload_len - header_length, &runtime->rpc_results[result_index].@S@);
         if (result.detail.rpc.codec_status != WL_CODEC_OK) {
           result.domain = @P@_RUNTIME_CODEC_ERROR;
           break;
         }
       }
       result.detail.rpc.payload_length = event->payload_len;
-      result.detail.rpc.rpc_result = wl_rpc_client_on_response(runtime->rpc_client,
-          @RES_ID@, result.detail.rpc.operation_id, result.detail.rpc.application_result,
-          event->payload, event->payload_len);
+      result.detail.rpc.rpc_result = wl_rpc_client_response_commit(runtime->rpc_client,
+          &authority, result.detail.rpc.application_result, now_ms);
       result.domain = result.detail.rpc.rpc_result == WL_RPC_OK ?
           @P@_RUNTIME_OK : @P@_RUNTIME_RPC_ERROR;
       break;

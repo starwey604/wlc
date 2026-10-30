@@ -1,6 +1,7 @@
-/* Managed RPC v2: 00 02 kind 00, BE32 correlation, BE32 signed status,
- * BE64 originating client session, then business payload.
- * The zero discriminator is not a valid legacy codec field tag. */
+/* Managed RPC v4: BE64 originating client session, then tagged varuint32
+ * correlation. Its first byte reserves bit zero for rejection; the remaining
+ * bits encode all 32 operation bits. Native message ID determines direction.
+ * Only rejection adds BE32 nonzero status. */
 static uint32_t @M@_rpc_read_u32(const uint8_t *data) {
   return ((uint32_t)data[0] << 24U) | ((uint32_t)data[1] << 16U) |
          ((uint32_t)data[2] << 8U) | (uint32_t)data[3];
@@ -11,25 +12,61 @@ static void @M@_rpc_write_u32(uint8_t *data, uint32_t value) {
   data[2] = (uint8_t)(value >> 8U);
   data[3] = (uint8_t)value;
 }
+static size_t @M@_rpc_header_size(uint32_t operation_id, int32_t status) {
+  size_t size = status == 0 ? 9U : 13U;
+  operation_id >>= 6U;
+  while (operation_id != 0U) { ++size; operation_id >>= 7U; }
+  return size;
+}
 static wl_rpc_err_t @M@_rpc_header_read(const uint8_t *data, size_t length,
-    uint8_t kind, uint32_t *operation_id, int32_t *status, uint64_t *session) {
-  uint32_t bits;
-  if (data == NULL || length < 20U || data[0] != 0U || data[1] != 2U ||
-      data[2] != kind || data[3] != 0U) return WL_RPC_ERR_MALFORMED_METADATA;
-  *operation_id = @M@_rpc_read_u32(data + 4U);
-  bits = @M@_rpc_read_u32(data + 8U);
-  *session = ((uint64_t)@M@_rpc_read_u32(data + 12U) << 32U) |
-      @M@_rpc_read_u32(data + 16U);
-  *status = bits <= INT32_MAX ? (int32_t)bits : -1 - (int32_t)(UINT32_MAX - bits);
-  if (*session == 0U || *operation_id == 0U || (kind == 1U && *status != 0))
+    uint8_t kind, uint32_t *operation_id, int32_t *status, uint64_t *session,
+    size_t *header_length) {
+  uint32_t operation;
+  size_t at = 9U;
+  uint8_t byte;
+  bool rejection;
+  if (data == NULL || length < 9U) return WL_RPC_ERR_MALFORMED_METADATA;
+  *session = ((uint64_t)@M@_rpc_read_u32(data) << 32U) |
+      @M@_rpc_read_u32(data + 4U);
+  byte = data[8U];
+  rejection = (byte & 1U) != 0U;
+  operation = (uint32_t)((byte >> 1U) & 63U);
+  for (unsigned shift = 6U; (byte & 128U) != 0U; shift += 7U) {
+    if (at == length || shift > 27U) return WL_RPC_ERR_MALFORMED_METADATA;
+    byte = data[at++];
+    if ((shift == 27U && byte > 31U) || byte == 0U)
+      return WL_RPC_ERR_MALFORMED_METADATA;
+    operation |= (uint32_t)(byte & 127U) << shift;
+  }
+  *operation_id = operation;
+  *status = 0;
+  if (*session == 0U || operation == 0U || (rejection && kind == 1U))
     return WL_RPC_ERR_MALFORMED_METADATA;
+  if (rejection) {
+    uint32_t bits;
+    if (length != at + 4U) return WL_RPC_ERR_MALFORMED_METADATA;
+    bits = @M@_rpc_read_u32(data + at);
+    *status = bits <= INT32_MAX ? (int32_t)bits : -1 - (int32_t)(UINT32_MAX - bits);
+    if (*status == 0) return WL_RPC_ERR_MALFORMED_METADATA;
+    at += 4U;
+  }
+  *header_length = at;
   return WL_RPC_OK;
 }
-static void @M@_rpc_header_write(uint8_t *data, uint8_t kind,
+static size_t @M@_rpc_header_write(uint8_t *data, uint8_t kind,
     uint32_t operation_id, int32_t status, uint64_t session) {
-  data[0] = 0U; data[1] = 2U; data[2] = kind; data[3] = 0U;
-  @M@_rpc_write_u32(data + 4U, operation_id);
-  @M@_rpc_write_u32(data + 8U, (uint32_t)status);
-  @M@_rpc_write_u32(data + 12U, (uint32_t)(session >> 32U));
-  @M@_rpc_write_u32(data + 16U, (uint32_t)session);
+  size_t at = 9U;
+  (void)kind;
+  @M@_rpc_write_u32(data, (uint32_t)(session >> 32U));
+  @M@_rpc_write_u32(data + 4U, (uint32_t)session);
+  data[8U] = (uint8_t)(((operation_id & 63U) << 1U) | (status != 0 ? 1U : 0U));
+  operation_id >>= 6U;
+  if (operation_id != 0U) data[8U] |= 128U;
+  while (operation_id != 0U) {
+    uint8_t byte = (uint8_t)(operation_id & 127U);
+    operation_id >>= 7U;
+    data[at++] = operation_id != 0U ? (uint8_t)(byte | 128U) : byte;
+  }
+  if (status != 0) { @M@_rpc_write_u32(data + at, (uint32_t)status); at += 4U; }
+  return at;
 }

@@ -1,7 +1,8 @@
 //! Runtime-owned RPC metadata. The ordinary business codec is never modified.
+
 use crate::{
     codegen::{c_identifier, type_name, upper_snake},
-    profile_semantic::{DeliveryPolicy, RpcService},
+    profile_semantic::{BindingProfileModel, DeliveryPolicy, RpcGuarantee, RpcService},
     template::render,
 };
 
@@ -76,22 +77,50 @@ pub(crate) fn header_types(module: &str, codec: &str, service: &RpcService) -> S
 pub(crate) fn header_functions(module: &str, service: &RpcService) -> String {
     expand(include_str!("managed_rpc_functions.h.in"), module, service)
 }
-pub(crate) fn helpers(module: &str) -> String {
+pub(crate) fn helpers(module: &str, profile: &BindingProfileModel) -> String {
     let prefix = upper_snake(module);
+    let mut admission = String::new();
+    if profile.has_replay() {
+        admission.push_str(include_str!("managed_rpc_begin_replay.c.in"));
+    }
+    if profile.has_correlate() {
+        admission.push_str(include_str!("managed_rpc_begin_correlate.c.in"));
+    }
+    let admission = render(&admission, &[("M", module), ("P", &prefix)]);
     render(include_str!("managed_rpc_helpers.c.in"), &[("M", module)])
         + &render(
             include_str!("managed_rpc_server.c.in"),
-            &[("M", module), ("P", &prefix)],
+            &[("M", module), ("P", &prefix), ("ADMISSION", &admission)],
         )
 }
 pub(crate) fn request_case(module: &str, service: &RpcService) -> String {
-    expand(include_str!("managed_rpc_request.c.in"), module, service)
+    let replay = service.guarantee == RpcGuarantee::Replay;
+    let fingerprint = if replay {
+        expand(
+            include_str!("managed_rpc_fingerprint.c.in"),
+            module,
+            service,
+        )
+    } else {
+        String::new()
+    };
+    let seed = format!(".request_fingerprint = {module}_rpc_fingerprint_seed");
+    expand_with(
+        include_str!("managed_rpc_request.c.in"),
+        module,
+        service,
+        &[
+            ("FINGERPRINT_INIT", if replay { &seed } else { "0" }),
+            ("FINGERPRINT", &fingerprint),
+            ("BEGIN_SUFFIX", if replay { "" } else { "_correlate" }),
+        ],
+    )
 }
 pub(crate) fn response_case(module: &str, service: &RpcService) -> String {
     expand(include_str!("managed_rpc_response.c.in"), module, service)
 }
 pub(crate) fn implementation(module: &str, service: &RpcService) -> String {
-    expand(include_str!("managed_rpc.c.in"), module, service)
+    expand(include_str!("managed_rpc.c.in"), module, service) + "\n"
 }
 pub(crate) fn endpoint(module: &str, service: &RpcService) -> String {
     expand(include_str!("managed_rpc_endpoint.h.in"), module, service)
@@ -99,4 +128,12 @@ pub(crate) fn endpoint(module: &str, service: &RpcService) -> String {
 pub(crate) fn async_endpoint(module: &str, service: &RpcService) -> String {
     expand(include_str!("rpc_async_endpoint.h.in"), module, service)
         + &expand(include_str!("rpc_sync_endpoint.h.in"), module, service)
+}
+
+pub(crate) fn private_source(
+    schema: &crate::semantic::SemanticModel,
+    module: &str,
+    profile: &BindingProfileModel,
+) -> String {
+    crate::codegen::private_source(schema, module, profile)
 }

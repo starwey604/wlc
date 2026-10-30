@@ -4,7 +4,7 @@
   @M@_runtime_result_t result = @M@_runtime_result(NULL);
   wl_tx_payload_claim_t claim = {0};
   uint32_t operation_id = 0U;
-  size_t encoded_length = 0U;
+  size_t encoded_length = 0U, header_length;
   result.message_id = @REQ_ID@;
   result.detail_kind = @P@_RUNTIME_DETAIL_RPC;
   if (ctx == NULL || runtime == NULL || runtime->rpc_client == NULL || request == NULL)
@@ -21,7 +21,8 @@
     result.domain = @P@_RUNTIME_CORE_ERROR;
     goto start_failed;
   }
-  if (claim.span.length < 20U) {
+  header_length = @M@_rpc_header_size(operation_id, 0);
+  if (claim.span.length < header_length) {
     result.detail.rpc.core_result = WL_ERR_BUF_TOO_SMALL;
     result.domain = @P@_RUNTIME_CORE_ERROR;
     (void)wl_tx_payload_abort(ctx, &claim);
@@ -29,17 +30,17 @@
   }
   /* Encode directly into the link claim: no whole-request copy or heap. */
   @M@_rpc_header_write(claim.span.data, 1U, operation_id, 0, wl_link_session_id(ctx));
-  result.detail.rpc.codec_status = @REQ@_encode(request, claim.span.data + 20U,
-      claim.span.length - 20U, &encoded_length);
+  result.detail.rpc.codec_status = @M@_rpc_@REQ@_encode(request, claim.span.data + header_length,
+      claim.span.length - header_length, &encoded_length);
   if (result.detail.rpc.codec_status != WL_CODEC_OK) {
     result.detail.rpc.core_result = WL_ERR_CORRUPT_PAYLOAD;
     result.domain = @P@_RUNTIME_CODEC_ERROR;
     (void)wl_tx_payload_abort(ctx, &claim);
     goto start_failed;
   }
-  result.detail.rpc.payload_length = encoded_length + 20U;
+  result.detail.rpc.payload_length = encoded_length + header_length;
   result.detail.rpc.core_result = wl_tx_payload_commit(ctx, &claim,
-      encoded_length + 20U, now_ms, &result.detail.rpc.handle);
+      encoded_length + header_length, now_ms, &result.detail.rpc.handle);
   if (result.detail.rpc.core_result != WL_OK) {
     result.domain = @P@_RUNTIME_CORE_ERROR;
     goto start_failed;
@@ -68,43 +69,6 @@ wl_rpc_err_t @M@_@S@_client_inspect(const @M@_runtime_t *runtime,
       ? WL_RPC_OK : WL_RPC_ERR_RESPONSE_MISMATCH;
 }
 
-@M@_runtime_result_t @M@_@S@_client_decode(const wl_rpc_client_result_t *client,
-    @RES@_t *response) {
-  @M@_runtime_result_t result = @M@_runtime_result(NULL);
-  uint32_t operation_id;
-  uint64_t session;
-  int32_t status;
-  result.message_id = @RES_ID@;
-  result.detail_kind = @P@_RUNTIME_DETAIL_RPC;
-  if (client == NULL || response == NULL) return result;
-  result.detail.rpc.operation_id = client->operation_id;
-  result.detail.rpc.application_result = client->application_status;
-  result.detail.rpc.core_result = client->link_result;
-  result.detail.rpc.payload_length = client->response_length;
-  if (client->request_message_id != @REQ_ID@ || client->response_message_id != @RES_ID@) {
-    result.detail.rpc.rpc_result = WL_RPC_ERR_RESPONSE_MISMATCH;
-    result.domain = @P@_RUNTIME_RPC_ERROR;
-    return result;
-  }
-  if (client->state != WL_RPC_CLIENT_COMPLETED) {
-    result.detail.rpc.rpc_result = WL_RPC_ERR_INVALID_STATE;
-    result.domain = @P@_RUNTIME_RPC_ERROR;
-    return result;
-  }
-  result.detail.rpc.rpc_result = @M@_rpc_header_read(client->response_data,
-      client->response_length, 2U, &operation_id, &status, &session);
-  if (result.detail.rpc.rpc_result != WL_RPC_OK ||
-      operation_id != client->operation_id || status != 0) {
-    result.detail.rpc.rpc_result = WL_RPC_ERR_RESPONSE_MISMATCH;
-    result.domain = @P@_RUNTIME_RPC_ERROR;
-    return result;
-  }
-  result.detail.rpc.codec_status = @RES@_decode(client->response_data + 20U,
-      client->response_length - 20U, response);
-  result.domain = result.detail.rpc.codec_status == WL_CODEC_OK ? @P@_RUNTIME_OK : @P@_RUNTIME_CODEC_ERROR;
-  return result;
-}
-
 wl_rpc_err_t @M@_@S@_client_release(@M@_runtime_t *runtime, uint32_t operation_id) {
   wl_rpc_client_result_t client;
   wl_rpc_err_t result = @M@_@S@_client_inspect(runtime, operation_id, &client);
@@ -114,11 +78,11 @@ wl_rpc_err_t @M@_@S@_client_release(@M@_runtime_t *runtime, uint32_t operation_i
 static wl_codec_status_t @M@_@S@_encode_response(const void *response,
     uint8_t *out, size_t capacity, size_t *length, bool owned) {
 #if @REQ_P@_HAS_VALUE && @RES_P@_HAS_VALUE
-  if (owned) return @RES@_value_encode(response, out, capacity, length);
+  if (owned) return @M@_rpc_@RES@_value_encode(response, out, capacity, length);
 #else
   (void)owned;
 #endif
-  return @RES@_encode(response, out, capacity, length);
+  return @M@_rpc_@RES@_encode(response, out, capacity, length);
 }
 
 static @M@_runtime_result_t @M@_@S@_server_finish(@M@_runtime_t *runtime,
@@ -174,12 +138,13 @@ wl_err_t @M@_@S@_encode_submission(const void *request, uint32_t operation_id, u
     uint8_t *out, size_t capacity, size_t *length) {
   wl_codec_status_t status;
   size_t size = 0U;
-  if (capacity < 20U) return WL_ERR_BUF_TOO_SMALL;
+  const size_t header_length = @M@_rpc_header_size(operation_id, 0);
+  if (capacity < header_length) return WL_ERR_BUF_TOO_SMALL;
   if (session == 0U) return WL_ERR_INVALID_ARG;
   @M@_rpc_header_write(out, 1U, operation_id, 0, session);
-  status = @REQ@_value_encode(request, out + 20U, capacity - 20U, &size);
+  status = @M@_rpc_@REQ@_value_encode(request, out + header_length, capacity - header_length, &size);
   if (status != WL_CODEC_OK) return WL_ERR_CORRUPT_PAYLOAD;
-  *length = size + 20U;
+  *length = size + header_length;
   return WL_OK;
 }
 #endif

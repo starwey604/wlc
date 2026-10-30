@@ -1,0 +1,58 @@
+    case @REQUEST_MACRO@_MESSAGE_ID: {
+      wl_rpc_request_identity_t identity = {@FINGERPRINT_INIT@};
+      wl_rpc_server_request_t server_request = {0};
+@REPLAY_VARIABLES@      result.detail_kind = @PREFIX@_RUNTIME_DETAIL_RPC;
+      if (event->type != @EXPECTED_EVENT@) {
+        result.domain = @PREFIX@_RUNTIME_DELIVERY_MISMATCH;
+        break;
+      }
+      if (runtime->rpc_server == NULL) {
+        result.domain = @PREFIX@_RUNTIME_MISSING_ROUTE;
+        break;
+      }
+      if (runtime->@SERVICE_NAME@.request_scratch == NULL) {
+        result.domain = @PREFIX@_RUNTIME_MISSING_SCRATCH;
+        break;
+      }
+      result.detail.rpc.codec_status = @REQUEST@_decode(event->payload, event->payload_len, runtime->@SERVICE_NAME@.request_scratch);
+      if (result.detail.rpc.codec_status != WL_CODEC_OK) {
+        result.domain = @PREFIX@_RUNTIME_CODEC_ERROR;
+        break;
+      }
+      if (!runtime->@SERVICE_NAME@.request_scratch->has_@OPERATION_FIELD@ || runtime->@SERVICE_NAME@.request_scratch->@OPERATION_FIELD@ == 0U) {
+        result.detail.rpc.rpc_result = WL_RPC_ERR_INVALID_ARG;
+        result.domain = @PREFIX@_RUNTIME_RPC_ERROR;
+        break;
+      }
+      result.detail.rpc.operation_id = runtime->@SERVICE_NAME@.request_scratch->@OPERATION_FIELD@;
+@FINGERPRINT@      identity.operation_id = result.detail.rpc.operation_id;
+      identity.request_message_id = @REQUEST_MACRO@_MESSAGE_ID;
+      identity.response_message_id = @RESPONSE_MACRO@_MESSAGE_ID;
+      identity.peer_session_id = event->peer_session_id;
+@PEER_OBSERVE@@BEGIN@      if (result.detail.rpc.rpc_result != WL_RPC_OK) {
+        result.domain = @PREFIX@_RUNTIME_RPC_ERROR;
+        break;
+      }
+      switch (result.detail.rpc.rpc_disposition) {
+        case WL_RPC_SERVER_NEW:
+          result.detail.rpc.server_request = server_request;
+          if (runtime->@SERVICE_NAME@.request_handler == NULL) {
+            result.detail.rpc.rpc_result = wl_rpc_server_abandon(runtime->rpc_server, &server_request);
+            result.domain = @PREFIX@_RUNTIME_MISSING_ROUTE;
+            break;
+          }
+          result.detail.rpc.application_result = runtime->@SERVICE_NAME@.request_handler(runtime->@SERVICE_NAME@.user_data, runtime->@SERVICE_NAME@.request_scratch, &server_request, @DELIVERY@);
+          if (result.detail.rpc.application_result != 0) {
+            result.detail.rpc.rpc_result = wl_rpc_server_abandon(runtime->rpc_server, &server_request);
+            result.domain = @PREFIX@_RUNTIME_APPLICATION_ERROR;
+          } else {
+            result.domain = @PREFIX@_RUNTIME_OK;
+          }
+          break;
+@REPLAY_DISPOSITIONS@        default:
+          result.detail.rpc.rpc_result = WL_RPC_ERR_INVALID_STATE;
+          result.domain = @PREFIX@_RUNTIME_RPC_ERROR;
+          break;
+      }
+      break;
+    }

@@ -1,0 +1,6 @@
+      result.detail.rpc.codec_status = @M@_rpc_@REQ@_wlc_detail_fingerprint(runtime->@S@.request_scratch,
+          &identity.request_fingerprint, &canonical_length);
+      if (result.detail.rpc.codec_status != WL_CODEC_OK) {
+        result.domain = @P@_RUNTIME_CODEC_ERROR;
+        break;
+      }
