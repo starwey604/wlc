@@ -7,6 +7,8 @@ mod endpoint_codegen;
 pub mod endpoint_layout;
 mod endpoint_transport_codegen;
 pub mod identity;
+pub mod kernel_codegen;
+pub mod kernel_profile;
 mod lexer;
 mod loader;
 mod managed_rpc_codegen;
@@ -25,6 +27,8 @@ mod value_codegen;
 
 pub use codegen::{GeneratedC, generate_c, generate_c_for_profile};
 pub use identity::{IDENTITY_ALGORITHM, binding_profile_identity, schema_identity};
+pub use kernel_codegen::{GeneratedKernelC, generate_kernel_c};
+pub use kernel_profile::{KernelProfile, analyze_kernel_profile, compose_kernel_profiles};
 pub use loader::{LoadedSchema, load_schema};
 pub use manifest::{
     ARTIFACT_DIGEST_ALGORITHM, CODEGEN_CONTRACT_MAJOR, CODEGEN_CONTRACT_MINOR,

@@ -41,7 +41,7 @@
   ],
   "artifact_digest_algorithm": "fnv1a64-domain-bytes-v1",
   "artifacts": [
-    {"path": "business.c", "size": 331506, "digest": "0x21f028d4bee82024"},
+    {"path": "business.c", "size": 331511, "digest": "0x16fc60442d7923c6"},
     {"path": "business.h", "size": 23596, "digest": "0xdc970965a904bc34"},
     {"path": "business_bindings.c", "size": 47568, "digest": "0xbc6eaf78bd44b2a0"},
     {"path": "business_bindings.h", "size": 11768, "digest": "0x180a96f922da43e5"},

@@ -15,6 +15,14 @@ struct Arguments {
 
 #[derive(clap::Subcommand)]
 enum Command {
+    /// Generate the isolated static endpoint kernel (profile version 2).
+    CompileKernel {
+        schema: PathBuf,
+        #[arg(long, required = true)]
+        profile: Vec<PathBuf>,
+        #[arg(long)]
+        out_dir: PathBuf,
+    },
     /// Generate a complete UDP C++ / Python SDK with sync and async clients.
     Sdk {
         schema: PathBuf,
@@ -117,6 +125,38 @@ fn is_portable_c_identifier(value: &str) -> bool {
 fn main() -> Result<()> {
     let arguments = Arguments::parse();
     let (schema_path, previous, profile, operation) = match arguments.command {
+        Command::CompileKernel {
+            schema,
+            profile,
+            out_dir,
+        } => {
+            let loaded = wlc::load_schema(&schema)?;
+            let model = wlc::analyze_schema(&loaded.schema).map_err(miette::Report::new)?;
+            let mut fragments = Vec::new();
+            for path in &profile {
+                let source = fs::read_to_string(path).into_diagnostic()?;
+                let parsed = wlc::parse_binding_profile(&source).map_err(miette::Report::new)?;
+                fragments.push(
+                    wlc::analyze_kernel_profile(&parsed, &model).map_err(miette::Report::new)?,
+                );
+            }
+            let profile = wlc::compose_kernel_profiles(&fragments).map_err(miette::Report::new)?;
+            let module = schema
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("schema");
+            let generated =
+                wlc::generate_kernel_c(&model, &profile, module).map_err(miette::Report::new)?;
+            fs::create_dir_all(&out_dir).into_diagnostic()?;
+            for (name, content) in generated.files {
+                fs::write(out_dir.join(name), content).into_diagnostic()?;
+            }
+            println!(
+                "generated static kernel contract 1, profile version 2 in {}",
+                out_dir.display()
+            );
+            return Ok(());
+        }
         Command::Sdk {
             schema,
             profile,

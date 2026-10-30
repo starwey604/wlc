@@ -276,7 +276,13 @@ impl Parser {
                 "direct" => BindingDeclaration::Direct(self.parse_route("direct")?),
                 "latest" => BindingDeclaration::Latest(self.parse_route("latest")?),
                 "fifo" => BindingDeclaration::Fifo(self.parse_route("fifo")?),
-                "rpc" => BindingDeclaration::Rpc(Box::new(self.parse_rpc()?)),
+                "rpc" => {
+                    BindingDeclaration::Rpc(Box::new(self.parse_rpc(if version.value == 2 {
+                        "unreliable"
+                    } else {
+                        "reliable"
+                    })?))
+                }
                 _ => {
                     return Err(self.error(
                         kind.span,
@@ -369,7 +375,7 @@ impl Parser {
         })
     }
 
-    fn parse_rpc(&mut self) -> Result<RpcBinding, ProfileParseError> {
+    fn parse_rpc(&mut self, default_delivery: &str) -> Result<RpcBinding, ProfileParseError> {
         let name = self.word("RPC service name")?;
         self.expect_symbol(TokenKind::LeftBrace, "`{` before RPC properties")?;
         let mut request = None;
@@ -449,11 +455,11 @@ impl Parser {
             guarantee,
             codec,
             request_delivery: request_delivery.unwrap_or_else(|| Spanned {
-                value: "reliable".to_owned(),
+                value: default_delivery.to_owned(),
                 span: closing_span,
             }),
             response_delivery: response_delivery.unwrap_or_else(|| Spanned {
-                value: "reliable".to_owned(),
+                value: default_delivery.to_owned(),
                 span: closing_span,
             }),
         })

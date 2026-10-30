@@ -1,7 +1,7 @@
 
 static inline wl_codec_status_t @C@encode(const @C@desc_t *d, const void *value,
                                     uint8_t *out, size_t cap, size_t *length) {
-  size_t n;
+  size_t n = 0U;
   wl_codec_status_t s = @C@measure(d, value, &n);
   if (s != WL_CODEC_OK || length == NULL || (n != 0U && out == NULL))
     return s == WL_CODEC_OK ? WL_CODEC_ERR_INVALID_VALUE : s;

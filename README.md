@@ -1,5 +1,10 @@
 # wlc
 
+The isolated static endpoint prototype is available through `compile-kernel`
+with an explicitly migrated profile version 2. See
+[`docs/static-kernel.md`](docs/static-kernel.md) for its contract, generated API
+and current limits. It is not yet the default product runtime.
+
 Endpoint setup now takes a `wl_link_defaults_t` value explicitly:
 `*_endpoint_config_defaults(&config, environment, wl_link_defaults())` and
 `*_endpoint_init(&endpoint, environment, wl_link_defaults())` select CRC16.
