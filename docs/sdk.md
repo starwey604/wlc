@@ -19,7 +19,7 @@ python -m pip install build
 python -m build sdk -Ccmake.define.CMAKE_PREFIX_PATH=/absolute/path/to/wirelink-install
 ```
 
-Install the matching Wirelink 0.8.0 checkout first, enabling
+Install the matching Wirelink 0.12.0 checkout first, enabling
 `WIRELINK_BUILD_CPP_BINDINGS=ON`, `WIRELINK_BUILD_PLATFORM=ON`,
 `WIRELINK_BUILD_EXAMPLES=OFF`, `BUILD_SHARED_LIBS=OFF` and
 `CMAKE_POSITION_INDEPENDENT_CODE=ON`; provide standalone Asio headers through
@@ -126,7 +126,7 @@ The generator currently uses default endpoint storage and capacity.
 
 Subscriptions, Python handlers, Serial/USB, Bulk, dynamic schemas,
 free-threaded Python and subinterpreters are separate work. The binding
-source API is revision 2; C ABI stays 32. No stable C++ binary ABI is promised.
+source API is revision 2; generated C uses contract 0.12. No stable C++ binary ABI is promised.
 Multiple wheels can coexist, but standalone C++ SDKs with overlapping generated
 C symbols require shared codec composition that this command does not provide.
 
