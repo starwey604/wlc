@@ -6,8 +6,8 @@ use miette::Diagnostic;
 use thiserror::Error;
 
 use crate::{
-    BindingProfileModel, ManifestArtifact, SemanticModel, binding_profile_identity, generate_c,
-    generate_codegen_manifest, generate_runtime_c,
+    BindingProfileModel, ManifestArtifact, SemanticModel, binding_profile_identity,
+    generate_c_for_profile, generate_codegen_manifest, generate_runtime_c,
 };
 
 mod cpp;
@@ -45,7 +45,8 @@ pub fn generate_sdk(
 ) -> Result<GeneratedSdk, SdkCodegenError> {
     let plan = plan::Plan::new(schema, profile, options)?;
     let name = &options.name;
-    let c = generate_c(schema, name).map_err(|e| SdkCodegenError(e.to_string()))?;
+    let c = generate_c_for_profile(schema, profile, name)
+        .map_err(|e| SdkCodegenError(e.to_string()))?;
     let runtime =
         generate_runtime_c(schema, profile, name).map_err(|e| SdkCodegenError(e.to_string()))?;
     let mut artifacts = BTreeMap::from([

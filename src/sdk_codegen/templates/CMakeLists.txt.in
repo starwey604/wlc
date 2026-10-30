@@ -4,7 +4,7 @@ project(@CMAKE_PACKAGE@ VERSION @CMAKE_VERSION@ LANGUAGES C CXX)
 include(CTest)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
-find_package(Wirelink 0.8.0 EXACT CONFIG REQUIRED)
+find_package(Wirelink 0.12.0 EXACT CONFIG REQUIRED)
 foreach(dependency cpp_host platform)
   if(NOT TARGET Wirelink::${dependency})
     message(FATAL_ERROR "Install Wirelink with CPP_BINDINGS and PLATFORM enabled")
@@ -32,6 +32,15 @@ target_include_directories(@NAME@_client PUBLIC
   $<INSTALL_INTERFACE:include>
   PRIVATE generated)
 target_link_libraries(@NAME@_client PUBLIC Wirelink::cpp_host PRIVATE Wirelink::platform)
+option(@UPPER@_RPC_LAYOUT_ENABLE "Mark generated RPC ELF sections (rebuild archive to change)"
+  ${WIRELINK_WLC_RPC_LAYOUT_ENABLE})
+wirelink_wlc_configure_rpc_layout(TARGET @NAME@_client MODULE @NAME@
+  ENABLE "${@UPPER@_RPC_LAYOUT_ENABLE}")
+get_target_property(_rpc_layout @NAME@_client WIRELINK_WLC_RPC_LAYOUT_ENABLE)
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/wlc-sdk-build.json"
+  "{\n  \"format\": \"wirelink-sdk-build-v1\",\n  \"namespace\": \"@NAME@\",\n  \"rpc_layout_enable\": ${_rpc_layout}\n}\n")
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/wlc-sdk-build.json"
+  DESTINATION ${CMAKE_INSTALL_DATADIR}/@NAME@ COMPONENT development)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(@NAME@_client PRIVATE -Wall -Wextra -Wpedantic)
 endif()
@@ -72,6 +81,8 @@ if(@UPPER@_BUILD_PYTHON)
   endif()
   install(TARGETS @NAME@_native LIBRARY DESTINATION @PY_PACKAGE@ COMPONENT python
     RUNTIME DESTINATION @PY_PACKAGE@ COMPONENT python)
+  install(FILES "${CMAKE_CURRENT_BINARY_DIR}/wlc-sdk-build.json"
+    DESTINATION @PY_PACKAGE@ COMPONENT python)
 endif()
 
 if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/CMakeLists.txt")

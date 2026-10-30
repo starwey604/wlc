@@ -1,5 +1,6 @@
 @@PACKAGE_INIT@@
 include(CMakeFindDependencyMacro)
-find_dependency(Wirelink 0.8.0 EXACT CONFIG)
+find_dependency(Wirelink 0.12.0 EXACT CONFIG)
+set(@CMAKE_PACKAGE@_RPC_LAYOUT_ENABLE @SDK_RPC_LAYOUT_VALUE@)
 include("${CMAKE_CURRENT_LIST_DIR}/@CMAKE_PACKAGE@Targets.cmake")
 check_required_components(@CMAKE_PACKAGE@)

@@ -7,6 +7,7 @@ pub(super) fn emit(plan: &Plan<'_>, files: &mut BTreeMap<String, String>) {
     let distribution = format!("wirelink-{}", plan.package.replace('_', "-"));
     let upper = name.to_uppercase();
     let api = BINDING_API_VERSION.to_string();
+    let layout_value = format!("@{upper}_RPC_LAYOUT_ENABLE@");
     let values = [
         ("NAME", name.as_str()),
         ("PY_PACKAGE", plan.package.as_str()),
@@ -16,6 +17,7 @@ pub(super) fn emit(plan: &Plan<'_>, files: &mut BTreeMap<String, String>) {
         ("UPPER", upper.as_str()),
         ("DISTRIBUTION", distribution.as_str()),
         ("BINDING_API", api.as_str()),
+        ("SDK_RPC_LAYOUT_VALUE", layout_value.as_str()),
     ];
     for (path, template) in [
         (

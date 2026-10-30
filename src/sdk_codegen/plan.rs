@@ -102,6 +102,16 @@ impl<'a> Plan<'a> {
             ));
         }
         let c = CModel::new(schema, name).map_err(|e| error(e.to_string()))?;
+        let rpc_plan = crate::codec_plan::CodecPlan::new(
+            schema,
+            crate::codec_plan::CodecProfile::ManagedTagged,
+        )
+        .map_err(|e| error(e.to_string()))?;
+        let rpc_maxima = rpc_plan
+            .messages
+            .iter()
+            .map(|(&id, plan)| (id, plan.max_encoded_size))
+            .collect::<std::collections::HashMap<_, _>>();
         let mut types = BTreeSet::from_iter(
             [
                 "Client",
@@ -212,9 +222,16 @@ impl<'a> Plan<'a> {
             insert(&mut methods, format!("{method}_request"), &rpc.name)?;
             insert(&mut methods, format!("{method}_async"), &rpc.name)?;
             for id in [rpc.request_id, rpc.response_id] {
-                if c.maxima[&id]
+                if rpc_maxima[&id]
                     .unwrap()
                     .checked_add(rpc.metadata_size())
+                    .map(|n| {
+                        if id == rpc.response_id {
+                            n.max(rpc.minimum_response_size())
+                        } else {
+                            n
+                        }
+                    })
                     .is_none_or(|n| n > 2048)
                 {
                     return Err(error(format!(
