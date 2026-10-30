@@ -1,0 +1,46 @@
+/* A descriptor embeds the ordinary wire plan as its first member. Owned
+ * lengths/data use actual member offsets; no view struct aliases an owned one. */
+typedef struct {
+  @C@desc_t wire;
+  size_t size;
+  void (*defaults)(void *);
+} @C@value_desc_t;
+static inline wl_codec_status_t @C@value_decode(const @C@desc_t *, const uint8_t *, size_t, void *);
+static void @C@value_clear(const @C@desc_t *wire, void *out) {
+  const @C@value_desc_t *d = (const @C@value_desc_t *)wire;
+  memset(out, 0, d->size);
+  d->defaults(out);
+}
+static wl_codec_status_t @C@value_read(const @C@field_t *f, const uint8_t *in,
+    size_t n, size_t *at, void *out) {
+// WLC_IF BYTES STRING MESSAGE
+  if (f->kind == @K@BYTES || f->kind == @K@STRING || f->kind == @K@MESSAGE) {
+    uint64_t length;
+    wl_codec_status_t status = @C@getv(in, n, at, &length);
+    if (status != WL_CODEC_OK) return status;
+    if ((f->kind == @K@BYTES || f->kind == @K@STRING) &&
+        f->max_length != 0U && length > f->max_length) return WL_CODEC_ERR_INVALID_VALUE;
+    if (length > n - *at) return WL_CODEC_ERR_MALFORMED;
+    size_t bytes = (size_t)length;
+// WLC_IF MESSAGE
+    if (f->kind == @K@MESSAGE) {
+      status = @C@value_decode(f->nested, in + *at, bytes, out);
+      if (status != WL_CODEC_OK) return status;
+    } else
+// WLC_END
+    {
+// WLC_IF STRING
+      if (f->kind == @K@STRING && !@C@utf8(in + *at, bytes)) return WL_CODEC_ERR_UTF8;
+// WLC_END
+      uint8_t *data = (uint8_t *)out + f->capacity;
+      *(size_t *)out = bytes;
+      if (f->string_default != NULL) memset(data, 0, (size_t)f->max_length + 1U);
+      if (bytes != 0U) memcpy(data, in + *at, bytes);
+      if (f->kind == @K@STRING) data[bytes] = 0U;
+    }
+    *at += bytes;
+    return WL_CODEC_OK;
+  }
+// WLC_END
+  return @C@read_value(f, in, n, at, out);
+}

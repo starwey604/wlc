@@ -6,21 +6,28 @@ use thiserror::Error;
 use crate::semantic::{SemanticModel, Symbol};
 
 mod bindings;
-mod bounds;
 mod descriptor;
 mod engine;
+mod features;
+mod fixed;
 mod header;
 mod names;
+mod owned;
 mod packed;
 mod plan;
+pub(crate) mod positional;
+mod positional_fixed;
+mod symbols;
+pub(crate) use symbols::Symbols;
 mod wire;
 
 use bindings::{emit_bindings_header, emit_bindings_source};
-pub(crate) use descriptor::field_descriptor_data;
+pub(crate) use descriptor::{field_descriptor_data, tagged_dependencies, tagged_name};
 use engine::emit_source;
 use header::emit_message_definition;
 use names::ieee_float_usage;
 pub(crate) use names::{c_identifier, c_type, type_name, upper_snake};
+pub(crate) use owned::{owned_decode_source, owned_descriptor, scalar_value_decode};
 pub(crate) use plan::CModel;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -43,7 +50,79 @@ pub struct CodegenError(pub String);
 /// Emits standalone codec and Wirelink-binding translation units for one schema.
 /// `module_name` controls output includes, symbols, and header guards.
 pub fn generate_c(model: &SemanticModel, module_name: &str) -> Result<GeneratedC, CodegenError> {
-    let plan = CModel::new(model, module_name)?;
+    generate_c_with_fingerprints(model, module_name, None, None)
+}
+
+/// Matched profile generation omits canonical fingerprint code for light methods.
+/// Standalone codecs retain their generator-private canonical helpers.
+pub fn generate_c_for_profile(
+    model: &SemanticModel,
+    profile: &crate::BindingProfileModel,
+    module_name: &str,
+) -> Result<GeneratedC, CodegenError> {
+    use crate::profile_semantic::RpcGuarantee;
+    if profile
+        .rpc_services
+        .iter()
+        .all(|s| s.guarantee == RpcGuarantee::Replay)
+        && profile
+            .send_routes
+            .iter()
+            .chain(&profile.direct_routes)
+            .all(|r| r.codec == crate::codec_plan::CodecProfile::SchemaV1)
+        && profile
+            .retained_routes
+            .iter()
+            .all(|r| r.codec == crate::codec_plan::CodecProfile::SchemaV1)
+    {
+        return generate_c(model, module_name);
+    }
+    let requests = profile
+        .rpc_services
+        .iter()
+        .filter(|s| profile.has_rpc_server() && s.guarantee == RpcGuarantee::Replay)
+        .map(|s| s.request_id)
+        .collect();
+    generate_c_with_fingerprints(model, module_name, Some(&requests), Some(profile))
+}
+
+pub(crate) fn generate_c_with_fingerprints(
+    model: &SemanticModel,
+    module_name: &str,
+    fingerprints: Option<&std::collections::BTreeSet<u16>>,
+    profile: Option<&crate::BindingProfileModel>,
+) -> Result<GeneratedC, CodegenError> {
+    let mut plan = CModel::new(model, module_name)?;
+    let mut codecs =
+        crate::codec_plan::CodecPlan::new(model, crate::codec_plan::CodecProfile::SchemaV1)
+            .map_err(|e| CodegenError(e.to_string()))?;
+    if let Some(profile) = profile {
+        for (id, codec) in profile
+            .send_routes
+            .iter()
+            .chain(&profile.direct_routes)
+            .map(|r| (r.message_id, r.codec))
+            .chain(
+                profile
+                    .retained_routes
+                    .iter()
+                    .map(|r| (r.message_id, r.codec)),
+            )
+        {
+            // A route selects only its top-level codec. Nested messages retain
+            // the enclosing tagged format, independently of their own routes.
+            let mut selected = crate::codec_plan::CodecPlan::selected(model, codec, [id])
+                .map_err(|e| CodegenError(e.to_string()))?;
+            codecs
+                .messages
+                .insert(id, selected.messages.remove(&id).unwrap());
+        }
+    }
+    plan.maxima = codecs
+        .messages
+        .iter()
+        .map(|(&id, p)| (id, p.max_encoded_size))
+        .collect();
     let module = plan.module;
     let guard = format!("WIRELINK_GENERATED_{}_H", upper_snake(&module));
     let values_guard = format!("{guard}_VALUES");
@@ -104,6 +183,11 @@ pub fn generate_c(model: &SemanticModel, module_name: &str) -> Result<GeneratedC
         let name = type_name(&message.name);
         let macro_name = upper_snake(&message.name);
         values_header.push_str(&format!(
+            "#define {macro_name}_CODEC_PROFILE {}U\n#define {macro_name}_CODEC_FORMAT \"{}\"\n",
+            codecs.messages[&message.id].profile.code(),
+            codecs.messages[&message.id].profile.name()
+        ));
+        values_header.push_str(&format!(
             "#define {macro_name}_MESSAGE_ID {}U\n",
             message.id,
         ));
@@ -132,8 +216,15 @@ pub fn generate_c(model: &SemanticModel, module_name: &str) -> Result<GeneratedC
     }
     header.push_str("#ifdef __cplusplus\n}\n#endif\n\n#endif\n");
     values_header.push_str("#ifdef __cplusplus\n}\n#endif\n\n#endif\n");
-    let mut source = emit_source(&module, &messages);
-    crate::value_codegen::source(&mut source, &messages, &static_max_encoded_sizes);
+    let symbols = Symbols::public(&module);
+    let mut source = emit_source(&messages, &codecs, fingerprints, &symbols);
+    crate::value_codegen::source(
+        &mut source,
+        &messages,
+        &static_max_encoded_sizes,
+        &codecs,
+        &symbols,
+    );
     let bindings_header = emit_bindings_header(&module, &guard, &messages);
     let bindings_source = emit_bindings_source(&module, &messages);
     Ok(GeneratedC {
@@ -143,4 +234,80 @@ pub fn generate_c(model: &SemanticModel, module_name: &str) -> Result<GeneratedC
         bindings_header,
         bindings_source,
     })
+}
+
+/// Render private business codecs directly from field plans and a symbol policy.
+/// The semantic schema and public business types are borrowed unchanged.
+pub(crate) fn private_source(
+    model: &SemanticModel,
+    module: &str,
+    profile: &crate::BindingProfileModel,
+) -> String {
+    use crate::codec_plan::{CodecPlan, CodecProfile};
+    use std::fmt::Write;
+    let c = CModel::new(model, module).expect("validated C model");
+    let mut codecs =
+        CodecPlan::selected(model, CodecProfile::ManagedTagged, []).expect("validated codec plan");
+    for service in profile.rpc_services.iter().filter(|s| s.is_managed()) {
+        let selected = CodecPlan::selected(
+            model,
+            service.codec,
+            [service.request_id, service.response_id],
+        )
+        .expect("validated route codec");
+        for (id, plan) in selected.messages {
+            if id == service.request_id || id == service.response_id {
+                codecs.messages.insert(id, plan);
+            } else {
+                // A nested dependency must not overwrite another method's
+                // explicit top-level codec, regardless of service order.
+                codecs.messages.entry(id).or_insert(plan);
+            }
+        }
+    }
+    let messages = c
+        .messages
+        .into_iter()
+        .filter(|message| codecs.messages.contains_key(&message.id))
+        .collect::<Vec<_>>();
+    let symbols = Symbols::private(module);
+    let mut out = String::new();
+    for message in &messages {
+        let name = symbols.message(message);
+        let ty = type_name(&message.name);
+        writeln!(out, "static inline void {name}_clear({ty}_t *);\nstatic inline size_t {name}_encoded_size(const {ty}_t *);\nstatic inline wl_codec_status_t {name}_encode(const {ty}_t *, uint8_t *, size_t, size_t *);\nstatic inline wl_codec_status_t {name}_decode(const uint8_t *, size_t, {ty}_t *);").unwrap();
+        if c.maxima[&message.id].is_some() {
+            writeln!(out, "static inline void {name}_value_clear({ty}_value_t *);\nstatic inline size_t {name}_value_encoded_size(const {ty}_value_t *);\nstatic inline wl_codec_status_t {name}_value_encode(const {ty}_value_t *, uint8_t *, size_t, size_t *);\nstatic inline wl_codec_status_t {name}_value_decode(const uint8_t *, size_t, {ty}_value_t *);\nstatic inline wl_codec_status_t {name}_value_from_view(const {ty}_t *, {ty}_value_t *);\nstatic inline wl_codec_status_t {name}_value_to_view(const {ty}_value_t *, {ty}_t *);").unwrap();
+        }
+    }
+    let empty = Default::default();
+    // Replay hashes the public Schema-v1 business representation. Private wire
+    // codecs never supply canonical fingerprints, including in replay-only profiles.
+    out.push_str(&emit_source(&messages, &codecs, Some(&empty), &symbols));
+    crate::value_codegen::source(&mut out, &messages, &c.maxima, &codecs, &symbols);
+    if profile.has_rpc_server() {
+        let requests = profile
+            .rpc_services
+            .iter()
+            .filter(|service| {
+                service.is_managed()
+                    && service.guarantee == crate::profile_semantic::RpcGuarantee::Replay
+            })
+            .map(|service| service.request_id)
+            .collect::<std::collections::BTreeSet<_>>();
+        for message in messages
+            .iter()
+            .filter(|message| requests.contains(&message.id))
+        {
+            let canonical = plan::MessagePlan::with_profile(message, CodecProfile::SchemaV1);
+            let name = format!("{}_wlc_detail_fingerprint", symbols.message(message));
+            if fixed::supports(&canonical) {
+                out.push_str(&fixed::canonical_fingerprint(&canonical, &name, &symbols));
+            } else {
+                let ty = type_name(&message.name);
+                writeln!(out, "wl_codec_status_t {ty}_wlc_detail_fingerprint(const {ty}_t *, uint64_t *, size_t *);\nstatic inline wl_codec_status_t {name}(const {ty}_t *value, uint64_t *hash, size_t *length) {{ return {ty}_wlc_detail_fingerprint(value, hash, length); }}\n").unwrap();
+            }
+        }
+    }
+    out
 }

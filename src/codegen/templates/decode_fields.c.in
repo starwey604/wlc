@@ -1,0 +1,63 @@
+static inline wl_codec_status_t @DECODE@(const @C@desc_t *d, const uint8_t *in,
+                                    size_t n, void *out) {
+  if (d == NULL || out == NULL || (n != 0U && in == NULL))
+    return WL_CODEC_ERR_INVALID_VALUE;
+  @CLEAR@;
+  // A hint only: missing, unknown or reordered fields still use exact lookup.
+  // Each recursive decode owns its cursor; empty schemas avoid NULL arithmetic.
+  const @C@field_t *next = d->fields;
+  const @C@field_t *end = d->count == 0U ? next : next + d->count;
+  for (size_t at = 0U; at < n;) {
+    uint64_t key;
+    wl_codec_status_t s = @C@getv(in, n, &at, &key);
+    if (s != WL_CODEC_OK) return s;
+    uint64_t raw_number = key >> 3U;
+    uint8_t wire = (uint8_t)(key & 7U);
+    if (raw_number == 0U || raw_number > 65535U ||
+        (wire != 0U && wire != 1U && wire != 2U && wire != 5U))
+      return WL_CODEC_ERR_MALFORMED;
+    uint16_t number = (uint16_t)raw_number;
+    const @C@field_t *f = next != end && next->number == number
+                               ? next : @C@find_field(d, number);
+    if (f == NULL) {
+      if ((s = @C@skip(wire, in, n, &at)) != WL_CODEC_OK) return s;
+      continue;
+    }
+    if (wire != @C@wire(f)) return WL_CODEC_ERR_WIRE_TYPE;
+    next = f->card == @K@REPEATED ? f : f + 1;
+    uint8_t *base = out;
+// WLC_IF PACKED
+    if (f->card == @K@PACKED) {
+      if (*(bool *)(base + f->has)) return WL_CODEC_ERR_DUPLICATE_FIELD;
+      if ((s = @C@read_packed(f, in, n, &at, base + f->value)) != WL_CODEC_OK)
+        return s;
+      *(bool *)(base + f->has) = true;
+      continue;
+    }
+// WLC_END
+    void *p = base + f->value;
+    if (f->card == @K@OPTIONAL) {
+      if (*(bool *)(base + f->has)) return WL_CODEC_ERR_DUPLICATE_FIELD;
+    }
+// WLC_IF REPEATED
+    else {
+      size_t count = *(size_t *)(base + f->count);
+      if (count >= *(size_t *)(base + f->capacity)) return WL_CODEC_ERR_CAPACITY;
+      void *storage = *(void **)(base + f->value);
+      if (storage == NULL) return WL_CODEC_ERR_INVALID_VALUE;
+      p = (uint8_t *)storage + count * f->element;
+    }
+// WLC_END
+    if ((s = @READ_VALUE@(f, in, n, &at, p)) != WL_CODEC_OK) return s;
+    if (f->card == @K@OPTIONAL) *(bool *)(base + f->has) = true;
+// WLC_IF REPEATED
+    else ++*(size_t *)(base + f->count);
+// WLC_END
+  }
+  for (size_t i = 0U; i < d->count; ++i) {
+    const @C@field_t *f = &d->fields[i];
+    if (f->required != 0U && !*(const bool *)((uint8_t *)out + f->has))
+      return WL_CODEC_ERR_MISSING_REQUIRED_FIELD;
+  }
+  return WL_CODEC_OK;
+}

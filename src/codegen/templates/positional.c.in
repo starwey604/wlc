@@ -1,0 +1,103 @@
+/* positional-v1: ID order, fixed optional bitmap, canonical scalar encodings.
+ * This traversal only receives scalar/fixed packed plans; no format sniffing. */
+static wl_codec_status_t @C@positional_measure(const @C@desc_t *d,
+    const void *value, size_t optional_count, size_t *out) {
+  if (value == NULL || out == NULL) return WL_CODEC_ERR_INVALID_VALUE;
+  size_t n = (optional_count + 7U) / 8U;
+  const uint8_t *base = value;
+  for (size_t i = 0U; i < d->count; ++i) {
+    const @C@field_t *f = &d->fields[i];
+    if (!*(const bool *)(base + f->has)) {
+      if (f->required != 0U) return WL_CODEC_ERR_MISSING_REQUIRED_FIELD;
+      continue;
+    }
+    size_t body;
+    wl_codec_status_t s;
+// WLC_IF PACKED
+    if (f->card == @K@PACKED) {
+      if ((s = @C@packed_bytes(f, &body)) != WL_CODEC_OK) return s;
+      if ((s = @C@add(&n, @C@vsize(body))) != WL_CODEC_OK) return s;
+    } else
+// WLC_END
+    {
+      s = @C@body(f, base + f->value, &body, false);
+      if (s != WL_CODEC_OK) return s;
+    }
+    if ((s = @C@add(&n, body)) != WL_CODEC_OK) return s;
+  }
+  *out = n;
+  return WL_CODEC_OK;
+}
+
+static wl_codec_status_t @C@positional_encode(const @C@desc_t *d,
+    const void *value, size_t optional_count, uint8_t *out, size_t capacity,
+    size_t *length) {
+  size_t n;
+  wl_codec_status_t s = @C@positional_measure(d, value, optional_count, &n);
+  if (s != WL_CODEC_OK) return s;
+  if (length == NULL || (n != 0U && out == NULL)) return WL_CODEC_ERR_INVALID_VALUE;
+  if (capacity < n) return WL_CODEC_ERR_CAPACITY;
+  size_t presence = (optional_count + 7U) / 8U;
+  if (presence != 0U) memset(out, 0, presence);
+  uint8_t *cursor = presence == 0U ? out : out + presence;
+  const uint8_t *base = value;
+  size_t bit = 0U;
+  for (size_t i = 0U; i < d->count; ++i) {
+    const @C@field_t *f = &d->fields[i];
+    bool has = *(const bool *)(base + f->has);
+    if (f->required == 0U) {
+      if (has) out[bit / 8U] |= (uint8_t)(1U << (bit % 8U));
+      ++bit;
+    }
+    if (!has) continue;
+// WLC_IF PACKED
+    if (f->card == @K@PACKED) {
+      size_t bytes;
+      if ((s = @C@packed_bytes(f, &bytes)) != WL_CODEC_OK) return s;
+      @C@putv(&cursor, bytes);
+      for (size_t j = 0U; j < f->packed_count; ++j) {
+        s = @C@emit_fixed(f->kind, base + f->value + j * f->element, &cursor);
+        if (s != WL_CODEC_OK) return s;
+      }
+    } else
+// WLC_END
+    {
+      s = @C@emit_value(f, base + f->value, &cursor);
+      if (s != WL_CODEC_OK) return s;
+    }
+  }
+  *length = n;
+  return WL_CODEC_OK;
+}
+
+static wl_codec_status_t @C@positional_decode(const @C@desc_t *d,
+    const uint8_t *input, size_t length, size_t optional_count, void *out) {
+  if (out == NULL || (length != 0U && input == NULL)) return WL_CODEC_ERR_INVALID_VALUE;
+  size_t presence = (optional_count + 7U) / 8U;
+  if (length < presence) return WL_CODEC_ERR_MALFORMED;
+  if (optional_count % 8U != 0U &&
+      (input[presence - 1U] >> (optional_count % 8U)) != 0U)
+    return WL_CODEC_ERR_MALFORMED;
+  @C@clear(d, out);
+  size_t at = presence, bit = 0U;
+  uint8_t *base = out;
+  for (size_t i = 0U; i < d->count; ++i) {
+    const @C@field_t *f = &d->fields[i];
+    bool has = true;
+    if (f->required == 0U) {
+      has = (input[bit / 8U] & (1U << (bit % 8U))) != 0U;
+      ++bit;
+    }
+    if (!has) continue;
+    wl_codec_status_t s;
+// WLC_IF PACKED
+    if (f->card == @K@PACKED)
+      s = @C@read_packed(f, input, length, &at, base + f->value);
+    else
+// WLC_END
+      s = @C@read_value(f, input, length, &at, base + f->value);
+    if (s != WL_CODEC_OK) return s;
+    *(bool *)(base + f->has) = true;
+  }
+  return at == length ? WL_CODEC_OK : WL_CODEC_ERR_MALFORMED;
+}

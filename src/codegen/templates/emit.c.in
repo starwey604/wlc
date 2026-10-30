@@ -1,98 +1,161 @@
-
+// WLC_IF FIXED
 static wl_codec_status_t @EMIT@_fixed(uint8_t kind, const void *value,
                                         @OUT@) {
-  if (kind == WLC_F32) @PUT@32(out, *(const uint32_t *)value);
-  else if (kind == WLC_F64) @PUT@64(out, *(const uint64_t *)value);
-  else if (kind == WLC_FLOAT32) {
-    uint32_t bits32;
-    memcpy(&bits32, value, sizeof(bits32));
-    @PUT@32(out, bits32);
-  } else if (kind == WLC_FLOAT64) {
-    uint64_t bits;
-    memcpy(&bits, value, sizeof(bits));
-    @PUT@64(out, bits);
-  } else return WL_CODEC_ERR_INVALID_VALUE;
+  switch (kind) {
+// WLC_IF F32
+    case @K@F32: @PUT@32(out, *(const uint32_t *)value); break;
+// WLC_END
+// WLC_IF F64
+    case @K@F64: @PUT@64(out, *(const uint64_t *)value); break;
+// WLC_END
+// WLC_IF FLOAT32
+    case @K@FLOAT32: {
+      uint32_t bits32;
+      memcpy(&bits32, value, sizeof(bits32));
+      @PUT@32(out, bits32); break;
+    }
+// WLC_END
+// WLC_IF FLOAT64
+    case @K@FLOAT64: {
+      uint64_t bits;
+      memcpy(&bits, value, sizeof(bits));
+      @PUT@64(out, bits); break;
+    }
+// WLC_END
+    default: return WL_CODEC_ERR_INVALID_VALUE;
+  }
   return WL_CODEC_OK;
 }
-static wl_codec_status_t @EMIT@_value(const wlc_field_t *f, const void *p,
+// WLC_END
+static wl_codec_status_t @EMIT@_value(const @C@field_t *f, const void *p,
                                         @OUT@) {
+  (void)p; (void)out;
   switch (f->kind) {
-    case WLC_BOOL: @PUT@v(out, *(const bool *)p); return WL_CODEC_OK;
-    case WLC_U8: @PUT@v(out, *(const uint8_t *)p); return WL_CODEC_OK;
-    case WLC_U16: @PUT@v(out, *(const uint16_t *)p); return WL_CODEC_OK;
-    case WLC_U32: @PUT@v(out, *(const uint32_t *)p); return WL_CODEC_OK;
-    case WLC_U64: @PUT@v(out, *(const uint64_t *)p); return WL_CODEC_OK;
-    case WLC_I8: @PUT@v(out, wlc_z32(*(const int8_t *)p)); return WL_CODEC_OK;
-    case WLC_I16: @PUT@v(out, wlc_z32(*(const int16_t *)p)); return WL_CODEC_OK;
-    case WLC_I32:
-    case WLC_ENUM: @PUT@v(out, wlc_z32(*(const int32_t *)p)); return WL_CODEC_OK;
-    case WLC_I64: @PUT@v(out, wlc_z64(*(const int64_t *)p)); return WL_CODEC_OK;
-    case WLC_F32:
-    case WLC_F64:
-    case WLC_FLOAT32:
-    case WLC_FLOAT64: return @EMIT@_fixed(f->kind, p, out);
-    case WLC_BYTES: {
+// WLC_IF BOOL
+    case @K@BOOL: @PUT@v(out, *(const bool *)p); return WL_CODEC_OK;
+// WLC_END
+// WLC_IF U8
+    case @K@U8: @PUT@v(out, *(const uint8_t *)p); return WL_CODEC_OK;
+// WLC_END
+// WLC_IF U16
+    case @K@U16: @PUT@v(out, *(const uint16_t *)p); return WL_CODEC_OK;
+// WLC_END
+// WLC_IF U32
+    case @K@U32: @PUT@v(out, *(const uint32_t *)p); return WL_CODEC_OK;
+// WLC_END
+// WLC_IF U64
+    case @K@U64: @PUT@v(out, *(const uint64_t *)p); return WL_CODEC_OK;
+// WLC_END
+// WLC_IF I8
+    case @K@I8: @PUT@v(out, @C@z32(*(const int8_t *)p)); return WL_CODEC_OK;
+// WLC_END
+// WLC_IF I16
+    case @K@I16: @PUT@v(out, @C@z32(*(const int16_t *)p)); return WL_CODEC_OK;
+// WLC_END
+// WLC_IF I32 ENUM
+// WLC_IF I32
+    case @K@I32:
+// WLC_END
+// WLC_IF ENUM
+    case @K@ENUM:
+// WLC_END
+      @PUT@v(out, @C@z32(*(const int32_t *)p)); return WL_CODEC_OK;
+// WLC_END
+// WLC_IF I64
+    case @K@I64: @PUT@v(out, @C@z64(*(const int64_t *)p)); return WL_CODEC_OK;
+// WLC_END
+// WLC_IF F32 F64 FLOAT32 FLOAT64
+// WLC_IF F32
+    case @K@F32:
+// WLC_END
+// WLC_IF F64
+    case @K@F64:
+// WLC_END
+// WLC_IF FLOAT32
+    case @K@FLOAT32:
+// WLC_END
+// WLC_IF FLOAT64
+    case @K@FLOAT64:
+// WLC_END
+      return @EMIT@_fixed(f->kind, p, out);
+// WLC_END
+// WLC_IF BYTES
+    case @K@BYTES: {
       const wl_codec_bytes_t *v = p;
       @PUT@v(out, v->length);
       @COPY_SPAN@(out, v->data, v->length);
       return WL_CODEC_OK;
     }
-    case WLC_STRING: {
+// WLC_END
+// WLC_IF STRING
+    case @K@STRING: {
       const wl_codec_string_t *v = p;
       @PUT@v(out, v->length);
       @COPY_SPAN@(out, v->data, v->length);
       return WL_CODEC_OK;
     }
-    case WLC_MESSAGE: {
+// WLC_END
+// WLC_IF MESSAGE
+    case @K@MESSAGE: {
       size_t child;
       wl_codec_status_t s = @MEASURE@(f->nested, p, &child);
       if (s != WL_CODEC_OK) return s;
       @PUT@v(out, child);
       return @EMIT@_fields(f->nested, p, out);
     }
+// WLC_END
     default: return WL_CODEC_ERR_INVALID_VALUE;
   }
 }
-static wl_codec_status_t @EMIT@_packed(const wlc_field_t *f, const void *p,
+// WLC_IF PACKED
+static wl_codec_status_t @EMIT@_packed(const @C@field_t *f, const void *p,
                                          @OUT@) {
   size_t bytes;
-  wl_codec_status_t s = wlc_packed_bytes(f, &bytes);
+  wl_codec_status_t s = @C@packed_bytes(f, &bytes);
   if (s != WL_CODEC_OK) return s;
   @PUT@v(out, bytes);
-  if (f->kind == WLC_F32 || f->kind == WLC_FLOAT32) {
+// WLC_IF F32 FLOAT32
+  if (f->kind == @K@F32 || f->kind == @K@FLOAT32) {
     for (size_t j = 0U; j < f->packed_count; ++j) {
       uint32_t bits;
       memcpy(&bits, (const uint8_t *)p + j * f->element, sizeof(bits));
       @PUT@32(out, bits);
     }
-  } else if (f->kind == WLC_F64 || f->kind == WLC_FLOAT64) {
+    return WL_CODEC_OK;
+  }
+// WLC_END
+// WLC_IF F64 FLOAT64
+  if (f->kind == @K@F64 || f->kind == @K@FLOAT64) {
     for (size_t j = 0U; j < f->packed_count; ++j) {
       uint64_t bits;
       memcpy(&bits, (const uint8_t *)p + j * f->element, sizeof(bits));
       @PUT@64(out, bits);
     }
-  } else {
-    return WL_CODEC_ERR_INVALID_VALUE;
+    return WL_CODEC_OK;
   }
-  return WL_CODEC_OK;
+// WLC_END
+  return WL_CODEC_ERR_INVALID_VALUE;
 }
-static wl_codec_status_t @EMIT@_fields(const wlc_desc_t *d, const void *value,
+// WLC_END
+static inline wl_codec_status_t @EMIT@_fields(const @C@desc_t *d, const void *value,
                                          @OUT@) {
   for (size_t i = 0U; i < d->count; ++i) {
-    const wlc_field_t *f = &d->fields[i];
+    const @C@field_t *f = &d->fields[i];
     const uint8_t *base = value;
-    if (f->card == WLC_PACKED) {
+// WLC_IF PACKED
+    if (f->card == @K@PACKED) {
       wl_codec_status_t s;
       if (!*(const bool *)(base + f->has)) continue;
       @PUT@_key(out, f);
       if ((s = @EMIT@_packed(f, base + f->value, out)) != WL_CODEC_OK) return s;
       continue;
     }
-    size_t count = f->card == WLC_OPTIONAL
+// WLC_END
+    size_t count = f->card == @K@OPTIONAL
                        ? (*(const bool *)(base + f->has) ? 1U : 0U)
                        : *(const size_t *)(base + f->count);
     for (size_t j = 0U; j < count; ++j) {
-      const void *p = f->card == WLC_REPEATED
+      const void *p = f->card == @K@REPEATED
                           ? *(const uint8_t *const *)(base + f->value) + j * f->element
                           : base + f->value;
       wl_codec_status_t s;

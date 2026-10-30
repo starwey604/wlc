@@ -111,6 +111,8 @@ pub(super) fn validate_names(
                 let prefix = upper_snake(&message.name);
                 let mut generated = vec![
                     format!("{prefix}_MESSAGE_ID"),
+                    format!("{prefix}_CODEC_PROFILE"),
+                    format!("{prefix}_CODEC_FORMAT"),
                     format!("{prefix}_HAS_MAX_ENCODED_SIZE"),
                     format!("{prefix}_HAS_VALUE"),
                 ];

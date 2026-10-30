@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 
 use super::wire::{append_varint, field_wire, fixed_width};
-use super::{CodegenError, bounds::static_max_encoded_sizes, names};
+use super::{CodegenError, names};
+use crate::codec_plan::{CodecPlan, CodecProfile};
 use crate::{
     ast::Cardinality,
     semantic::{FieldSymbol, MessageSymbol, SemanticModel},
@@ -26,7 +27,12 @@ impl<'a> CModel<'a> {
             ));
         }
         let messages = names::ordered_messages(model)?;
-        let maxima = static_max_encoded_sizes(&messages);
+        let maxima = CodecPlan::new(model, CodecProfile::SchemaV1)
+            .map_err(|error| CodegenError(error.to_string()))?
+            .messages
+            .into_iter()
+            .map(|(id, plan)| (id, plan.max_encoded_size))
+            .collect();
         names::validate_names(model, &maxima)?;
         Ok(Self {
             module,
@@ -51,7 +57,10 @@ pub(super) struct FieldKey {
 
 impl FieldKey {
     fn new(field: &FieldSymbol) -> Self {
-        let wire = field_wire(field);
+        Self::with_wire(field, field_wire(field))
+    }
+
+    fn with_wire(field: &FieldSymbol, wire: u8) -> Self {
         let mut value = (u64::from(field.number) << 3) | u64::from(wire);
         let mut bytes = [0; 3];
         let mut length = 0;
@@ -81,12 +90,49 @@ pub(super) struct PackedArray {
 
 pub(super) struct MessagePlan<'a> {
     pub message: &'a MessageSymbol,
+    pub profile: CodecProfile,
     pub lookup: Lookup,
     pub keys: Vec<FieldKey>,
     pub packed: Option<PackedArray>,
 }
 
 impl<'a> MessagePlan<'a> {
+    pub fn from_codec(codec: &crate::codec_plan::MessageCodecPlan<'a>) -> Self {
+        let mut plan = Self::new(codec.message);
+        plan.profile = codec.profile;
+        plan.keys = codec
+            .fields
+            .iter()
+            .map(|f| {
+                FieldKey::with_wire(
+                    f.field,
+                    f.wire_type.unwrap_or_else(|| {
+                        crate::codec_plan::field_wire_type(f.field, codec.profile)
+                    }),
+                )
+            })
+            .collect();
+        plan
+    }
+
+    pub fn with_profile(message: &'a MessageSymbol, profile: CodecProfile) -> Self {
+        let mut plan = Self::new(message);
+        plan.profile = profile;
+        plan.keys = message
+            .fields
+            .iter()
+            .map(|field| {
+                FieldKey::with_wire(field, crate::codec_plan::field_wire_type(field, profile))
+            })
+            .collect();
+        plan
+    }
+
+    pub fn varuint32(&self, field: &FieldSymbol) -> bool {
+        crate::codec_plan::field_encoding(field, self.profile)
+            == crate::codec_plan::ValueEncoding::UnsignedVarint(32)
+    }
+
     pub fn new(message: &'a MessageSymbol) -> Self {
         let lookup = if message.fields.len() <= 8 {
             Lookup::Linear
@@ -124,6 +170,7 @@ impl<'a> MessagePlan<'a> {
         })();
         Self {
             message,
+            profile: CodecProfile::SchemaV1,
             lookup,
             keys,
             packed,

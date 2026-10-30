@@ -1,16 +1,18 @@
 //! Narrow specialization: a message containing exactly one fixed-width array.
 //! Keep element loops bounded by the schema; never unroll arbitrary messages.
+use super::Symbols;
 use super::{c_identifier, plan::MessagePlan, type_name};
-use crate::template::render;
 
-pub(super) fn source(plan: &MessagePlan<'_>) -> Option<String> {
+pub(super) fn source(plan: &MessagePlan<'_>, symbols: &Symbols) -> Option<String> {
     let recipe = plan.packed.as_ref()?;
     let message = plan.message;
     let field = &message.fields[0];
-    Some(render(
+    Some(symbols.render(
         include_str!("../packed_codec.c.in"),
         &[
-            ("NAME", &type_name(&message.name)),
+            ("NAME", &symbols.message(message)),
+            ("TYPE", &type_name(&message.name)),
+            ("STORAGE", symbols.storage),
             ("FIELD", &c_identifier(&field.name)),
             ("NUMBER", &field.number.to_string()),
             ("COUNT", &recipe.count.to_string()),
