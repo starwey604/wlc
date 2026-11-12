@@ -30,10 +30,10 @@ independent of RPC count; its native owner never runs Python.
 
 Task cancellation raises `asyncio.CancelledError` and requests cancellation of that
 native call. Native RPC timeout raises `RpcTimeoutError`; connection shutdown
-settles remaining admitted calls with the SDK's `CancelledError`. Cancellation
-cannot undo work already performed by the peer. At most eight Python operations
+settles remaining admitted calls with `ClosedError`. Cancellation
+cannot undo work already performed by the peer. At most eight `AsyncClient` operations
 can await result delivery per client, including completed results not yet drained;
-native endpoint capacity may reject earlier with `QueueFullError` (default four).
+native endpoint capacity may reject earlier with `QueueFullError` (four calls).
 
 Wheel users do not need Wirelink, WLC, Rust, CMake, nanobind or a compiler.
 Wheels contain private static native dependencies and a separate nanobind domain.
@@ -60,17 +60,15 @@ python -m build --outdir dist \
   -Ccmake.define.CMAKE_PREFIX_PATH=/absolute/path/to/wirelink-install
 ```
 
-RPC ELF layout markers default ON. To disable them, configure
-`-D@UPPER@_RPC_LAYOUT_ENABLE=OFF` and rebuild the SDK archive/wheel. A macro
-in an application consuming a prebuilt SDK cannot alter its compiled runtime.
-The installed CMake package reports `@CMAKE_PACKAGE@_RPC_LAYOUT_ENABLE`;
-`share/@NAME@/wlc-sdk-build.json` (or the Python package-local file in a wheel)
-records the actual selection. This build setting does not change API, wire,
-schema/binding identity, replay or ownership. Markers do not promise RAM
-placement or final adjacency; custom link scripts must handle `.text.wlc.*`
-inputs. See WLC's `docs/rpc-layout.md` for grouping and per-function overrides.
+The optional Python extension uses `@UPPER@_BUILD_PYTHON=ON` (enabled by the
+Python build frontend); native C++ builds default to OFF. `BUILD_TESTING` loads
+hand-maintained `tests/CMakeLists.txt` when present.
+`share/@NAME@/wlc-sdk-build.json`, or the package-local wheel file, records
+`wirelink-sdk-build-v2` and kernel contract `1`. This is build metadata, not a
+memory-placement or linker-grouping control.
 
-The build verifies the paired WLC C ABI using the included manifest. A local
+CMake requires Wirelink 0.13.0 and verifies WLC version/codegen contract 0.13
+from the included kernel manifest against the installed package metadata. A local
 Linux wheel still needs a supported manylinux build/repair before broad release.
 No package is published by generation or building. License notices for bundled
 native dependencies are included; retain them when distributing wheels.
@@ -97,7 +95,12 @@ return; an admission error creates no future callback. Close completes pending
 calls with ClosedError; explicit cancellation completes with CancelledError.
 Neither cancellation nor timeout rolls back remote execution. There is no
 automatic retry or replay suppression: applications own idempotency and retries.
-Long work should return a job ID and complete through ordinary application messages.
+Long work can return a job ID and expose a separate status-query RPC. This SDK
+accepts RPC-only profiles; ordinary status messages use a separate application
+endpoint. C++ timeouts are milliseconds in `1..INT32_MAX`; Python timeouts are
+positive seconds, rounded up to milliseconds, at most `2147483.647` seconds.
+They include owner-command queue time. Owner callbacks must not wait, join or
+destroy their own Session; external close performs the join.
 The installed C++ package requires the matching native Wirelink development package.
 
 ## Values and compatibility

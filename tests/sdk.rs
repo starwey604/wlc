@@ -61,6 +61,10 @@ fn project_is_deterministic_and_preserves_the_existing_c_artifacts() {
     assert!(generated.files.contains_key("python/device_sdk/py.typed"));
     assert!(generated.files["wlc-sdk-manifest.json"].contains("python/device_sdk/__init__.py"));
     assert!(generated.files["cmake/DeviceSdkConfig.cmake.in"].starts_with("@PACKAGE_INIT@"));
+    assert!(!generated.files["cmake/DeviceSdkConfig.cmake.in"].contains("RPC_LAYOUT_ENABLE"));
+    assert!(!generated.files["README.md"].contains("RPC_LAYOUT_ENABLE"));
+    assert!(generated.files["README.md"].contains("DEVICE_BUILD_PYTHON=ON"));
+    assert!(generated.files["README.md"].contains("with `ClosedError`"));
 }
 
 #[test]

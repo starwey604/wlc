@@ -1,11 +1,14 @@
-# Static endpoint kernel
+# Assemble a typed kernel endpoint
 
-This is the default generated execution path in WLC 0.13.0. `compile-kernel`
-is an alias of `compile --profile`; there is no prototype/legacy engine switch.
+[中文](static-kernel-cn.md) · [Code generation](codegen.md)
+
+Generate routes and bounded storage for your deployment:
 
 ```sh
 wlc compile device.wl --profile device.bind.wl --out-dir generated
 ```
+
+The schema defines messages. A profile version 2 selects routes and connector:
 
 ```text
 profile version 2;
@@ -15,41 +18,43 @@ send Sample { delivery = unreliable; }
 direct Sample { delivery = unreliable; }
 ```
 
-The profile selects native_packet/NONE, cobs_stream/CRC16 or
-bus_length16/NONE. Both RPC roles remain enabled. Ordinary routes use public
-Schema-v1 or explicit positional-v1 codecs; managed tagged RPC keeps the prior
-metadata/body wire. Removed delivery/guarantee/mapped/policy declarations fail
-before output. Positional RPC requires explicit migration and is never downgraded.
+Use WLC 0.13.0 / contract 0.13 and Wirelink 0.13.0. Choose `native_packet`/NONE,
+`cobs_stream`/CRC16 or `bus_length16`/NONE; both RPC roles are enabled. Ordinary
+messages use public Schema-v1 or explicit positional-v1. RPC uses managed tagged
+bodies with instance and operation metadata. Kernel routes require bounded types;
+repeated views belong to standalone codecs.
 
-`<module>_kernel.h/.c` connects typed routes to the one `wl_kernel_t` in the
-Wirelink C core. `_kernel_codecs.h` is generator-private; `_kernel_deployment.json`
-reports actual bounds/roles/storage, and `_kernel_manifest.json` records inputs
-and artifact digests. Stream deployments emit only their selected connector.
+## Assemble port, routes and owner
 
-The application owns the port, two RX units, generated endpoint and clock source.
-Initialize `wl_packet_port_t` from C with a nonzero fresh instance identity and
-real sink/notify callbacks, then call `<module>_kernel_init`. The owner calls
-`wl_kernel_step(core, now, budget)`, queries `wl_kernel_ready` and merges that
-with physical I/O readiness using a latched event. There is no hidden clock.
+`<module>_kernel.h/.c` connects typed routes to `wl_kernel_t`. Private RPC codecs
+are in `_kernel_codecs.h`; `_kernel_deployment.json` reports bounds/roles/storage,
+and `_kernel_manifest.json` records inputs and generated artifacts. A stream
+profile emits only its selected connector.
 
-There are four call slots, four reply slots and one ordinary TX snapshot. A
-successful typed `_start` encodes the request before return. A failure creates
-no call or later callback. Pass `now` and a relative timeout in 1..INT32_MAX;
-time waiting for physical submission is included. Physical TX leases remain
-separate from logical call completion and require consumed/drained acknowledgments.
+The application owns the C-initialized packet port, two RX units, generated
+endpoint and time source. Supply a nonzero fresh instance identity, sink and
+notification callbacks; then call `<module>_kernel_init`. The same owner performs
+admission, cancellation, handlers, terminal callbacks and `wl_kernel_step`.
+Merge readiness and the earliest deadline returned by `wl_kernel_ready` with
+adapter readiness and a latched wake before waiting. See the [owner-loop tutorial](https://github.com/starwey604/wirelink/blob/main/docs/tutorial-integration.md).
 
-Callbacks run on the owner and borrow response views until return. Copy with
-`<response>_value_from_view` when retaining them. Cancel is local; timeout/cancel
-cannot undo remote execution. Each admitted call has one terminal outcome;
-its generation handle then becomes invalid. Callbacks may submit/cancel, but
-must not recurse into step/close. Close, stop/join real I/O, and step until
-`wl_kernel_quiescent` before freeing or reinitializing storage.
+## Admit, complete and close
 
-Handlers are synchronous short business functions and fill an owned response.
-They return int32 status (zero success, nonzero business rejection). There are
-no deferred reply tokens, replay cache, ARQ or service scheduler. Applications
-handle idempotency/retry and use job IDs/status messages for long operations.
+The kernel has four outbound calls, four reply snapshots and one ordinary TX
+snapshot. Typed `_start` snapshots a request before success returns; failure
+creates no call or later callback. Supply owner ticks for `now` and a relative
+timeout in `1..INT32_MAX`; queueing counts toward timeout. Physical TX leases
+outlive logical completion when necessary and still require source-consumed and
+physical-drained/error notifications.
 
-See the [full API](../../docs/static-endpoint-kernel-api.md),
-[plan](../../docs/static-endpoint-kernel-refactor-plan-20261030-cn.md), and
-[migration record](../../docs/static-endpoint-kernel-k5-migration-20261031-cn.md).
+Handlers are short synchronous business functions: fill an owned response and
+return zero for success or signed nonzero business status. Terminal callbacks
+borrow response views until return; copy with `*_value_from_view` to retain them.
+Each admitted call has one terminal outcome and then an invalid handle. Callbacks
+may submit/cancel, but cannot recursively step/close. Local cancel/timeout cannot
+undo remote execution. Applications own retry/idempotency and [long jobs](https://github.com/starwey604/wirelink/blob/main/docs/tutorial-jobs.md).
+
+Close the kernel, stop/join real I/O, deliver final completions, and step until
+`wl_kernel_quiescent` before freeing storage. The [kernel API](https://github.com/starwey604/wirelink/blob/main/docs/kernel-api.md)
+defines error and lifetime details; [development checks](https://github.com/starwey604/wirelink/blob/main/docs/development.md)
+show build and test commands.
