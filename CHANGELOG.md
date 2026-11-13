@@ -7,7 +7,9 @@
   unsigned subtraction for ZigZag masks, omit repeated-storage paths from
   schemas without repeated fields, and initialize empty-view placeholders.
   Regenerate C artifacts and provenance manifests; wire bytes and scalar/enum
-  value domains are unchanged.
+  value domains are unchanged. Extend the small-scalar backend to signed,
+  narrow, Boolean, enum and uint64 fields so tiny views do not traverse
+  unrelated span-storage branches; remove unreachable decoder returns.
 
 - Add borrowed-view ordinary sends to static kernel generation. Encode input
   into the same owned final frame before acceptance returns, without an extra

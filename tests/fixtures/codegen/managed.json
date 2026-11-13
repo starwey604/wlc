@@ -29,13 +29,13 @@
   ],
   "artifact_digest_algorithm": "fnv1a64-domain-bytes-v1",
   "artifacts": [
-    {"path": "business.c", "size": 71575, "digest": "0x993db34c504e6416"},
+    {"path": "business.c", "size": 71499, "digest": "0x9b7f398176c06c9b"},
     {"path": "business.h", "size": 6205, "digest": "0x112d02a350ba8dbe"},
     {"path": "business_kernel.c", "size": 7781, "digest": "0xbdf6068c6ea40f70"},
     {"path": "business_kernel.h", "size": 2174, "digest": "0x020bb597cb6a6ce6"},
-    {"path": "business_kernel_codecs.h", "size": 51875, "digest": "0xef8e06c0a68d5f1c"},
+    {"path": "business_kernel_codecs.h", "size": 51812, "digest": "0x802ebea137c7ab45"},
     {"path": "business_kernel_deployment.json", "size": 863, "digest": "0xe62340ff31dc1a05"},
-    {"path": "business_kernel_manifest.json", "size": 1858, "digest": "0xf612aa2586455b91"},
+    {"path": "business_kernel_manifest.json", "size": 1858, "digest": "0x2fa8fd7e5a76a013"},
     {"path": "business_values.h", "size": 6612, "digest": "0x7eeb8ee1a26cf1a1"}
   ]
 }

@@ -526,3 +526,53 @@ int main(void) {
     assert!(!source.contains("static const wlc_desc_t signed_value_desc;"));
     assert!(!source.contains("static const wlc_value_desc_t signed_value_value_desc;"));
 }
+
+#[test]
+fn all_scalar_shapes_match_shared_codec_next_to_larger_span_views() {
+    let source = compile(
+        "version 1; enum Mode @id(1) { ZERO = 0; } message Small @id(2) { required bool flag @id(1); required int8 a @id(2); optional int16 b @id(3) [default = -32768]; required int32 c @id(4); optional int64 d @id(5); required uint64 e @id(6); optional Mode mode @id(7); } message Span @id(3) { required bytes<64> data @id(1); }",
+        r#"#include <assert.h>
+#include <limits.h>
+#include <string.h>
+#include "plan.c"
+static void compare_decode(const uint8_t *bytes, size_t length) {
+  small_t direct = {0}, generic = {0};
+  wl_codec_status_t status = small_decode(bytes, length, &direct);
+  assert(status == wlc_decode(&small_desc, bytes, length, &generic));
+  assert(memcmp(&direct, &generic, sizeof(direct)) == 0);
+}
+int main(void) {
+  const int64_t values[] = {INT64_MIN, INT64_MAX, 0, -1, 1};
+  for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {
+    small_t value = {0};
+    small_value_t owned = {0};
+    uint8_t direct[128], generic[128];
+    size_t length = 0, expected = 0;
+    value.has_flag = value.has_a = value.has_b = value.has_c = true;
+    value.has_d = value.has_e = value.has_mode = true;
+    value.flag = i % 2 != 0; value.a = (int8_t)values[i]; value.b = (int16_t)values[i];
+    value.c = (int32_t)values[i]; value.d = values[i];
+    value.e = (uint64_t)values[i]; value.mode = (int32_t)values[i];
+    assert(small_encode(&value, direct, sizeof(direct), &length) == WL_CODEC_OK);
+    assert(wlc_encode(&small_desc, &value, generic, sizeof(generic), &expected) == WL_CODEC_OK);
+    assert(length == expected && memcmp(direct, generic, length) == 0);
+    assert(small_value_decode(direct, length, &owned) == WL_CODEC_OK);
+    assert(small_value_encode(&owned, generic, sizeof(generic), &expected) == WL_CODEC_OK);
+    assert(length == expected && memcmp(direct, generic, length) == 0);
+    for (size_t n = 0; n <= length; ++n) compare_decode(direct, n);
+    for (size_t n = 0; n < length; ++n) {
+      uint8_t saved = direct[n];
+      for (unsigned b = 0; b < 256; ++b) {
+        direct[n] = (uint8_t)b;
+        compare_decode(direct, length);
+      }
+      direct[n] = saved;
+    }
+  }
+  return 0;
+}"#,
+    );
+    assert!(source.contains("small_wlc_detail_decode_fields"));
+    assert!(!source.contains("return wlc_decode(&small_desc, input, length, out)"));
+    assert!(!source.contains("return WL_CODEC_OK;\n  return WL_CODEC_ERR_INVALID_VALUE;"));
+}

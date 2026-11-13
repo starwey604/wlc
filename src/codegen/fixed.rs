@@ -15,20 +15,54 @@ pub(super) fn supports(plan: &MessagePlan<'_>) -> bool {
             matches!(
                 field.cardinality,
                 Cardinality::Required | Cardinality::Optional
-            ) && matches!(
+            ) && (matches!(
                 field.ty,
                 ResolvedType::Uint32
                     | ResolvedType::Fixed32
                     | ResolvedType::Fixed64
                     | ResolvedType::Float32
                     | ResolvedType::Float64
-            )
+            ) || (plan.profile != crate::codec_plan::CodecProfile::PositionalV1
+                && varint(&field.ty)))
         })
+}
+
+fn varint(ty: &ResolvedType) -> bool {
+    matches!(
+        ty,
+        ResolvedType::Bool
+            | ResolvedType::Uint8
+            | ResolvedType::Uint16
+            | ResolvedType::Uint32
+            | ResolvedType::Uint64
+            | ResolvedType::Int8
+            | ResolvedType::Int16
+            | ResolvedType::Int32
+            | ResolvedType::Int64
+            | ResolvedType::Enum { .. }
+    )
+}
+
+fn wire_value(ty: &ResolvedType, value: &str, p: &str) -> String {
+    match ty {
+        ResolvedType::Int8
+        | ResolvedType::Int16
+        | ResolvedType::Int32
+        | ResolvedType::Enum { .. } => format!("{p}z32({value})"),
+        ResolvedType::Int64 => format!("{p}z64({value})"),
+        _ => value.to_owned(),
+    }
 }
 
 pub(super) fn width(ty: &ResolvedType) -> usize {
     match ty {
-        ResolvedType::Uint32 | ResolvedType::Fixed32 | ResolvedType::Float32 => 4,
+        ResolvedType::Bool | ResolvedType::Uint8 | ResolvedType::Int8 => 1,
+        ResolvedType::Uint16 | ResolvedType::Int16 => 2,
+        ResolvedType::Uint32
+        | ResolvedType::Int32
+        | ResolvedType::Enum { .. }
+        | ResolvedType::Fixed32
+        | ResolvedType::Float32 => 4,
         _ => 8,
     }
 }
@@ -126,6 +160,9 @@ fn source(plan: &MessagePlan<'_>, name: &str, fingerprint: bool, symbols: &Symbo
         let vh = access(plan, field, "value", false, true);
         let field_size = if plan.varuint32(field) {
             format!("({}U + {p}vsize32({v}))", key.length)
+        } else if varint(&field.ty) {
+            let wire = wire_value(&field.ty, &v, p);
+            format!("({}U + {p}vsize({wire}))", key.length)
         } else {
             format!("{}U", key.length + width(&field.ty))
         };
@@ -148,10 +185,16 @@ fn source(plan: &MessagePlan<'_>, name: &str, fingerprint: bool, symbols: &Symbo
     for field in &plan.message.fields {
         let mv = access(plan, field, "value", true, false);
         let mh = access(plan, field, "value", true, true);
-        let (_, _, unsigned, _, _) = field_descriptor_data(field);
+        let (_, signed, unsigned, _, _) = field_descriptor_data(field);
         let default = match field.ty {
             ResolvedType::Uint32 | ResolvedType::Fixed32 => format!("UINT32_C({unsigned})"),
-            ResolvedType::Fixed64 => format!("UINT64_C({unsigned})"),
+            ResolvedType::Fixed64 | ResolvedType::Uint64 => format!("UINT64_C({unsigned})"),
+            ResolvedType::Bool | ResolvedType::Uint8 | ResolvedType::Uint16 => unsigned,
+            ResolvedType::Int8
+            | ResolvedType::Int16
+            | ResolvedType::Int32
+            | ResolvedType::Int64
+            | ResolvedType::Enum { .. } => signed,
             _ => "0.0".to_owned(),
         };
         writeln!(out, "  {mh} = false;\n  {mv} = {default};").unwrap();
@@ -165,6 +208,40 @@ fn source(plan: &MessagePlan<'_>, name: &str, fingerprint: bool, symbols: &Symbo
         let bytes = width(&field.ty);
         if plan.varuint32(field) {
             writeln!(out, "      case {}U: {{\n        if (wire != 0U) return WL_CODEC_ERR_WIRE_TYPE;\n        if ({oh}) return WL_CODEC_ERR_DUPLICATE_FIELD;\n        uint32_t bits;\n        status = {p}getv32(input, length, &at, &bits);\n        if (status != WL_CODEC_OK) return status;\n        {o} = bits;\n        {oh} = true;\n        break;\n      }}", field.number).unwrap();
+            continue;
+        }
+        if varint(&field.ty) {
+            writeln!(out, "      case {}U: {{\n        if (wire != 0U) return WL_CODEC_ERR_WIRE_TYPE;\n        if ({oh}) return WL_CODEC_ERR_DUPLICATE_FIELD;\n        uint64_t bits;\n        status = {p}getv(input, length, &at, &bits);\n        if (status != WL_CODEC_OK) return status;", field.number).unwrap();
+            let bound = match field.ty {
+                ResolvedType::Bool => Some(("1U", "WL_CODEC_ERR_INVALID_VALUE")),
+                ResolvedType::Uint8 | ResolvedType::Int8 => {
+                    Some(("UINT8_MAX", "WL_CODEC_ERR_OVERFLOW"))
+                }
+                ResolvedType::Uint16 | ResolvedType::Int16 => {
+                    Some(("UINT16_MAX", "WL_CODEC_ERR_OVERFLOW"))
+                }
+                ResolvedType::Int32 | ResolvedType::Enum { .. } => {
+                    Some(("UINT32_MAX", "WL_CODEC_ERR_OVERFLOW"))
+                }
+                _ => None,
+            };
+            if let Some((maximum, error)) = bound {
+                writeln!(out, "        if (bits > {maximum}) return {error};").unwrap();
+            }
+            let value = match field.ty {
+                ResolvedType::Int8
+                | ResolvedType::Int16
+                | ResolvedType::Int32
+                | ResolvedType::Enum { .. } => format!("{p}uz32((uint32_t)bits)"),
+                ResolvedType::Int64 => format!("{p}uz64(bits)"),
+                _ => "bits".to_owned(),
+            };
+            writeln!(
+                out,
+                "        {o} = ({})({value});\n        {oh} = true;\n        break;\n      }}",
+                c_type(&field.ty)
+            )
+            .unwrap();
             continue;
         }
         writeln!(out, "      case {}U: {{\n        if (wire != {}U) return WL_CODEC_ERR_WIRE_TYPE;\n        if ({oh}) return WL_CODEC_ERR_DUPLICATE_FIELD;\n        if (length - at < {bytes}U) return WL_CODEC_ERR_MALFORMED;", field.number, key.wire).unwrap();
@@ -221,6 +298,8 @@ fn source(plan: &MessagePlan<'_>, name: &str, fingerprint: bool, symbols: &Symbo
                 key.length
                     + if plan.varuint32(field) {
                         5
+                    } else if varint(&field.ty) {
+                        (width(&field.ty) * 8).div_ceil(7)
                     } else {
                         width(&field.ty)
                     }
@@ -244,6 +323,16 @@ fn emit_scalar_fields(
         writeln!(out, "  if ({vh}) {{").unwrap();
         for b in &key.bytes[..key.length] {
             writeln!(out, "    *cursor++ = {b}U;").unwrap();
+        }
+        if varint(&field.ty) {
+            let bits = wire_value(&field.ty, &v, p);
+            let put = if plan.varuint32(field) {
+                format!("{p}putv32")
+            } else {
+                format!("{p}putv")
+            };
+            writeln!(out, "    {put}(&cursor, {bits});\n  }}").unwrap();
+            continue;
         }
         emit_bits(out, field, &v, "    ");
         let put = if plan.varuint32(field) {
