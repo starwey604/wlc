@@ -75,25 +75,6 @@ pub(crate) fn source(
         out.push_str(&crate::codegen::owned_decode_source(
             messages, codecs, symbols,
         ));
-        for message in messages
-            .iter()
-            .filter(|m| maxima.get(&m.id).copied().flatten().is_some())
-        {
-            writeln!(
-                out,
-                "static const {p}value_desc_t {}_value_desc;",
-                symbols.message(message)
-            )
-            .unwrap();
-        }
-        for &id in &tagged {
-            writeln!(
-                out,
-                "static const {p}value_desc_t {}_value_desc;",
-                crate::codegen::tagged_name(id, symbols)
-            )
-            .unwrap();
-        }
     }
     for message in messages {
         if maxima.get(&message.id).copied().flatten().is_none() {
@@ -127,13 +108,20 @@ pub(crate) fn source(
         let positional =
             codecs.messages[&message.id].profile == crate::codec_plan::CodecProfile::PositionalV1;
         let scalar_decode = crate::codegen::scalar_value_decode(message, codecs, symbols);
+        // Empty views have no semantic fields; initialize their placeholder
+        // explicitly, including before calls to a shared descriptor traversal.
+        let view_init = if message.fields.is_empty() {
+            " = {0}"
+        } else {
+            ""
+        };
         let value_codec = if scalar_decode.is_some() {
             format!(
                 "{storage}size_t {name}_value_encoded_size(const {ty}_value_t *value) {{ return {name}_wlc_detail_encoded_size_fields(value); }}\n\n{storage}wl_codec_status_t {name}_value_encode(const {ty}_value_t *value, uint8_t *out, size_t capacity, size_t *length) {{ return {name}_wlc_detail_encode_fields(value, out, capacity, length); }}\n\n"
             )
         } else {
             format!(
-                "{storage}size_t {name}_value_encoded_size(const {ty}_value_t *value) {{\n  {ty}_t view;\n  if (value == NULL || {name}_value_borrow(value, &view) != WL_CODEC_OK) return SIZE_MAX;\n  return {name}_encoded_size(&view);\n}}\n\n{storage}wl_codec_status_t {name}_value_encode(const {ty}_value_t *value, uint8_t *out, size_t capacity, size_t *length) {{\n  {ty}_t view;\n  wl_codec_status_t status;\n  if (value == NULL) return WL_CODEC_ERR_INVALID_VALUE;\n  status = {name}_value_borrow(value, &view);\n  return status == WL_CODEC_OK ? {name}_encode(&view, out, capacity, length) : status;\n}}\n\n"
+                "{storage}size_t {name}_value_encoded_size(const {ty}_value_t *value) {{\n  {ty}_t view{view_init};\n  if (value == NULL || {name}_value_borrow(value, &view) != WL_CODEC_OK) return SIZE_MAX;\n  return {name}_encoded_size(&view);\n}}\n\n{storage}wl_codec_status_t {name}_value_encode(const {ty}_value_t *value, uint8_t *out, size_t capacity, size_t *length) {{\n  {ty}_t view{view_init};\n  wl_codec_status_t status;\n  if (value == NULL) return WL_CODEC_ERR_INVALID_VALUE;\n  status = {name}_value_borrow(value, &view);\n  return status == WL_CODEC_OK ? {name}_encode(&view, out, capacity, length) : status;\n}}\n\n"
             )
         };
         let prepare_value = if scalar_decode.is_some() {
@@ -225,7 +213,7 @@ pub(crate) fn source(
             }
             out.push_str("  }\n");
         }
-        writeln!(out, "  return WL_CODEC_OK;\n}}\n\n{storage}wl_codec_status_t {name}_value_to_view(const {ty}_value_t *value, {ty}_t *out) {{\n  {ty}_t view;\n  size_t size;\n  wl_codec_status_t status;\n  if (value == NULL || out == NULL) return WL_CODEC_ERR_INVALID_VALUE;\n  status = {name}_value_borrow(value, &view);\n  if (status == WL_CODEC_OK) status = {name}_wlc_detail_measure(&view, &size);\n  if (status != WL_CODEC_OK) return status;\n  *out = view;\n  return WL_CODEC_OK;\n}}\n\n{value_codec}{storage}wl_codec_status_t {name}_value_decode(const uint8_t *input, size_t length, {ty}_value_t *out) {{\n  {ty}_value_t value;\n  wl_codec_status_t status;\n  if (out == NULL) return WL_CODEC_ERR_INVALID_VALUE;\n{prepare_value}  status = {name}_wlc_detail_value_decode(input, length, &value);\n  if (status != WL_CODEC_OK) return status;\n  *out = value;\n  return WL_CODEC_OK;\n}}\n").unwrap();
+        writeln!(out, "  return WL_CODEC_OK;\n}}\n\n{storage}wl_codec_status_t {name}_value_to_view(const {ty}_value_t *value, {ty}_t *out) {{\n  {ty}_t view{view_init};\n  size_t size;\n  wl_codec_status_t status;\n  if (value == NULL || out == NULL) return WL_CODEC_ERR_INVALID_VALUE;\n  status = {name}_value_borrow(value, &view);\n  if (status == WL_CODEC_OK) status = {name}_wlc_detail_measure(&view, &size);\n  if (status != WL_CODEC_OK) return status;\n  *out = view;\n  return WL_CODEC_OK;\n}}\n\n{value_codec}{storage}wl_codec_status_t {name}_value_decode(const uint8_t *input, size_t length, {ty}_value_t *out) {{\n  {ty}_value_t value;\n  wl_codec_status_t status;\n  if (out == NULL) return WL_CODEC_ERR_INVALID_VALUE;\n{prepare_value}  status = {name}_wlc_detail_value_decode(input, length, &value);\n  if (status != WL_CODEC_OK) return status;\n  *out = value;\n  return WL_CODEC_OK;\n}}\n").unwrap();
     }
 }
 

@@ -23,7 +23,7 @@ fn compile(schema: &str, body: &str) -> String {
                 .unwrap()
                 .into()
         });
-    let mut cc = Command::new("cc");
+    let mut cc = Command::new(std::env::var("CC").unwrap_or_else(|_| "cc".into()));
     cc.args([
         "-std=c11",
         "-O2",
@@ -485,4 +485,44 @@ int main(void) {{
             );
         }
     }
+}
+
+#[test]
+fn signed_value_extremes_and_open_enums_keep_canonical_wire_without_repeated_storage() {
+    let source = compile(
+        "version 1; enum Code @id(2) { Zero = 0; } message SignedValue @id(1) { required int32 a @id(1); required int64 b @id(2); required Code code @id(3); }",
+        r#"#include <assert.h>
+#include <limits.h>
+#include <string.h>
+#include "plan.c"
+int main(void) {
+  const int32_t narrow[] = {INT32_MIN, INT32_MAX, -1, 0, 1};
+  const int64_t wide[] = {INT64_MIN, INT64_MAX, -1, 0, 1};
+  const uint8_t minimum[] = {
+    8, 255, 255, 255, 255, 15,
+    16, 255, 255, 255, 255, 255, 255, 255, 255, 255, 1,
+    24, 255, 255, 255, 255, 15
+  };
+  for (size_t i = 0; i < sizeof(narrow) / sizeof(narrow[0]); ++i) {
+    signed_value_t value = {0}, decoded = {0};
+    signed_value_value_t owned = {0};
+    uint8_t bytes[64], copy[64];
+    size_t length = 0, copied = 0;
+    value.has_a = value.has_b = value.has_code = true;
+    value.a = narrow[i]; value.b = wide[i]; value.code = narrow[i];
+    assert(signed_value_encode(&value, bytes, sizeof(bytes), &length) == WL_CODEC_OK);
+    if (i == 0) assert(length == sizeof(minimum) && memcmp(bytes, minimum, length) == 0);
+    assert(signed_value_decode(bytes, length, &decoded) == WL_CODEC_OK);
+    assert(decoded.a == value.a && decoded.b == value.b && decoded.code == value.code);
+    assert(signed_value_value_decode(bytes, length, &owned) == WL_CODEC_OK);
+    assert(owned.a == value.a && owned.b == value.b && owned.code == value.code);
+    assert(signed_value_value_encode(&owned, copy, sizeof(copy), &copied) == WL_CODEC_OK);
+    assert(copied == length && memcmp(copy, bytes, length) == 0);
+  }
+  return 0;
+}"#,
+    );
+    assert!(!source.contains("base + f->count"));
+    assert!(!source.contains("static const wlc_desc_t signed_value_desc;"));
+    assert!(!source.contains("static const wlc_value_desc_t signed_value_value_desc;"));
 }

@@ -18,13 +18,13 @@
   ],
   "artifact_digest_algorithm": "fnv1a64-domain-bytes-v1",
   "artifacts": [
-    {"path": "business.c", "size": 16121, "digest": "0x163b729e6692c390"},
+    {"path": "business.c", "size": 15357, "digest": "0xb138d6a4976bc503"},
     {"path": "business.h", "size": 899, "digest": "0x10f8c723973861f8"},
     {"path": "business_kernel.c", "size": 2474, "digest": "0xb484a1e16464c9e6"},
     {"path": "business_kernel.h", "size": 1335, "digest": "0x51b32c3e3d1132bc"},
     {"path": "business_kernel_codecs.h", "size": 137, "digest": "0x227926230f7fcb92"},
     {"path": "business_kernel_deployment.json", "size": 419, "digest": "0xd933ad3bd656538c"},
-    {"path": "business_kernel_manifest.json", "size": 1060, "digest": "0xd95bffeb7c55ac62"},
+    {"path": "business_kernel_manifest.json", "size": 1060, "digest": "0x75624d804e61ed83"},
     {"path": "business_values.h", "size": 1240, "digest": "0x93d24f3e344cbf3a"}
   ]
 }

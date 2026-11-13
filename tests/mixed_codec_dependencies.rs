@@ -46,7 +46,14 @@ fn positional_routes_preserve_shared_tagged_dependencies() {
                         )
                         .unwrap();
                         let mut cc = Command::new(std::env::var("CC").unwrap_or("cc".into()));
-                        cc.args(["-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Werror"]);
+                        cc.args([
+                            "-std=c11",
+                            "-O2",
+                            "-Wall",
+                            "-Wextra",
+                            "-Wpedantic",
+                            "-Werror",
+                        ]);
                         cc.arg(format!("-DPOSITIONAL={}", u8::from(positional)))
                             .arg(format!("-DPACKED={}", u8::from(packed)));
                         if std::env::var_os("WLC_TEST_SANITIZE").is_some() {

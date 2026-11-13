@@ -20,7 +20,7 @@ mod symbols;
 pub(crate) use symbols::Symbols;
 mod wire;
 
-pub(crate) use descriptor::{field_descriptor_data, tagged_dependencies, tagged_name};
+pub(crate) use descriptor::{field_descriptor_data, tagged_dependencies};
 use engine::emit_source;
 use header::emit_message_definition;
 pub use names::c_identifier as c_module_name;

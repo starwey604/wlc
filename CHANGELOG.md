@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Generate warning-clean C for MSVC and optimized GCC/Clang: emit private
+  descriptors in dependency order without tentative const declarations, use
+  unsigned subtraction for ZigZag masks, omit repeated-storage paths from
+  schemas without repeated fields, and initialize empty-view placeholders.
+  Regenerate C artifacts and provenance manifests; wire bytes and scalar/enum
+  value domains are unchanged.
+
 - Add borrowed-view ordinary sends to static kernel generation. Encode input
   into the same owned final frame before acceptance returns, without an extra
   bounded-bytes copy or a separate TX engine.

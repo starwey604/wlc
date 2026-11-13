@@ -151,13 +151,16 @@ static inline wl_codec_status_t @EMIT@_fields(const @C@desc_t *d, const void *va
       continue;
     }
 // WLC_END
-    size_t count = f->card == @K@OPTIONAL
-                       ? (*(const bool *)(base + f->has) ? 1U : 0U)
-                       : *(const size_t *)(base + f->count);
+    size_t count = f->card == @K@OPTIONAL && *(const bool *)(base + f->has) ? 1U : 0U;
+// WLC_IF REPEATED
+    if (f->card == @K@REPEATED) count = *(const size_t *)(base + f->count);
+// WLC_END
     for (size_t j = 0U; j < count; ++j) {
-      const void *p = f->card == @K@REPEATED
-                          ? *(const uint8_t *const *)(base + f->value) + j * f->element
-                          : base + f->value;
+      const void *p = base + f->value;
+// WLC_IF REPEATED
+      if (f->card == @K@REPEATED)
+        p = *(const uint8_t *const *)(base + f->value) + j * f->element;
+// WLC_END
       wl_codec_status_t s;
       @PUT@_key(out, f);
       if ((s = @EMIT@_value(f, p, out)) != WL_CODEC_OK) return s;

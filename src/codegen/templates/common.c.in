@@ -144,22 +144,22 @@ static inline uint8_t @C@wire(const @C@field_t *f) {
 }
 // WLC_IF I8 I16 I32 ENUM
 static inline uint64_t @C@z32(int32_t v) {
-  return ((uint32_t)v << 1U) ^ (uint32_t)-(uint32_t)(v < 0);
+  return ((uint32_t)v << 1U) ^ (UINT32_C(0) - (uint32_t)(v < 0));
 }
 // WLC_END
 // WLC_IF I64
 static inline uint64_t @C@z64(int64_t v) {
-  return ((uint64_t)v << 1U) ^ (uint64_t)-(uint64_t)(v < 0);
+  return ((uint64_t)v << 1U) ^ (UINT64_C(0) - (uint64_t)(v < 0));
 }
 // WLC_END
 // WLC_IF I8 I16 I32 ENUM
 static inline int32_t @C@uz32(uint32_t v) {
-  return (int32_t)((v >> 1U) ^ (uint32_t)-(v & 1U));
+  return (int32_t)((v >> 1U) ^ (UINT32_C(0) - (v & 1U)));
 }
 // WLC_END
 // WLC_IF I64
 static inline int64_t @C@uz64(uint64_t v) {
-  return (int64_t)((v >> 1U) ^ (uint64_t)-(v & 1U));
+  return (int64_t)((v >> 1U) ^ (UINT64_C(0) - (v & 1U)));
 }
 // WLC_END
 static inline wl_codec_status_t @C@measure(const @C@desc_t *, const void *, size_t *);
@@ -303,17 +303,22 @@ static wl_codec_status_t @C@measure_impl(const @C@desc_t *d, const void *value,
         if (f->required != 0U) return WL_CODEC_ERR_MISSING_REQUIRED_FIELD;
         continue;
       }
-    } else {
+    }
+// WLC_IF REPEATED
+    else {
       count = *(const size_t *)(base + f->count);
       if ((count != 0U && *(void *const *)(base + f->value) == NULL) ||
           count > *(const size_t *)(base + f->capacity))
         return WL_CODEC_ERR_INVALID_VALUE;
     }
+// WLC_END
     for (size_t j = 0U; j < count; ++j) {
       size_t body;
-      const void *p = f->card == @K@REPEATED
-                          ? *(const uint8_t *const *)(base + f->value) + j * f->element
-                          : base + f->value;
+      const void *p = base + f->value;
+// WLC_IF REPEATED
+      if (f->card == @K@REPEATED)
+        p = *(const uint8_t *const *)(base + f->value) + j * f->element;
+// WLC_END
       wl_codec_status_t s = @C@body(f, p, &body, validated);
       if (s != WL_CODEC_OK) return s;
       if ((s = @C@add(&n, f->key_size)) != WL_CODEC_OK ||
@@ -339,10 +344,12 @@ static void @C@clear(const @C@desc_t *d, void *value) {
     const @C@field_t *f = &d->fields[i];
     void *p = base + f->value;
     (void)p;
+// WLC_IF REPEATED
     if (f->card == @K@REPEATED) {
       *(size_t *)(base + f->count) = 0U;
       continue;
     }
+// WLC_END
     *(bool *)(base + f->has) = false;
 // WLC_IF PACKED
     if (f->card == @K@PACKED) {

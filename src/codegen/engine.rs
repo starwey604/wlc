@@ -57,14 +57,8 @@ pub(super) fn emit_source(
         // callback or per-byte mode branch on the ordinary encoder's hot path.
         source.push_str(&emit_fields(Sink::Fingerprint, &features, symbols));
     }
-    let p = &symbols.helper;
-    for message in messages {
-        source.push_str(&format!(
-            "static const {p}desc_t {}_desc;\n",
-            symbols.message(message)
-        ));
-    }
-    source.push('\n');
+    // ordered_messages is child-first. Emit initialized definitions directly:
+    // tentative static const declarations are not portable to MSVC's C frontend.
     let mut scalar_shapes: Vec<&MessagePlan<'_>> = Vec::new();
     for id in super::descriptor::tagged_dependencies(codecs, false) {
         let plan = MessagePlan::with_profile(codecs.messages[&id].message, codecs.profile);
