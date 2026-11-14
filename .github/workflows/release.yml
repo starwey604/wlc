@@ -1,71 +1,46 @@
 name: Release
-
 on:
   push:
     tags:
-      - "v[0-9]+.[0-9]+.[0-9]+"
-      - "v[0-9]+.[0-9]+.[0-9]+-*"
-
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to rebuild from canonical source
-        required: true
+        description: Release tag (required for publication; optional for rehearsal)
         type: string
-
-env:
-  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
-
+      source_ref:
+        description: Compiler source ref (rehearsal or promotion without an existing tag)
+        type: string
+      wirelink_ref:
+        description: Exact Wirelink candidate (empty uses the qualified API baseline)
+        type: string
+      dry_run:
+        description: Verify and assemble artifacts without creating a tag or release
+        type: boolean
+        default: false
+      promote_run:
+        description: Successful rehearsal run whose exact bundle should be promoted
+        type: string
+permissions:
+  contents: read
+  actions: read
 concurrency:
   group: wlc-release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
-
-permissions:
-  contents: write
-
 jobs:
   verify:
-    name: Verify release source
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Preserve canonical source line endings
-        run: git config --global core.autocrlf false
-
-      - name: Check out Wirelink test dependency
-        uses: actions/checkout@v7
-        with:
-          repository: starwey604/wirelink
-          ref: 071d6f6fc05454c9de93baebb0c6f7ea7591fc5f
-          path: wirelink
-
-      - name: Check out wlc
-        uses: actions/checkout@v7
-        with:
-          path: wirelink/wlc
-          ref: ${{ env.RELEASE_TAG }}
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy,rustfmt
-
-      - name: Match Cargo version to tag
-        working-directory: wirelink/wlc
-        shell: bash
-        run: |
-          crate_version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[0].version')"
-          test "v${crate_version}" = "${RELEASE_TAG}"
-
-      - name: Check source and tests
-        working-directory: wirelink/wlc
-        run: |
-          cargo fmt --all --check
-          cargo clippy --locked --all-targets -- -D warnings
-          cargo test --locked
-
+    uses: ./.github/workflows/verify.yml
+    with:
+      source_ref: ${{ inputs.source_ref || inputs.tag || github.sha }}
+      wirelink_ref: ${{ inputs.wirelink_ref }}
+      release_tag: ${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name) || '' }}
+      require_tag: ${{ github.event_name == 'push' || !inputs.dry_run }}
+      run_tests: ${{ !inputs.promote_run }}
   package:
     name: Package ${{ matrix.asset }}
     needs: verify
+    if: ${{ !inputs.promote_run }}
     strategy:
       fail-fast: false
       matrix:
@@ -91,131 +66,125 @@ jobs:
             asset: wlc-macos-aarch64
             archive: tar.gz
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
-      - name: Preserve canonical source line endings
-        run: git config --global core.autocrlf false
-
-      - name: Check out wlc
-        uses: actions/checkout@v7
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
         with:
-          ref: ${{ env.RELEASE_TAG }}
-
-      - name: Install Rust target
-        uses: dtolnay/rust-toolchain@stable
+          repository: starwey604/wlc
+          ref: ${{ needs.verify.outputs.source_sha }}
+      - uses: actions/checkout@v7
         with:
-          targets: ${{ matrix.target }}
-
+          repository: starwey604/wirelink
+          ref: ${{ needs.verify.outputs.wirelink_sha }}
+          path: .tools/wirelink
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install qualified Rust target
+        run: rustup toolchain install 1.96.1 --profile minimal --target ${{ matrix.target }}
       - name: Install musl tools
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install --yes musl-tools
-
       - name: Build release binary
-        run: cargo build --locked --release --target ${{ matrix.target }}
-
-      - name: Smoke-test release binary
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          binary="target/${{ matrix.target }}/release/wlc"
-          test "$(${binary} --version)" = "wlc ${RELEASE_TAG#v}"
-          "${binary}" compile tests/fixtures/release_smoke.wl \
-            --profile tests/fixtures/release_smoke.bind.wl \
-            --out-dir target/release-smoke
-          test "$(${binary} codegen-contract)" = "0.8"
-          test "$(jq -r '.compiler.codegen_contract.major' target/release-smoke/release_smoke_manifest.json)" = "0"
-          test "$(jq -r '.compiler.codegen_contract.minor' target/release-smoke/release_smoke_manifest.json)" = "8"
-
-      - name: Smoke-test release binary
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $binary = "target/${{ matrix.target }}/release/wlc.exe"
-          if ((& $binary --version) -ne "wlc $($env:RELEASE_TAG.TrimStart('v'))") {
-            throw "release binary version does not match tag"
-          }
-          & $binary compile tests/fixtures/release_smoke.wl `
-            --profile tests/fixtures/release_smoke.bind.wl `
-            --out-dir target/release-smoke
-          if ($LASTEXITCODE -ne 0) { throw "release compiler smoke test failed" }
-          $manifest = Get-Content target/release-smoke/release_smoke_manifest.json | ConvertFrom-Json
-          if ((& $binary codegen-contract) -ne "0.8") { throw "unexpected compiler contract" }
-          if ("$($manifest.compiler.codegen_contract.major).$($manifest.compiler.codegen_contract.minor)" -ne "0.8") { throw "unexpected manifest contract" }
-
-      - name: Smoke-test SDK generation from the release binary
-        shell: bash
-        run: |
-          binary="target/${{ matrix.target }}/release/wlc${{ runner.os == 'Windows' && '.exe' || '' }}"
-          "${binary}" sdk tests/fixtures/sdk/device.wl \
-            --profile tests/fixtures/sdk/device.bind.wl \
-            --name device --package-version "${RELEASE_TAG#v}" \
-            --out-dir target/release-sdk
-          test -f target/release-sdk/python/device_sdk/__init__.py
-          test -f target/release-sdk/src/endpoint.c
-
-      - name: Create tar archive
-        if: matrix.archive == 'tar.gz'
-        shell: bash
-        run: |
-          mkdir -p dist/package
-          cp "target/${{ matrix.target }}/release/wlc" dist/package/wlc
-          cp README.md dist/package/README.md
-          cp CHANGELOG.md dist/package/CHANGELOG.md
-          tar -C dist/package -czf "dist/${{ matrix.asset }}.tar.gz" wlc README.md CHANGELOG.md
-
-      - name: Create zip archive
-        if: matrix.archive == 'zip'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force dist/package | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/wlc.exe" dist/package/wlc.exe
-          Copy-Item README.md dist/package/README.md
-          Copy-Item CHANGELOG.md dist/package/CHANGELOG.md
-          Compress-Archive -Path dist/package/wlc.exe,dist/package/README.md,dist/package/CHANGELOG.md `
-            -DestinationPath "dist/${{ matrix.asset }}.zip"
-
-      - name: Upload package
-        uses: actions/upload-artifact@v7
+        run: cargo +1.96.1 build --locked --release --target ${{ matrix.target }}
+      - name: Create platform archive with provenance
+        run: >-
+          python .github/scripts/release.py pack
+          --wirelink .tools/wirelink --run-id "$GITHUB_RUN_ID"
+          --asset ${{ matrix.asset }}
+          --binary target/${{ matrix.target }}/release/wlc${{ runner.os == 'Windows' && '.exe' || '' }}
+      - name: Exercise the extracted archive against the paired installed core
+        run: >-
+          python .github/scripts/release.py smoke
+          --wirelink .tools/wirelink --run-id "$GITHUB_RUN_ID"
+          --archive dist/${{ matrix.asset }}.${{ matrix.archive }}
+          --work target/archive-smoke
+      - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
           path: dist/${{ matrix.asset }}.${{ matrix.archive }}
           if-no-files-found: error
-
-  publish:
-    name: Publish GitHub release
-    needs: package
+  assemble:
+    name: Verify release bundle
+    needs: [verify, package]
+    if: ${{ always() && needs.verify.result == 'success' && (needs.package.result == 'success' || needs.package.result == 'skipped') }}
     runs-on: ubuntu-24.04
     steps:
-      - name: Preserve canonical source line endings
-        run: git config --global core.autocrlf false
-
-      - name: Check out wlc
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
-          ref: ${{ env.RELEASE_TAG }}
-
-      - name: Download packages
-        uses: actions/download-artifact@v8
+          repository: starwey604/wlc
+          ref: ${{ needs.verify.outputs.source_sha }}
+      - uses: actions/checkout@v7
         with:
+          repository: starwey604/wirelink
+          ref: ${{ needs.verify.outputs.wirelink_sha }}
+          path: .tools/wirelink
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        if: ${{ !inputs.promote_run }}
+        with:
+          pattern: wlc-*
+          path: artifacts
+      - name: Collect all five tested archives
+        if: ${{ !inputs.promote_run }}
+        run: python .github/scripts/release.py collect --wirelink .tools/wirelink --run-id "$GITHUB_RUN_ID" --artifacts artifacts
+      - uses: actions/download-artifact@v4
+        if: ${{ inputs.promote_run }}
+        with:
+          name: wlc-release-bundle
+          run-id: ${{ inputs.promote_run }}
+          github-token: ${{ github.token }}
           path: dist
-          merge-multiple: true
-
-      - name: Create checksums
-        working-directory: dist
-        run: sha256sum wlc-* > SHA256SUMS
-
-      - name: Publish release
+      - name: Verify integrity and promotion provenance
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          release_options=()
-          if [[ "${RELEASE_TAG}" == *-* ]]; then
-            release_options+=(--prerelease --latest=false)
-          fi
-          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
-            gh release upload "${RELEASE_TAG}" dist/* --clobber
-          else
-            gh release create "${RELEASE_TAG}" dist/* \
-              --verify-tag --generate-notes --title "wlc ${RELEASE_TAG}" \
-              "${release_options[@]}"
-          fi
+          PROMOTE_RUN: ${{ inputs.promote_run }}
+        run: >-
+          python .github/scripts/release.py verify --wirelink .tools/wirelink
+          --run-id "$GITHUB_RUN_ID" --promote-run "$PROMOTE_RUN"
+      - uses: actions/upload-artifact@v4
+        if: ${{ !inputs.promote_run }}
+        with:
+          name: wlc-release-bundle
+          path: dist/*
+          if-no-files-found: error
+  publish:
+    name: Publish verified bundle
+    needs: [verify, assemble]
+    if: ${{ !cancelled() && needs.verify.result == 'success' && needs.assemble.result == 'success' && (github.event_name == 'push' || !inputs.dry_run) }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: starwey604/wlc
+          ref: ${{ needs.verify.outputs.source_sha }}
+      - uses: actions/checkout@v7
+        with:
+          repository: starwey604/wirelink
+          ref: ${{ needs.verify.outputs.wirelink_sha }}
+          path: .tools/wirelink
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: wlc-release-bundle
+          run-id: ${{ inputs.promote_run || github.run_id }}
+          github-token: ${{ github.token }}
+          path: dist
+      - name: Publish exact assets without overwriting an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          PROMOTE_RUN: ${{ inputs.promote_run }}
+        run: >-
+          python .github/scripts/release.py verify --wirelink .tools/wirelink
+          --run-id "$GITHUB_RUN_ID" --promote-run "$PROMOTE_RUN" --tag "$RELEASE_TAG" --publish

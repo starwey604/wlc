@@ -47,6 +47,8 @@ direct Event { delivery = unreliable; }
 - [构建与使用自持 SDK](docs/sdk-cn.md)
 - [运行 Wirelink 教程与开发检查](https://github.com/starwey604/wirelink/blob/main/docs/development-cn.md)
 
+- [编译器发布演练与产物提升（英文）](docs/releasing.md)
+
 修改编译器后运行：
 
 ```sh

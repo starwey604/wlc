@@ -223,3 +223,30 @@ fn compile_manifest_is_reproducible_across_output_directories() {
         fs::read(second.join("stable_manifest.json")).unwrap()
     );
 }
+
+#[test]
+fn release_smoke_fixture_uses_the_current_kernel_contract() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let directory = tempdir().unwrap();
+    Command::cargo_bin("wlc")
+        .unwrap()
+        .arg("compile-kernel")
+        .arg(root.join("tests/fixtures/release_smoke.wl"))
+        .arg("--profile")
+        .arg(root.join("tests/fixtures/release_smoke.bind.wl"))
+        .arg("--out-dir")
+        .arg(directory.path())
+        .assert()
+        .success();
+    let manifest: String =
+        fs::read_to_string(directory.path().join("release_smoke_kernel_manifest.json")).unwrap();
+    assert!(manifest.contains("\"minor\": 13"));
+    for name in [
+        "release_smoke_kernel.h",
+        "release_smoke_kernel.c",
+        "release_smoke_kernel_codecs.h",
+        "release_smoke_values.h",
+    ] {
+        assert!(directory.path().join(name).is_file(), "missing {name}");
+    }
+}

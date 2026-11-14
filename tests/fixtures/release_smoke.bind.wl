@@ -1,11 +1,4 @@
-profile version 1;
-
-rpc ApplyControl {
-  request = Control;
-  response = ControlResult;
-  request_operation_id = operation_id;
-  response_operation_id = operation_id;
-  response_status = result;
-  request_delivery = reliable;
-  response_delivery = reliable;
-}
+// SPDX-License-Identifier: Apache-2.0
+profile version 2;
+endpoint { envelope = native_packet; rpc_role = both; }
+rpc ApplyControl { request = Control; response = ControlResult; }

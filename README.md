@@ -64,6 +64,8 @@ and [API reference](https://github.com/starwey604/wirelink/blob/main/docs/kernel
 - [Build and use an owning SDK](docs/sdk.md)
 - [Run Wirelink tutorials and development checks](https://github.com/starwey604/wirelink/blob/main/docs/development.md)
 
+- [Rehearse and promote a compiler release](docs/releasing.md)
+
 Validate compiler changes with:
 
 ```sh

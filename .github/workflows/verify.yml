@@ -1,0 +1,80 @@
+name: Verify compiler source
+on:
+  workflow_call:
+    inputs:
+      source_ref:
+        required: true
+        type: string
+      wirelink_ref:
+        type: string
+        default: ''
+      release_tag:
+        type: string
+        default: ''
+      require_tag:
+        type: boolean
+        default: false
+      run_tests:
+        type: boolean
+        default: true
+    outputs:
+      source_sha:
+        value: ${{ jobs.verify.outputs.source_sha }}
+      wirelink_sha:
+        value: ${{ jobs.verify.outputs.wirelink_sha }}
+      version:
+        value: ${{ jobs.verify.outputs.version }}
+permissions:
+  contents: read
+jobs:
+  verify:
+    name: Rust quality and generated C
+    runs-on: ubuntu-24.04
+    outputs:
+      source_sha: ${{ steps.source.outputs.source_sha }}
+      wirelink_sha: ${{ steps.source.outputs.wirelink_sha }}
+      version: ${{ steps.source.outputs.version }}
+    steps:
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+        with:
+          repository: starwey604/wirelink
+          ref: ${{ inputs.wirelink_ref || '949311b84910a294addd5317baeb201d197068f9' }}
+          path: wirelink
+      - uses: actions/checkout@v7
+        with:
+          repository: starwey604/wlc
+          ref: ${{ inputs.source_ref }}
+          path: wirelink/wlc
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Resolve immutable source pair
+        id: source
+        shell: python
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          REQUIRE_TAG: ${{ inputs.require_tag }}
+        run: |
+          import os, subprocess, tomllib
+          from pathlib import Path
+          def sha(path):
+              return subprocess.check_output(['git', '-C', path, 'rev-parse', 'HEAD'], text=True).strip()
+          version = tomllib.loads(Path('wirelink/wlc/Cargo.toml').read_text())['package']['version']
+          tag = os.environ['RELEASE_TAG']
+          assert not tag or tag == f'v{version}', 'Cargo version and tag differ'
+          assert os.environ['REQUIRE_TAG'] != 'true' or tag, 'publication requires an explicit version tag'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'source_sha={sha("wirelink/wlc")}\nwirelink_sha={sha("wirelink")}\nversion={version}\n')
+      - name: Install qualified Rust compiler
+        if: inputs.run_tests
+        run: rustup toolchain install 1.96.1 --profile minimal --component clippy --component rustfmt
+      - name: Check source, generated C and release tooling
+        if: inputs.run_tests
+        working-directory: wirelink/wlc
+        shell: bash
+        run: |
+          cargo +1.96.1 fmt --all --check
+          cargo +1.96.1 clippy --locked --all-targets --all-features -- -D warnings
+          cargo +1.96.1 test --locked
+          python -m unittest discover -s .github/scripts -p 'test_*.py' -v

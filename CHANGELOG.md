@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Qualify release archives against the current Wirelink kernel: profile-v2
+  RPC smoke, codegen contract 0.13, binding API 3, exact source-pair provenance
+  and installed consumers on all five platforms. Share the CI/release API
+  baseline and Rust 1.96.1 toolchain. Add non-publishing rehearsals and immutable
+  promotion of successful bundles; reject replacement of different public assets.
+
 - Generate warning-clean C for MSVC and optimized GCC/Clang: emit private
   descriptors in dependency order without tentative const declarations, use
   unsigned subtraction for ZigZag masks, omit repeated-storage paths from
