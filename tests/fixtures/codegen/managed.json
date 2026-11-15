@@ -31,11 +31,11 @@
   "artifacts": [
     {"path": "business.c", "size": 71499, "digest": "0x9b7f398176c06c9b"},
     {"path": "business.h", "size": 6205, "digest": "0x112d02a350ba8dbe"},
-    {"path": "business_kernel.c", "size": 7920, "digest": "0xbc06485cf4c5a3ce"},
+    {"path": "business_kernel.c", "size": 8933, "digest": "0xa77fb0754aad80aa"},
     {"path": "business_kernel.h", "size": 2174, "digest": "0x2b858101ed89d5aa"},
     {"path": "business_kernel_codecs.h", "size": 51812, "digest": "0x802ebea137c7ab45"},
-    {"path": "business_kernel_deployment.json", "size": 863, "digest": "0x1c3af39b5e9a1e4e"},
-    {"path": "business_kernel_manifest.json", "size": 1858, "digest": "0xc9cc84a352d03213"},
+    {"path": "business_kernel_deployment.json", "size": 863, "digest": "0x2ae74af540bf43db"},
+    {"path": "business_kernel_manifest.json", "size": 1858, "digest": "0x822aee404fc39c5f"},
     {"path": "business_values.h", "size": 6612, "digest": "0x7eeb8ee1a26cf1a1"}
   ]
 }
