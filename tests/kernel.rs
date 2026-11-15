@@ -99,12 +99,12 @@ fn deterministic_composition_and_no_legacy_execution_artifacts() {
     ] {
         assert!(
             !a.files["demo_kernel.c"].contains(forbidden)
-                && !a.files["demo_kernel_codecs.h"].contains(forbidden),
+                && !a.files["demo_kernel.h"].contains(forbidden),
             "{forbidden}"
         );
     }
     assert!(a.files["demo_kernel.h"].contains("extern \"C\" {"));
-    assert_eq!(a.files.len(), 8);
+    assert_eq!(a.files.len(), 6);
 }
 
 #[test]
@@ -181,10 +181,10 @@ int main(void) {
     .rx_storage_size=sizeof(rx), .submit=sink};
   demo_kernel_handlers_t handlers = {0};
   if (wl_packet_init(&port,&c) || demo_kernel_init(&endpoint,&port,&handlers,NULL,NULL)) abort();
-  request_value_t req = {.has_input=true,.input=INT32_MIN,.has_name=true,.name={.length=3,.data={'a',0,'b'}}};
+  request_t req = {.has_input=true,.input=INT32_MIN,.has_name=true,.name={.length=3,.data={'a',0,'b'}}};
   wl_kernel_call_handle_t handle;
   if (demo_kernel_execute_start(&endpoint,&req,0,1,done,NULL,&handle)) abort();
-  tick_value_t tick = {0};
+  tick_t tick = {0};
   if (demo_kernel_send_tick(&endpoint,&tick)) abort();
   if (demo_kernel_step(&endpoint,0) || demo_kernel_step(&endpoint,1) || callbacks != 1) abort();
   if (wl_kernel_close(&endpoint.core) || demo_kernel_step(&endpoint,1) || !wl_kernel_quiescent(&endpoint.core)) abort();
@@ -213,7 +213,7 @@ int main(void) {
     for file in ["demo.c", "demo_kernel.c", "test.c"] {
         cc.arg(directory.path().join(file));
     }
-    for file in ["kernel.c", "packet_port.c"] {
+    for file in ["codec.c", "kernel.c", "packet_port.c"] {
         cc.arg(prototype.join("src").join(file));
     }
     let binary = directory.path().join("test");
@@ -282,7 +282,7 @@ static wl_packet_submit_t sink(void *user, const uint8_t *data, size_t length, w
   if (demo_kernel_transport_feed(&stream, data, length, &consumed) || consumed != length) abort();
   return WL_PACKET_SENT;
 }
-static int32_t execute(void *user, const request_t *request, response_value_t *response) {
+static int32_t execute(void *user, const request_t *request, response_t *response) {
   (void)user;
   if (request->input != INT32_MIN || request->name.length != 3 ||
       memcmp(request->name.data, "a\0b", 3)) abort();
@@ -303,7 +303,7 @@ int main(void) {
       256, (wl_span_t){wire,sizeof(wire)}, sink, NULL, NULL)) abort();
   demo_kernel_handlers_t handlers = {.on_rpc_execute = execute};
   if (demo_kernel_init(&endpoint, &port, &handlers, NULL, NULL)) abort();
-  request_value_t request = {.has_input=true, .input=INT32_MIN, .has_name=true,
+  request_t request = {.has_input=true, .input=INT32_MIN, .has_name=true,
       .name={.length=3, .data={'a',0,'b'}}};
   wl_kernel_call_handle_t call;
   if (demo_kernel_execute_start(&endpoint, &request, 0, 100, done, NULL, &call)) abort();
@@ -342,7 +342,7 @@ int main(void) {
         ] {
             cc.arg(directory.path().join(file));
         }
-        for file in ["kernel.c", "packet_port.c", "packet_stream.c"] {
+        for file in ["codec.c", "kernel.c", "packet_port.c", "packet_stream.c"] {
             cc.arg(prototype.join("src").join(file));
         }
         cc.arg(prototype.join("src").join(format!("{connector}_stream.c")));

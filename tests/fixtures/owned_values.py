@@ -25,10 +25,10 @@ class DeviceInfo(c.Structure):
 
 
 lib = c.CDLL(sys.argv[1])
-decode = lib.device_info_value_decode
+decode = lib.device_info_decode
 decode.argtypes = [c.c_void_p, c.c_size_t, c.POINTER(DeviceInfo)]
 decode.restype = c.c_int32
-encode = lib.device_info_value_encode
+encode = lib.device_info_encode
 encode.argtypes = [c.POINTER(DeviceInfo), c.c_void_p, c.c_size_t, c.POINTER(c.c_size_t)]
 encode.restype = c.c_int32
 wire = c.create_string_buffer(b"\x0a\x04A\0\xc3\xa9")

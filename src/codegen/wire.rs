@@ -1,17 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Wire-format facts shared by size bounds and message planning.
-pub(super) use crate::codec_plan::fixed_width;
-use crate::codec_plan::{CodecProfile, field_wire_type};
-use crate::semantic::FieldSymbol;
+use crate::semantic::ResolvedType;
 
-pub(super) fn field_wire(field: &FieldSymbol) -> u8 {
-    field_wire_type(field, CodecProfile::SchemaV1)
-}
-
-pub(super) fn append_varint(mut value: u64, out: &mut Vec<u8>) {
-    while value >= 128 {
-        out.push((value as u8) | 128);
-        value >>= 7;
+pub(crate) fn wire_type(ty: &ResolvedType, is_packed: bool) -> u8 {
+    if is_packed {
+        return 2;
     }
-    out.push(value as u8);
+    match ty {
+        ResolvedType::Fixed64 | ResolvedType::Float64 => 1,
+        ResolvedType::Bytes | ResolvedType::String | ResolvedType::Message { .. } => 2,
+        ResolvedType::Fixed32 | ResolvedType::Float32 => 5,
+        _ => 0,
+    }
 }

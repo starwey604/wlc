@@ -8,24 +8,15 @@ _Static_assert(GRANDPARENT_CODEC_PROFILE == 1U, "Transitive Schema-v1 dependency
 _Static_assert(CHILD_MAX_ENCODED_SIZE == (PACKED ? (POSITIONAL ? 14U : 15U) : 5U), "Child bound");
 _Static_assert(PARENT_MAX_ENCODED_SIZE == (PACKED ? 17U : 7U), "Parent nested bound");
 _Static_assert(GRANDPARENT_MAX_ENCODED_SIZE == (PACKED ? 19U : 9U), "Transitive bound");
-
-#if !POSITIONAL
-static uint64_t fingerprint(const uint8_t *bytes, size_t length) {
-  uint64_t hash = UINT64_C(0xcbf29ce484222325);
-  for (size_t i = 0U; i < length; ++i) hash = (hash ^ bytes[i]) * UINT64_C(0x100000001b3);
-  return hash;
-}
-
-#endif
 int main(void) {
-  const uint8_t tagged_child[] = {0x0d, 0x12, 0x34, 0x56, 0x78,
+  const uint8_t tagged_child[] = {0x0d, 0x78, 0x56, 0x34, 0x12,
 #if PACKED
-      0x12, 0x08, 0x00, 0x00, 0x00, 0x01, 0xff, 0xff, 0xff, 0xff,
+      0x12, 0x08, 0x01, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff,
 #endif
   };
   const uint8_t positional_child[] = {0xf8, 0xac, 0xd1, 0x91, 0x01,
 #if PACKED
-      0x08, 0x00, 0x00, 0x00, 0x01, 0xff, 0xff, 0xff, 0xff,
+      0x08, 0x01, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff,
 #endif
   };
   uint8_t expected_parent[sizeof(tagged_child) + 2U];
@@ -51,48 +42,25 @@ int main(void) {
   child_t child_decoded;
   assert(child_decode(expected_child, child_length, &child_decoded) == WL_CODEC_OK);
   assert(child_decoded.has_value && child_decoded.value == child.value);
+#if PACKED
+  assert(child_decoded.has_words && child_decoded.words[0] == 1U && child_decoded.words[1] == UINT32_MAX);
+#endif
   assert(parent_encoded_size(&parent) == sizeof(expected_parent));
   assert(parent_encode(&parent, bytes, sizeof(bytes), &length) == WL_CODEC_OK);
   assert(length == sizeof(expected_parent) && memcmp(bytes, expected_parent, length) == 0);
   assert(parent_decode(expected_parent, sizeof(expected_parent), &decoded) == WL_CODEC_OK);
   assert(decoded.has_child && decoded.child.has_value && decoded.child.value == child.value);
+#if PACKED
+  assert(decoded.child.has_words && decoded.child.words[0] == 1U && decoded.child.words[1] == UINT32_MAX);
+#endif
   assert(grandparent_encode(&grandparent, bytes, sizeof(bytes), &length) == WL_CODEC_OK);
   assert(length == sizeof(expected_grandparent) && memcmp(bytes, expected_grandparent, length) == 0);
   assert(grandparent_decode(expected_grandparent, sizeof(expected_grandparent), &grand_decoded) == WL_CODEC_OK);
   assert(grand_decoded.parent.child.value == child.value);
-
-  child_value_t owned_child;
-  parent_value_t owned_parent;
-  grandparent_value_t owned_grandparent;
-  assert(child_value_decode(expected_child, child_length, &owned_child) == WL_CODEC_OK);
-  assert(parent_value_decode(expected_parent, sizeof(expected_parent), &owned_parent) == WL_CODEC_OK);
-  assert(grandparent_value_decode(expected_grandparent, sizeof(expected_grandparent), &owned_grandparent) == WL_CODEC_OK);
-  assert(owned_child.value == child.value && owned_parent.child.value == child.value);
-  assert(owned_grandparent.parent.child.value == child.value);
-#if PACKED
-  assert(owned_parent.child.has_words && owned_parent.child.words[1] == UINT32_MAX);
-#endif
-  assert(child_value_encode(&owned_child, bytes, sizeof(bytes), &length) == WL_CODEC_OK);
-  assert(length == child_length && memcmp(bytes, expected_child, length) == 0);
-  assert(parent_value_encoded_size(&owned_parent) == sizeof(expected_parent));
-  assert(parent_value_encode(&owned_parent, bytes, sizeof(bytes), &length) == WL_CODEC_OK);
-  assert(length == sizeof(expected_parent) && memcmp(bytes, expected_parent, length) == 0);
-  assert(grandparent_value_encode(&owned_grandparent, bytes, sizeof(bytes), &length) == WL_CODEC_OK);
-  assert(length == sizeof(expected_grandparent) && memcmp(bytes, expected_grandparent, length) == 0);
-  assert(parent_value_to_view(&owned_parent, &decoded) == WL_CODEC_OK);
-  assert(parent_value_from_view(&decoded, &owned_parent) == WL_CODEC_OK);
-#if !POSITIONAL
-  uint64_t hash = UINT64_C(0xcbf29ce484222325);
-  assert(parent_wlc_detail_fingerprint(&decoded, &hash, &length) == WL_CODEC_OK);
-  assert(length == sizeof(expected_parent) && hash == fingerprint(expected_parent, length));
-  hash = UINT64_C(0xcbf29ce484222325);
-  assert(grandparent_wlc_detail_fingerprint(&grand_decoded, &hash, &length) == WL_CODEC_OK);
-  assert(length == sizeof(expected_grandparent) && hash == fingerprint(expected_grandparent, length));
-#endif
-  // Failed owned decode must preserve the complete output, including nesting.
-  parent_value_t before;
-  memcpy(&before, &owned_parent, sizeof(before));
-  assert(parent_value_decode(expected_parent, sizeof(expected_parent) - 1U, &owned_parent) != WL_CODEC_OK);
-  assert(memcmp(&before, &owned_parent, sizeof(before)) == 0);
+  // Failed decode must preserve the complete output, including nesting.
+  parent_t before;
+  memcpy(&before, &decoded, sizeof(before));
+  assert(parent_decode(expected_parent, sizeof(expected_parent) - 1U, &decoded) != WL_CODEC_OK);
+  assert(memcmp(&before, &decoded, sizeof(before)) == 0);
   return 0;
 }

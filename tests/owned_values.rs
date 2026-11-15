@@ -36,25 +36,19 @@ fn bounded_values_own_nested_data_and_keep_wire_semantics() {
     let model = analyze_schema(&parse_schema(SCHEMA).unwrap()).unwrap();
     let generated = generate_c(&model, "owned").unwrap();
     assert_eq!(generated, generate_c(&model, "owned").unwrap());
-    assert!(
-        generated
-            .values_header
-            .contains("#define UNBOUNDED_HAS_VALUE 0")
-    );
-    assert!(!generated.header.contains("unbounded_value_t"));
+    assert!(generated.header.contains("device_info_t *devices;"));
     let directory = tempdir().unwrap();
     for (file, text) in [
         ("owned.h", generated.header),
-        ("owned_values.h", generated.values_header),
         ("owned.c", generated.source),
         ("test.c", include_str!("fixtures/owned_values.c").to_owned()),
         (
             "headers.cpp",
-            r#"#include "owned_values.h"
+            r#"#include "owned.h"
 #include <type_traits>
-static_assert(std::is_trivially_copyable_v<snapshot_value_t>);
-static_assert(std::is_standard_layout_v<snapshot_value_t>);
-int main() { snapshot_value_t a{}, b{}; a = b; return int(a.device.name.length); }
+static_assert(std::is_trivially_copyable_v<snapshot_t>);
+static_assert(std::is_standard_layout_v<snapshot_t>);
+int main() { snapshot_t a{}, b{}; a = b; return int(a.device.name.length); }
 "#
             .to_owned(),
         ),
@@ -88,6 +82,7 @@ int main() { snapshot_value_t a{}, b{}; a = b; return int(a.device.name.length);
         .arg("-I")
         .arg(directory.path())
         .arg(directory.path().join("owned.c"))
+        .arg(root.join("src/codec.c"))
         .arg(directory.path().join("test.c"))
         .arg("-o")
         .arg(&binary)
@@ -138,6 +133,7 @@ int main() { snapshot_value_t a{}, b{}; a = b; return int(a.device.name.length);
         .arg("-I")
         .arg(directory.path())
         .arg(directory.path().join("owned.c"))
+        .arg(root.join("src/codec.c"))
         .arg("-o")
         .arg(&library)
         .output()
@@ -181,14 +177,13 @@ int main() { snapshot_value_t a{}, b{}; a = b; return int(a.device.name.length);
 }
 
 #[test]
-fn owned_symbols_cannot_shadow_schema_types_or_macros() {
-    for collision in [
-        "message DeviceInfoValue @id(40) {}",
-        "enum Clash @id(40) { DEVICE_INFO_VALUE_SIZE = 0; }",
-        "enum Clash @id(40) { DEVICE_INFO_HAS_VALUE = 0; }",
-    ] {
-        let model =
-            analyze_schema(&parse_schema(&format!("{SCHEMA}\n{collision}")).unwrap()).unwrap();
-        assert!(generate_c(&model, "owned").is_err());
-    }
+fn generated_symbols_cannot_shadow_schema_types_or_macros() {
+    let model = analyze_schema(
+        &parse_schema(&format!(
+            "{SCHEMA}\nenum Clash @id(40) {{ DEVICE_INFO_MESSAGE_ID = 0; }}"
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(generate_c(&model, "owned").is_err());
 }

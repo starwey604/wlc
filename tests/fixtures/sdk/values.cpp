@@ -24,15 +24,15 @@ int main() {
   assert(request.settings.floor_or_default() == INT64_MIN);
   assert(request.settings.ceiling_or_default() == UINT64_MAX);
 
-  configure_request_value_t c{}, decoded{};
+  configure_request_t c{}, decoded{};
   assert(device::wlc_detail::to_c(request, c));
   assert(!c.settings.has_label && c.settings.label.length == 6);
   assert(c.has_opaque && c.opaque.length == 0);
   assert(c.backup.has_label && c.backup.label.length == 0);
   std::uint8_t bytes[1024];
   std::size_t length = 0;
-  assert(configure_request_value_encode(&c, bytes, sizeof(bytes), &length) == WL_CODEC_OK);
-  assert(configure_request_value_decode(bytes, length, &decoded) == WL_CODEC_OK);
+  assert(configure_request_encode(&c, bytes, sizeof(bytes), &length) == WL_CODEC_OK);
+  assert(configure_request_decode(bytes, length, &decoded) == WL_CODEC_OK);
   auto response = device::wlc_detail::from_c(decoded);
   request.settings.token.clear();
   c.settings.token.data[0] = 42;
@@ -49,7 +49,7 @@ int main() {
   assert(!device::wlc_detail::to_c(response, c));
   response.settings.label = std::string("\xc0\xaf", 2);
   assert(device::wlc_detail::to_c(response, c));
-  assert(configure_request_value_encode(&c, bytes, sizeof(bytes), &length) == WL_CODEC_ERR_UTF8);
+  assert(configure_request_encode(&c, bytes, sizeof(bytes), &length) == WL_CODEC_ERR_UTF8);
 
   device::Numbers numbers{};
   assert(numbers.offset_or_default() == -7);
@@ -64,10 +64,10 @@ int main() {
   numbers.single = -0.0F; numbers.double_ = std::numeric_limits<double>::infinity();
   numbers.doubles = std::array<double, 2>{1.5, -0.0};
   numbers.words = {0, UINT32_MAX};
-  numbers_value_t nc{}, nd{};
+  numbers_t nc{}, nd{};
   assert(device::wlc_detail::to_c(numbers, nc));
-  assert(numbers_value_encode(&nc, bytes, sizeof(bytes), &length) == WL_CODEC_OK);
-  assert(numbers_value_decode(bytes, length, &nd) == WL_CODEC_OK);
+  assert(numbers_encode(&nc, bytes, sizeof(bytes), &length) == WL_CODEC_OK);
+  assert(numbers_decode(bytes, length, &nd) == WL_CODEC_OK);
   const auto result = device::wlc_detail::from_c(nd);
   assert(result.i8 == INT8_MIN && result.u8 == UINT8_MAX);
   assert(result.i16 == INT16_MIN && result.u16 == UINT16_MAX);
@@ -83,8 +83,8 @@ int main() {
     std::memcpy(numbers.doubles->data(),packed,16);
     assert(device::wlc_detail::to_c(numbers,nc));
     assert(std::memcmp(&nc.single,&single,4)==0 && std::memcmp(&nc.double_,&real,8)==0 && std::memcmp(nc.doubles,packed,16)==0);
-    assert(numbers_value_encode(&nc,bytes,sizeof(bytes),&length)==WL_CODEC_OK);
-    assert(numbers_value_decode(bytes,length,&nd)==WL_CODEC_OK);
+    assert(numbers_encode(&nc,bytes,sizeof(bytes),&length)==WL_CODEC_OK);
+    assert(numbers_decode(bytes,length,&nd)==WL_CODEC_OK);
     const auto raw=device::wlc_detail::from_c(nd);
     assert(std::memcmp(&raw.single,&single,4)==0 && std::memcmp(&raw.double_,&real,8)==0 && std::memcmp(raw.doubles->data(),packed,16)==0);
   }

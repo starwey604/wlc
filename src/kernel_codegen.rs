@@ -3,7 +3,7 @@
 use crate::{
     KernelProfile, SemanticModel,
     codec_plan::CodecPlan,
-    codegen::{CModel, type_name, upper_snake},
+    codegen::{plan::CModel, type_name, upper_snake},
     endpoint_layout::EndpointEnvelope,
     kernel_profile::KernelError,
 };
@@ -21,6 +21,15 @@ pub fn generate_kernel_c(
     schema: &SemanticModel,
     profile: &KernelProfile,
     module: &str,
+) -> Result<GeneratedKernelC, KernelError> {
+    generate_kernel_c_with_pruning(schema, profile, module, true)
+}
+
+pub(crate) fn generate_kernel_c_with_pruning(
+    schema: &SemanticModel,
+    profile: &KernelProfile,
+    module: &str,
+    prune_routes: bool,
 ) -> Result<GeneratedKernelC, KernelError> {
     let facts = CModel::new(schema, module).map_err(|e| KernelError(e.to_string()))?;
     let m = &facts.module;
@@ -98,9 +107,8 @@ pub fn generate_kernel_c(
         EndpointEnvelope::BusLength16 => packet_max + 2,
         _ => packet_max,
     };
-    let public =
-        crate::codegen::generate_c_with_fingerprints(schema, m, Some(&BTreeSet::new()), Some(p))
-            .map_err(|e| KernelError(e.to_string()))?;
+    let public = crate::codegen::generate_c_with_directions(schema, p, m, prune_routes)
+        .map_err(|e| KernelError(e.to_string()))?;
     let mut header = format!(
         "/* SPDX-License-Identifier: Apache-2.0 */\n#ifndef {upper}_KERNEL_H\n#define {upper}_KERNEL_H\n#include \"{m}.h\"\n#include \"wirelink/kernel.h\"\n#if WL_KERNEL_CONTRACT != 1\n#error \"static kernel contract mismatch\"\n#endif\n#ifdef __cplusplus\nextern \"C\" {{\n#endif\n#define {upper}_KERNEL_PROFILE_VERSION 2U\n#define {upper}_KERNEL_PACKET_FRAME_MAX {packet_max}U\n#define {upper}_KERNEL_WIRE_FRAME_MAX {wire_max}U\n#define {upper}_KERNEL_REQUEST_FRAME_MAX {req_max}U\n#define {upper}_KERNEL_REPLY_FRAME_MAX {resp_max}U\n#define {upper}_KERNEL_MESSAGE_FRAME_MAX {msg_max}U\n"
     );
@@ -119,7 +127,7 @@ pub fn generate_kernel_c(
         let resp = type_name(&service.response_name);
         writeln!(
             header,
-            "  int32_t (*on_rpc_{name})(void *, const {req}_t *, {resp}_value_t *);"
+            "  int32_t (*on_rpc_{name})(void *, const {req}_t *, {resp}_t *);"
         )
         .unwrap();
     }
@@ -138,7 +146,7 @@ pub fn generate_kernel_c(
     for service in &p.rpc_services {
         writeln!(
             header,
-            "    {}_value_t {};",
+            "    {}_t {};",
             type_name(&service.response_name),
             type_name(&service.name)
         )
@@ -146,28 +154,20 @@ pub fn generate_kernel_c(
     }
     writeln!(header, "  }} reply;\n  uint8_t requests[WL_KERNEL_CALLS][{req_max}U];\n  uint8_t replies[WL_KERNEL_REPLIES][{resp_max}U];\n  uint8_t message[{msg_max}U];\n}} {m}_kernel_t;\nwl_err_t {m}_kernel_init({m}_kernel_t *, wl_packet_port_t *, const {m}_kernel_handlers_t *, wl_kernel_error_fn, void *);\nwl_err_t {m}_kernel_step({m}_kernel_t *, uint32_t now);\n").unwrap();
     for service in &p.rpc_services {
-        writeln!(header, "wl_err_t {m}_kernel_{}_start({m}_kernel_t *, const {}_value_t *, uint32_t now, uint32_t timeout, {m}_kernel_{}_callback_t, void *, wl_kernel_call_handle_t *);", type_name(&service.name), type_name(&service.request_name), type_name(&service.name)).unwrap();
+        writeln!(header, "wl_err_t {m}_kernel_{}_start({m}_kernel_t *, const {}_t *, uint32_t now, uint32_t timeout, {m}_kernel_{}_callback_t, void *, wl_kernel_call_handle_t *);", type_name(&service.name), type_name(&service.request_name), type_name(&service.name)).unwrap();
     }
     for route in &p.send_routes {
         writeln!(
             header,
-            "wl_err_t {m}_kernel_send_{}({m}_kernel_t *, const {}_value_t *);",
+            "wl_err_t {m}_kernel_send_{}({m}_kernel_t *, const {}_t *);",
             type_name(&route.message_name),
             type_name(&route.message_name)
         )
         .unwrap();
-        writeln!(header, "/* Borrowed input is encoded before return; no view or source bytes are retained. */\nwl_err_t {m}_kernel_send_{}_view({m}_kernel_t *, const {}_t *);", type_name(&route.message_name), type_name(&route.message_name)).unwrap();
     }
     header.push_str("#ifdef __cplusplus\n}\n#endif\n#endif\n");
-    let mut private = format!(
-        "/* SPDX-License-Identifier: Apache-2.0 */\n#ifndef {upper}_KERNEL_CODECS_H\n#define {upper}_KERNEL_CODECS_H\n#include \"{m}.h\"\n"
-    );
-    if !p.rpc_services.is_empty() {
-        private.push_str(&crate::codegen::private_source(schema, m, p));
-    }
-    private.push_str("#endif\n");
     let mut source = format!(
-        "/* SPDX-License-Identifier: Apache-2.0 */\n#include \"{m}_kernel.h\"\n#include \"{m}_kernel_codecs.h\"\n#include <string.h>\n"
+        "/* SPDX-License-Identifier: Apache-2.0 */\n#include \"{m}_kernel.h\"\n#include <string.h>\n"
     );
     for service in &p.rpc_services {
         let name = type_name(&service.name);
@@ -175,7 +175,7 @@ pub fn generate_kernel_c(
         let resp = type_name(&service.response_name);
         writeln!(
             source,
-            "static void {m}_kernel_complete_{name}(wl_kernel_t *core, const wl_kernel_call_t *call, wl_kernel_result_t result, const uint8_t *body, size_t length) {{\n  (void)core;\n  {resp}_t response;\n  const {resp}_t *view = NULL;\n  if (result.outcome == WL_KERNEL_SUCCESS) {{\n    if ({m}_rpc_{resp}_decode(body, length, &response) == WL_CODEC_OK) view = &response;\n    else result = (wl_kernel_result_t){{WL_KERNEL_LOCAL_ERROR, WL_ERR_CORRUPT_PAYLOAD}};\n  }}\n  (({m}_kernel_{name}_callback_t)call->callback)(call->user, result, view);\n}}\nwl_err_t {m}_kernel_{name}_start({m}_kernel_t *endpoint, const {req}_value_t *request, uint32_t now, uint32_t timeout, {m}_kernel_{name}_callback_t callback, void *user, wl_kernel_call_handle_t *out) {{\n  if (out != NULL) *out = (wl_kernel_call_handle_t){{0}};\n  if (endpoint == NULL || request == NULL || callback == NULL || out == NULL || timeout == 0U || timeout > INT32_MAX) return WL_ERR_INVALID_ARG;\n  uint8_t slot;\n  uint8_t *payload;\n  wl_err_t error = wl_kernel_call_claim(&endpoint->core, &slot, &payload, NULL);\n  if (error != WL_OK) return error;\n  size_t length = 0U;\n  if ({m}_rpc_{req}_value_encode(request, payload, sizeof(endpoint->requests[0]) - WL_KERNEL_NATIVE_HEADER - WL_KERNEL_RPC_HEADER_DATA, &length) != WL_CODEC_OK) return WL_ERR_CORRUPT_PAYLOAD;\n  return wl_kernel_call_commit(&endpoint->core, slot, {}U, {}U, length, now, timeout, {m}_kernel_complete_{name}, (void (*)(void))callback, user, out);\n}}",
+            "static void {m}_kernel_complete_{name}(wl_kernel_t *core, const wl_kernel_call_t *call, wl_kernel_result_t result, const uint8_t *body, size_t length) {{\n  (void)core;\n  {resp}_t response;\n  const {resp}_t *view = NULL;\n  if (result.outcome == WL_KERNEL_SUCCESS) {{\n    if ({resp}_decode(body, length, &response) == WL_CODEC_OK) view = &response;\n    else result = (wl_kernel_result_t){{WL_KERNEL_LOCAL_ERROR, WL_ERR_CORRUPT_PAYLOAD}};\n  }}\n  (({m}_kernel_{name}_callback_t)call->callback)(call->user, result, view);\n}}\nwl_err_t {m}_kernel_{name}_start({m}_kernel_t *endpoint, const {req}_t *request, uint32_t now, uint32_t timeout, {m}_kernel_{name}_callback_t callback, void *user, wl_kernel_call_handle_t *out) {{\n  if (out != NULL) *out = (wl_kernel_call_handle_t){{0}};\n  if (endpoint == NULL || request == NULL || callback == NULL || out == NULL || timeout == 0U || timeout > INT32_MAX) return WL_ERR_INVALID_ARG;\n  uint8_t slot;\n  uint8_t *payload;\n  wl_err_t error = wl_kernel_call_claim(&endpoint->core, &slot, &payload, NULL);\n  if (error != WL_OK) return error;\n  size_t length = 0U;\n  if ({req}_encode(request, payload, sizeof(endpoint->requests[0]) - WL_KERNEL_NATIVE_HEADER - WL_KERNEL_RPC_HEADER_DATA, &length) != WL_CODEC_OK) return WL_ERR_CORRUPT_PAYLOAD;\n  return wl_kernel_call_commit(&endpoint->core, slot, {}U, {}U, length, now, timeout, {m}_kernel_complete_{name}, (void (*)(void))callback, user, out);\n}}",
             service.request_id, service.response_id
         )
         .unwrap();
@@ -184,13 +184,7 @@ pub fn generate_kernel_c(
         let name = type_name(&route.message_name);
         writeln!(
             source,
-            "wl_err_t {m}_kernel_send_{name}({m}_kernel_t *endpoint, const {name}_value_t *value) {{\n  if (endpoint == NULL || value == NULL) return WL_ERR_INVALID_ARG;\n  uint8_t *frame;\n  wl_err_t error = wl_kernel_msg_claim(&endpoint->core, &frame, NULL);\n  if (error != WL_OK) return error;\n  size_t length = 0U;\n  if ({name}_value_encode(value, frame + WL_KERNEL_NATIVE_HEADER, sizeof(endpoint->message) - WL_KERNEL_NATIVE_HEADER, &length) != WL_CODEC_OK) return WL_ERR_CORRUPT_PAYLOAD;\n  error = wl_wire_frame_seal(frame, sizeof(endpoint->message), WL_WIRE_MSG, {}U, length);\n  return error != WL_OK ? error : wl_kernel_msg_commit(&endpoint->core, WL_KERNEL_NATIVE_HEADER + length);\n}}",
-            route.message_id
-        )
-        .unwrap();
-        writeln!(
-            source,
-            "wl_err_t {m}_kernel_send_{name}_view({m}_kernel_t *endpoint, const {name}_t *value) {{\n  if (endpoint == NULL || value == NULL) return WL_ERR_INVALID_ARG;\n  uint8_t *frame;\n  wl_err_t error = wl_kernel_msg_claim(&endpoint->core, &frame, NULL);\n  if (error != WL_OK) return error;\n  size_t length = 0U;\n  if ({name}_encode(value, frame + WL_KERNEL_NATIVE_HEADER, sizeof(endpoint->message) - WL_KERNEL_NATIVE_HEADER, &length) != WL_CODEC_OK) return WL_ERR_CORRUPT_PAYLOAD;\n  error = wl_wire_frame_seal(frame, sizeof(endpoint->message), WL_WIRE_MSG, {}U, length);\n  return error != WL_OK ? error : wl_kernel_msg_commit(&endpoint->core, WL_KERNEL_NATIVE_HEADER + length);\n}}",
+            "wl_err_t {m}_kernel_send_{name}({m}_kernel_t *endpoint, const {name}_t *value) {{\n  if (endpoint == NULL || value == NULL) return WL_ERR_INVALID_ARG;\n  uint8_t *frame;\n  wl_err_t error = wl_kernel_msg_claim(&endpoint->core, &frame, NULL);\n  if (error != WL_OK) return error;\n  size_t length = 0U;\n  if ({name}_encode(value, frame + WL_KERNEL_NATIVE_HEADER, sizeof(endpoint->message) - WL_KERNEL_NATIVE_HEADER, &length) != WL_CODEC_OK) return WL_ERR_CORRUPT_PAYLOAD;\n  error = wl_wire_frame_seal(frame, sizeof(endpoint->message), WL_WIRE_MSG, {}U, length);\n  return error != WL_OK ? error : wl_kernel_msg_commit(&endpoint->core, WL_KERNEL_NATIVE_HEADER + length);\n}}",
             route.message_id
         )
         .unwrap();
@@ -202,7 +196,7 @@ pub fn generate_kernel_c(
         let resp = type_name(&service.response_name);
         writeln!(
             source,
-            "  case {}U: return wl_kernel_response(core, frame);\n  case {}U: {{\n    if (frame->kind != WL_WIRE_RPC_REQ) return WL_ERR_CORRUPT_PAYLOAD;\n    if (endpoint->handlers.on_rpc_{name} == NULL) return WL_ERR_NOT_SUPPORTED;\n    wl_kernel_rpc_metadata_t metadata;\n    wl_err_t error = wl_wire_rpc_read(frame->kind, frame->payload, frame->length, &metadata);\n    if (error != WL_OK) return error;\n    uint8_t reply;\n    uint8_t *payload;\n    error = wl_kernel_reply_claim(core, {}U, &metadata, &reply, &payload, NULL);\n    if (error != WL_OK) return error;\n    {req}_t request;\n    if ({m}_rpc_{req}_decode(metadata.body, metadata.length, &request) != WL_CODEC_OK) {{\n      wl_kernel_reply_abort(core, reply);\n      return WL_ERR_CORRUPT_PAYLOAD;\n    }}\n    {m}_rpc_{resp}_value_clear(&endpoint->reply.{name});\n    int32_t status = endpoint->handlers.on_rpc_{name}(endpoint->user, &request, &endpoint->reply.{name});\n    if (status != 0) return wl_kernel_reply_error(core, reply, status);\n    size_t length = 0U;\n    if ({m}_rpc_{resp}_value_encode(&endpoint->reply.{name}, payload, sizeof(endpoint->replies[0]) - WL_KERNEL_NATIVE_HEADER - WL_KERNEL_RPC_HEADER_DATA, &length) != WL_CODEC_OK) {{\n      wl_kernel_reply_abort(core, reply);\n      return WL_ERR_CORRUPT_PAYLOAD;\n    }}\n    return wl_kernel_reply_commit(core, reply, length);\n  }}",
+            "  case {}U: return wl_kernel_response(core, frame);\n  case {}U: {{\n    if (frame->kind != WL_WIRE_RPC_REQ) return WL_ERR_CORRUPT_PAYLOAD;\n    if (endpoint->handlers.on_rpc_{name} == NULL) return WL_ERR_NOT_SUPPORTED;\n    wl_kernel_rpc_metadata_t metadata;\n    wl_err_t error = wl_wire_rpc_read(frame->kind, frame->payload, frame->length, &metadata);\n    if (error != WL_OK) return error;\n    uint8_t reply;\n    uint8_t *payload;\n    error = wl_kernel_reply_claim(core, {}U, &metadata, &reply, &payload, NULL);\n    if (error != WL_OK) return error;\n    {req}_t request;\n    if ({req}_decode(metadata.body, metadata.length, &request) != WL_CODEC_OK) {{\n      wl_kernel_reply_abort(core, reply);\n      return WL_ERR_CORRUPT_PAYLOAD;\n    }}\n    {resp}_clear(&endpoint->reply.{name});\n    int32_t status = endpoint->handlers.on_rpc_{name}(endpoint->user, &request, &endpoint->reply.{name});\n    if (status != 0) return wl_kernel_reply_error(core, reply, status);\n    size_t length = 0U;\n    if ({resp}_encode(&endpoint->reply.{name}, payload, sizeof(endpoint->replies[0]) - WL_KERNEL_NATIVE_HEADER - WL_KERNEL_RPC_HEADER_DATA, &length) != WL_CODEC_OK) {{\n      wl_kernel_reply_abort(core, reply);\n      return WL_ERR_CORRUPT_PAYLOAD;\n    }}\n    return wl_kernel_reply_commit(core, reply, length);\n  }}",
             service.response_id, service.request_id, service.response_id
         )
         .unwrap();
@@ -214,11 +208,9 @@ pub fn generate_kernel_c(
     writeln!(source, "  default: return WL_ERR_NOT_SUPPORTED;\n  }}\n}}\nwl_err_t {m}_kernel_init({m}_kernel_t *endpoint, wl_packet_port_t *port, const {m}_kernel_handlers_t *handlers, wl_kernel_error_fn error, void *user) {{\n  if (endpoint == NULL || port == NULL || handlers == NULL) return WL_ERR_INVALID_ARG;\n  const {m}_kernel_handlers_t saved = *handlers;\n  memset(endpoint, 0, sizeof(*endpoint));\n  endpoint->handlers = saved;\n  endpoint->user = user;\n  wl_kernel_config_t config = {{\n      .port = port,\n      .storage = {{\n          .requests = &endpoint->requests[0][0],\n          .replies = &endpoint->replies[0][0],\n          .message = endpoint->message,\n          .request_stride = sizeof(endpoint->requests[0]),\n          .reply_stride = sizeof(endpoint->replies[0]),\n          .message_capacity = sizeof(endpoint->message),\n      }},\n      .route = {m}_kernel_route,\n      .on_error = error,\n      .user = user,\n  }};\n  return wl_kernel_init(&endpoint->core, &config);\n}}\nwl_err_t {m}_kernel_step({m}_kernel_t *endpoint, uint32_t now) {{\n  return endpoint == NULL ? WL_ERR_INVALID_ARG : wl_kernel_step(&endpoint->core, now, WL_KERNEL_BUDGET);\n}}").unwrap();
     let mut files = BTreeMap::from([
         (format!("{m}.h"), public.header),
-        (format!("{m}_values.h"), public.values_header),
         (format!("{m}.c"), format!("{}\n", public.source.trim_end())),
         (format!("{m}_kernel.h"), header),
         (format!("{m}_kernel.c"), source),
-        (format!("{m}_kernel_codecs.h"), private),
     ]);
     let mut deployment = format!(
         "{{\n  \"format\": \"wirelink-static-kernel-manifest-v1\",\n  \"kernel_contract\": 1,\n  \"profile_version\": 2,\n  \"envelope\": \"{wire_envelope}\",\n  \"integrity\": \"{integrity}\",\n  \"rpc_role\": \"both\",\n  \"call_slots\": 4,\n  \"reply_slots\": 3,\n  \"event_budget\": 16,\n  \"request_frame_capacity\": {req_max},\n  \"reply_frame_capacity\": {resp_max},\n  \"message_frame_capacity\": {msg_max},\n  \"messages\": [\n"

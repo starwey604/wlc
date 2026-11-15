@@ -30,7 +30,6 @@ fn required_fixed_encoders_preserve_wire_preflight_and_bit_patterns() {
     let dir = tempdir().unwrap();
     for (name, text) in [
         ("required_fixed.h", c.header),
-        ("required_fixed_values.h", c.values_header),
         ("required_fixed.c", c.source),
         ("test.c", include_str!("fixtures/required_fixed.c").into()),
     ] {
@@ -67,6 +66,7 @@ fn required_fixed_encoders_preserve_wire_preflight_and_bit_patterns() {
             .arg(root.join("include"))
             .arg("-I")
             .arg(dir.path())
+            .arg(root.join("src/codec.c"))
             .arg(dir.path().join("test.c"))
             .arg("-o")
             .arg(&binary)

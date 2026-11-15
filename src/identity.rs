@@ -124,15 +124,7 @@ pub fn binding_profile_identity(model: &BindingProfileModel) -> u64 {
         }
         hash_delivery(&mut hash, service.request_delivery);
         hash_delivery(&mut hash, service.response_delivery);
-        hash_codec_override(
-            &mut hash,
-            service.codec,
-            if service.is_managed() {
-                CodecProfile::ManagedTagged
-            } else {
-                CodecProfile::SchemaV1
-            },
-        );
+        hash_codec_override(&mut hash, service.codec, CodecProfile::SchemaV1);
         if service.guarantee == RpcGuarantee::Correlate {
             hash.string("rpc-guarantee-v1");
             hash.string("correlate");

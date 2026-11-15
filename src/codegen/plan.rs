@@ -2,9 +2,9 @@
 //! Compiler-side facts only. No new wire policy or generated runtime metadata.
 use std::collections::HashMap;
 
-use super::wire::{append_varint, field_wire, fixed_width};
+use super::wire::wire_type;
 use super::{CodegenError, names};
-use crate::codec_plan::{CodecPlan, CodecProfile};
+use crate::codec_plan::{CodecPlan, CodecProfile, fixed_width};
 use crate::{
     ast::Cardinality,
     semantic::{FieldSymbol, MessageSymbol, SemanticModel},
@@ -49,6 +49,7 @@ pub(super) enum Lookup {
     Binary,
 }
 
+#[derive(Clone)]
 pub(super) struct FieldKey {
     pub wire: u8,
     pub bytes: [u8; 3],
@@ -57,7 +58,11 @@ pub(super) struct FieldKey {
 
 impl FieldKey {
     fn new(field: &FieldSymbol) -> Self {
-        Self::with_wire(field, field_wire(field))
+        let is_packed = matches!(
+            field.cardinality,
+            Cardinality::Packed(_) | Cardinality::RequiredPacked(_)
+        );
+        Self::with_wire(field, wire_type(&field.ty, is_packed))
     }
 
     fn with_wire(field: &FieldSymbol, wire: u8) -> Self {
@@ -80,6 +85,7 @@ impl FieldKey {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct PackedArray {
     pub count: u16,
     pub required: bool,
@@ -88,6 +94,7 @@ pub(super) struct PackedArray {
     pub total: u64,
 }
 
+#[derive(Clone)]
 pub(super) struct MessagePlan<'a> {
     pub message: &'a MessageSymbol,
     pub profile: CodecProfile,
@@ -128,11 +135,6 @@ impl<'a> MessagePlan<'a> {
         plan
     }
 
-    pub fn varuint32(&self, field: &FieldSymbol) -> bool {
-        crate::codec_plan::field_encoding(field, self.profile)
-            == crate::codec_plan::ValueEncoding::UnsignedVarint(32)
-    }
-
     pub fn new(message: &'a MessageSymbol) -> Self {
         let lookup = if message.fields.len() <= 8 {
             Lookup::Linear
@@ -158,7 +160,18 @@ impl<'a> MessagePlan<'a> {
             let width = fixed_width(&field.ty)?;
             let payload = u64::from(count) * u64::from(width);
             let mut prefix = keys[0].bytes[..keys[0].length].to_vec();
-            append_varint(payload, &mut prefix);
+            let mut v = payload;
+            loop {
+                let mut byte = (v & 0x7f) as u8;
+                v >>= 7;
+                if v != 0 {
+                    byte |= 0x80;
+                }
+                prefix.push(byte);
+                if v == 0 {
+                    break;
+                }
+            }
             let total = payload + prefix.len() as u64;
             Some(PackedArray {
                 count,

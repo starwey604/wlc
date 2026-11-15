@@ -4,32 +4,42 @@ static uint32_t next_random(void) {
   random_state ^= random_state << 13; random_state ^= random_state >> 17;
   random_state ^= random_state << 5; return random_state;
 }
-static void check(const wlc_desc_t *d, void *a, void *b, size_t size,
+static void check(const wl_codec_desc_t *d, void *a, void *b, size_t size,
                   const uint8_t *wire, size_t n) {
+  uint8_t scratch[4096];
+  assert(size <= sizeof(scratch));
   memset(a, 0xA5, size); memset(b, 0xA5, size);
-  int ar = wlc_decode(d, wire, n, a), br = reference_decode(d, wire, n, b);
+  int ar = wl_codec_decode(d, wire, n, a, scratch);
+  int br = reference_decode(d, wire, n, b);
   assert(ar == br && memcmp(a, b, size) == 0);
 }
-static void scalar_matrix(const wlc_desc_t *d, void *a, void *b, size_t size) {
+static uint8_t *emit_field_value(uint8_t *p, const wl_codec_field_t *f, uint32_t val) {
+  if (f->kind == WL_CODEC_KIND_INLINE_STRING) {
+    p = wl_codec_putv(p, ((uint64_t)f->number << 3) | 2U);
+    *p++ = 1U;
+    *p++ = (uint8_t)('a' + (val % 26U));
+    return p;
+  }
+  p = wl_codec_putv(p, (uint64_t)f->number << 3);
+  return wl_codec_putv(p, val);
+}
+static void scalar_matrix(const wl_codec_desc_t *d, void *a, void *b, size_t size) {
   uint8_t wire[2048], full[1024];
   uint8_t *p = full;
-  for (size_t i = 0; i < d->count; ++i) {
-    wlc_putv(&p, (uint64_t)d->fields[i].number << 3);
-    wlc_putv(&p, UINT32_MAX - (uint32_t)i);
+  for (size_t i = 0; i < d->field_count; ++i) {
+    p = emit_field_value(p, &d->fields[i], UINT32_MAX - (uint32_t)i);
   }
   size_t length = (size_t)(p - full);
   for (size_t n = 0; n <= length; ++n) check(d, a, b, size, full, n);
-  /* One descending transition followed by ascending fields, and repeated
-   * direction changes. A lookup hint must never become an ordering rule. */
   for (unsigned pattern = 0; pattern < 3; ++pattern) {
     p = wire;
-    for (size_t i = 0; i < d->count; ++i) {
-      size_t j = pattern == 0 ? d->count - 1 - i
-                 : pattern == 1 ? (i == 0 ? d->count - 1 : i - 1)
-                 : (i % 2 == 0 ? i / 2 : d->count - 1 - i / 2);
-      wlc_putv(&p, (uint64_t)d->fields[j].number << 3);
-      wlc_putv(&p, UINT32_MAX - (uint32_t)j);
-      wlc_putv(&p, UINT64_C(65000) << 3); wlc_putv(&p, 42);
+    for (size_t i = 0; i < d->field_count; ++i) {
+      size_t j = pattern == 0 ? d->field_count - 1 - i
+                 : pattern == 1 ? (i == 0 ? d->field_count - 1 : i - 1)
+                 : (i % 2 == 0 ? i / 2 : d->field_count - 1 - i / 2);
+      p = emit_field_value(p, &d->fields[j], UINT32_MAX - (uint32_t)j);
+      p = wl_codec_putv(p, UINT64_C(65000) << 3);
+      p = wl_codec_putv(p, 42);
     }
     for (size_t n = 0; n <= (size_t)(p - wire); ++n)
       check(d, a, b, size, wire, n);
@@ -38,15 +48,14 @@ static void scalar_matrix(const wlc_desc_t *d, void *a, void *b, size_t size) {
     p = wire;
     if (r % 4 == 0) {
       size_t order[64];
-      for (size_t i = 0; i < d->count; ++i) order[i] = i;
-      for (size_t i = d->count; i > 1; --i) {
+      for (size_t i = 0; i < d->field_count; ++i) order[i] = i;
+      for (size_t i = d->field_count; i > 1; --i) {
         size_t j = next_random() % i, tmp = order[j]; order[j] = order[i - 1]; order[i - 1] = tmp;
       }
-      for (size_t i = 0; i < d->count; ++i) {
+      for (size_t i = 0; i < d->field_count; ++i) {
         if (next_random() % 5 == 0) continue;
-        wlc_putv(&p, (uint64_t)d->fields[order[i]].number << 3);
-        wlc_putv(&p, next_random());
-        if (next_random() % 3 == 0) { wlc_putv(&p, UINT64_C(65000) << 3); wlc_putv(&p, 42); }
+        p = emit_field_value(p, &d->fields[order[i]], next_random());
+        if (next_random() % 3 == 0) { p = wl_codec_putv(p, UINT64_C(65000) << 3); p = wl_codec_putv(p, 42); }
       }
     } else if (r % 4 == 1) {
       memcpy(wire, full, length); p += length;
@@ -62,20 +71,18 @@ static void scalar_matrix(const wlc_desc_t *d, void *a, void *b, size_t size) {
 }
 #define TEST(name) do { name##_t a, b; scalar_matrix(&name##_desc, &a, &b, sizeof(a)); } while (0)
 static void test_key_bounds(void) {
-  /* Reject high bits before narrowing the number: these include values whose
-   * low 16/32 bits would otherwise look like valid known fields. */
   const uint64_t numbers[] = {0, 1, 65535, 65536, 65537,
     UINT64_C(0x100000001), UINT64_MAX >> 3};
   for (size_t i = 0; i < sizeof(numbers) / sizeof(numbers[0]); ++i) {
     for (unsigned wire_type = 0; wire_type < 8; ++wire_type) {
       uint8_t bytes[24] = {0}, *p = bytes;
-      wlc_putv(&p, (numbers[i] << 3) | wire_type);
+      p = wl_codec_putv(p, (numbers[i] << 3) | wire_type);
       size_t length = (size_t)(p - bytes) + 8;
-      n2s1_t a, b;
+      n2s1_t a, b, scratch;
       check(&n2s1_desc, &a, &b, sizeof(a), bytes, length);
       if (numbers[i] == 0 || numbers[i] > UINT16_MAX ||
           (wire_type != 0 && wire_type != 1 && wire_type != 2 && wire_type != 5))
-        assert(wlc_decode(&n2s1_desc, bytes, length, &a) == WL_CODEC_ERR_MALFORMED);
+        assert(wl_codec_decode(&n2s1_desc, bytes, length, &a, &scratch) == WL_CODEC_ERR_MALFORMED);
     }
   }
 }
@@ -94,8 +101,6 @@ static void check_mixed(const uint8_t *wire, size_t length, size_t capacity) {
   assert(memcmp(xa, xb, sizeof(xa)) == 0 && memcmp(ca, cb, sizeof(ca)) == 0);
 }
 static void test_mixed(void) {
-  /* Child fields reversed, repeated fields interleaved, unknown field between
-   * repeats, then required child. Cursor state must not leak across recursion. */
   const uint8_t wire[] = {
     0x10, 1, 0x1a, 5, 0x80, 1, 2, 8, 3, 0x78, 9, 0x10, 4,
     0x0a, 5, 0x80, 1, 5, 8, 6, 0x1a, 2, 8, 7,

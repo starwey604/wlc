@@ -362,11 +362,7 @@ pub(crate) fn resolve_binding_profile(
         let managed = rpc.request_operation_id.is_none();
         let codec = resolve_codec(
             rpc.codec.as_ref(),
-            if managed {
-                CodecProfile::ManagedTagged
-            } else {
-                CodecProfile::SchemaV1
-            },
+            CodecProfile::SchemaV1,
             &[request.id, response.id],
             schema,
             &mut errors,
@@ -707,12 +703,11 @@ fn resolve_codec(
     };
     let codec = match value.value.as_str() {
         "schema_v1" => CodecProfile::SchemaV1,
-        "managed_tagged" => CodecProfile::ManagedTagged,
         "positional_v1" => CodecProfile::PositionalV1,
         _ => {
             errors.push(ProfileSemanticError::new(
                 value.span,
-                "codec must be schema_v1, managed_tagged or positional_v1",
+                "codec must be schema_v1 or positional_v1",
             ));
             return default;
         }

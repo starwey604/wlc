@@ -7,7 +7,7 @@ use wlc::{
 
 #[test]
 fn readers_preserve_canonical_errors_cursor_and_partial_decode_state() {
-    for mode in ["schema_v1", "managed_tagged", "positional_v1"] {
+    for mode in ["schema_v1", "positional_v1"] {
         let schema = if mode == "schema_v1" {
             "version 1; message StreamChunk @id(103) { required fixed32 sequence @id(1); required bytes<1024> data @id(2); }"
         } else {
@@ -18,15 +18,10 @@ fn readers_preserve_canonical_errors_cursor_and_partial_decode_state() {
             if mode == "schema_v1" {
                 generate_c(&model, "candidate").unwrap()
             } else {
-                let codec = if mode == "positional_v1" {
-                    "codec=positional_v1;"
-                } else {
-                    ""
-                };
                 let profile = analyze_binding_profile(
-                    &parse_binding_profile(&format!(
-                        "profile version 2; direct Scalar {{ delivery=unreliable; {codec} }}"
-                    ))
+                    &parse_binding_profile(
+                        "profile version 2; direct Scalar { delivery=unreliable; codec=positional_v1; }",
+                    )
                     .unwrap(),
                     &model,
                 )
@@ -44,7 +39,6 @@ fn readers_preserve_canonical_errors_cursor_and_partial_decode_state() {
         for (name, contents) in [
             ("candidate.c", generated.source),
             ("candidate.h", generated.header),
-            ("candidate_values.h", generated.values_header),
             (
                 "varint_reference.c",
                 include_str!("fixtures/varint_reference.c").into(),
@@ -87,6 +81,7 @@ fn readers_preserve_canonical_errors_cursor_and_partial_decode_state() {
                 .arg(root.join("include"))
                 .arg("-I")
                 .arg(dir.path())
+                .arg(root.join("src/codec.c"))
                 .arg(dir.path().join("test.c"))
                 .arg("-o")
                 .arg(&binary)

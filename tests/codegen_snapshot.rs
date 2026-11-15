@@ -60,7 +60,6 @@ fn generated_artifacts_match_reviewed_snapshots() {
             (
                 vec![
                     ("business.h".into(), c.header),
-                    ("business_values.h".into(), c.values_header),
                     ("business.c".into(), c.source),
                 ],
                 None,

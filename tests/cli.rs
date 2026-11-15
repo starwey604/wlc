@@ -58,10 +58,8 @@ fn compile_writes_named_c_artifacts() {
     let source = fs::read_to_string(output.join("motor_api.c")).expect("generated source");
     let manifest =
         fs::read_to_string(output.join("motor_api_manifest.json")).expect("generated manifest");
-    assert!(header.contains("#include \"motor_api_values.h\""));
-    let values = fs::read_to_string(output.join("motor_api_values.h")).unwrap();
-    assert!(values.contains("STATUS_MESSAGE_ID 1U"));
-    assert!(values.contains("status_value_t"));
+    assert!(header.contains("STATUS_MESSAGE_ID 1U"));
+    assert!(header.contains("status_t"));
     assert!(source.contains("#include \"motor_api.h\""));
     assert!(!source.contains("wl_send_reliable"));
     assert!(manifest.contains("\"format\": \"wirelink-codegen-manifest-v1\""));
@@ -106,7 +104,7 @@ fn compile_records_bounds_and_validate_rejects_bound_changes() {
         .assert()
         .success();
     let manifest = fs::read_to_string(output.join("metadata_manifest.json")).unwrap();
-    let header = fs::read_to_string(output.join("metadata_values.h")).unwrap();
+    let header = fs::read_to_string(output.join("metadata.h")).unwrap();
     assert!(manifest.contains("\"field\": \"name\""));
     assert!(manifest.contains("\"kind\": \"string\", \"max_length\": 31"));
     assert!(manifest.contains("\"kind\": \"bytes\", \"max_length\": 8"));
@@ -242,10 +240,10 @@ fn release_smoke_fixture_uses_the_current_kernel_contract() {
         fs::read_to_string(directory.path().join("release_smoke_kernel_manifest.json")).unwrap();
     assert!(manifest.contains("\"minor\": 13"));
     for name in [
+        "release_smoke.h",
+        "release_smoke.c",
         "release_smoke_kernel.h",
         "release_smoke_kernel.c",
-        "release_smoke_kernel_codecs.h",
-        "release_smoke_values.h",
     ] {
         assert!(directory.path().join(name).is_file(), "missing {name}");
     }

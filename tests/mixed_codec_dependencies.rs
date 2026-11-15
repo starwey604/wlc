@@ -33,11 +33,7 @@ fn positional_routes_preserve_shared_tagged_dependencies() {
                         } else {
                             wlc::generate_c(&schema, "mixed").unwrap()
                         };
-                        for (name, contents) in [
-                            ("mixed.h", c.header),
-                            ("mixed_values.h", c.values_header),
-                            ("mixed.c", c.source),
-                        ] {
+                        for (name, contents) in [("mixed.h", c.header), ("mixed.c", c.source)] {
                             fs::write(dir.path().join(name), contents).unwrap();
                         }
                         fs::write(
@@ -64,6 +60,7 @@ fn positional_routes_preserve_shared_tagged_dependencies() {
                             .arg(root.join("include"))
                             .arg("-I")
                             .arg(dir.path())
+                            .arg(root.join("src/codec.c"))
                             .arg(dir.path().join("test.c"))
                             .arg("-o")
                             .arg(dir.path().join("test"))
@@ -109,11 +106,7 @@ send Parent { delivery=unreliable; }",
     .unwrap();
     let c = generate_c_for_profile(&schema, &profile, "mixed").unwrap();
     let dir = tempfile::tempdir().unwrap();
-    for (name, text) in [
-        ("mixed.h", c.header),
-        ("mixed_values.h", c.values_header),
-        ("mixed.c", c.source),
-    ] {
+    for (name, text) in [("mixed.h", c.header), ("mixed.c", c.source)] {
         fs::write(dir.path().join(name), text).unwrap();
     }
     let result = Command::new("cc")

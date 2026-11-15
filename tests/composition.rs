@@ -44,10 +44,10 @@ fn diamond_imports_are_relative_deduplicated_and_wire_equivalent() {
         generate_c(&flat, "product").unwrap()
     );
     let codec = generate_c(&model, "product").unwrap();
-    assert!(codec.source.contains("case WLC_ENUM:"));
-    assert!(codec.source.contains("case WLC_BYTES:"));
-    assert!(!codec.source.contains("case WLC_STRING:"));
-    assert!(!codec.source.contains("static bool wlc_utf8("));
+    assert!(codec.source.contains("arm_decode"));
+    assert!(codec.source.contains("wlc_scalar_shape_0"));
+    assert!(codec.source.contains("WL_CODEC_KIND_INLINE_BYTES"));
+    assert!(!codec.source.contains("WL_CODEC_KIND_STRING"));
     let output = Command::new(env!("CARGO_BIN_EXE_wlc"))
         .arg("dependencies")
         .arg(dir.path().join("product.wl"))

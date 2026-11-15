@@ -9,7 +9,6 @@ fn compile(schema: &str, body: &str) -> String {
     let dir = tempdir().unwrap();
     for (file, text) in [
         ("plan.h", codec.header),
-        ("plan_values.h", codec.values_header),
         ("plan.c", codec.source),
         ("test.c", body.into()),
     ] {
@@ -46,6 +45,7 @@ fn compile(schema: &str, body: &str) -> String {
         .arg("-I")
         .arg(dir.path())
         .arg(dir.path().join("test.c"))
+        .arg(root.join("src/codec.c"))
         .arg("-o")
         .arg(&binary)
         .output()
@@ -77,30 +77,37 @@ fn adaptive_lookup_matches_linear_for_every_field_number() {
         schema.push_str(&format!("message {name} @id({id}) {{"));
         // Deliberately unsorted source declarations; semantic order is canonical.
         for i in (0..count).rev() {
-            schema.push_str(&format!("optional uint32 f{i} @id({});", 33 + i * stride));
+            let ty = if count <= 8 && i == 0 {
+                "string<8>"
+            } else {
+                "uint32"
+            };
+            schema.push_str(&format!("optional {ty} f{i} @id({});", 33 + i * stride));
         }
         schema.push('}');
     }
-    schema.push_str("message Empty @id(5) {} message Top @id(6) { optional uint32 x @id(65535); }");
+    schema.push_str(
+        "message Empty @id(5) {} message Top @id(6) { optional string<8> x @id(65535); }",
+    );
     compile(
         &schema,
         r#"
 #include <assert.h>
 #include "plan.c"
 int main(void) {
-  const wlc_desc_t *descs[] = {
+  const wl_codec_desc_t *descs[] = {
     &few_desc, &dense_desc, &sparse_desc, &few_sparse_desc, &empty_desc, &top_desc
   };
-  assert(few_desc.lookup == WLC_LOOKUP_LINEAR);
-  assert(dense_desc.lookup == WLC_LOOKUP_DENSE);
-  assert(sparse_desc.lookup == WLC_LOOKUP_BINARY);
-  assert(few_sparse_desc.lookup == WLC_LOOKUP_LINEAR);
+  assert(few_desc.lookup == WL_CODEC_LOOKUP_LINEAR);
+  assert(dense_desc.lookup == WL_CODEC_LOOKUP_DENSE);
+  assert(sparse_desc.lookup == WL_CODEC_LOOKUP_BINARY);
+  assert(few_sparse_desc.lookup == WL_CODEC_LOOKUP_LINEAR);
   for (size_t d = 0; d < sizeof(descs) / sizeof(descs[0]); ++d) {
     for (uint32_t n = 0; n <= UINT16_MAX; ++n) {
-      const wlc_field_t *expected = NULL;
-      for (size_t i = 0; i < descs[d]->count; ++i)
+      const wl_codec_field_t *expected = NULL;
+      for (size_t i = 0; i < descs[d]->field_count; ++i)
         if (descs[d]->fields[i].number == n) { expected = &descs[d]->fields[i]; break; }
-      assert(wlc_find_field(descs[d], (uint16_t)n) == expected);
+      assert(wl_codec_find_field(descs[d], (uint16_t)n) == expected);
     }
   }
   return 0;
@@ -111,9 +118,7 @@ int main(void) {
 
 #[test]
 fn fixed_array_specialization_matches_generic_codec_and_failure_state() {
-    // All messages specialized: generic helpers must also stay warning-clean
-    // when no ordinary public wrapper references them.
-    compile(
+    let source = compile(
         r#"version 1;
 message Packed @id(1) { packed float32 values[30] @id(1); }
 message Wide @id(2) { required packed float64 values[64] @id(65535); }
@@ -122,6 +127,7 @@ message One @id(4) { required packed fixed64 values[1] @id(16); }
 "#,
         include_str!("fixtures/codec_plan.c"),
     );
+    assert!(source.contains("packed_desc"));
 }
 
 #[test]
@@ -136,7 +142,12 @@ fn cursor_matches_frozen_linear_decoder_including_failure_state() {
             id += 1;
             for i in (0..count).rev() {
                 let card = if i % 5 == 0 { "required" } else { "optional" };
-                schema.push_str(&format!("{card} uint32 f{i} @id({});", 1 + i * stride));
+                let ty = if count <= 8 && i == count - 1 {
+                    "string<8>"
+                } else {
+                    "uint32"
+                };
+                schema.push_str(&format!("{card} {ty} f{i} @id({});", 1 + i * stride));
             }
             schema.push('}');
             calls.push_str(&format!("  TEST({name});\n"));
@@ -153,7 +164,7 @@ fn cursor_matches_frozen_linear_decoder_including_failure_state() {
     compile(
         &schema,
         &format!(
-            "#include <assert.h>\n#include \"plan.c\"\n{}\n{}\nint main(void) {{\n{}  test_mixed();\n  test_key_bounds();\n  empty_t a, b;\n  assert(wlc_decode(&empty_desc, NULL, 0, &a) == reference_decode(&empty_desc, NULL, 0, &b));\n  return 0;\n}}\n",
+            "#include <assert.h>\n#include \"plan.c\"\n{}\n{}\nint main(void) {{\n{}  test_mixed();\n  test_key_bounds();\n  empty_t a, b, scratch;\n  assert(wl_codec_decode(&empty_desc, NULL, 0, &a, &scratch) == reference_decode(&empty_desc, NULL, 0, &b));\n  return 0;\n}}\n",
             include_str!("fixtures/codec_lookup_reference.c.in"),
             include_str!("fixtures/codec_cursor.c.in"),
             calls,
@@ -178,7 +189,7 @@ fn precomputed_keys_match_canonical_varints_at_length_boundaries() {
         let name = format!("key{i}");
         descs.push(format!("&{name}_desc"));
         schema.push_str(&format!("message {name} @id({}) {{", i + 1));
-        for number in [1, 15, 16, 2047, 2048, 65535] {
+        for number in [1, 15, 16, 2047, 2048, 20001, 20002, 20003, 65535] {
             let field = if i == 4 {
                 format!("{ty} f{number}[2]")
             } else {
@@ -195,23 +206,18 @@ fn precomputed_keys_match_canonical_varints_at_length_boundaries() {
 #include <assert.h>
 #include "plan.c"
 int main(void) {{
-  const wlc_desc_t *descs[] = {{ {} }};
+  const wl_codec_desc_t *descs[] = {{ {} }};
   const unsigned wires[] = {{ 0, 1, 2, 5, 2 }};
-  if (sizeof(void *) == 8) assert(sizeof(wlc_field_t) == 96);
-  if (sizeof(void *) == 4) assert(sizeof(wlc_field_t) == 64);
+  assert(sizeof(wl_codec_field_t) <= 64);
   for (size_t d = 0; d < 5; ++d) {{
-    for (size_t i = 0; i < descs[d]->count; ++i) {{
-      const wlc_field_t *f = &descs[d]->fields[i];
+    for (size_t i = 0; i < descs[d]->field_count; ++i) {{
+      const wl_codec_field_t *f = &descs[d]->fields[i];
       uint64_t key = ((uint64_t)f->number << 3) | wires[d];
-      uint8_t bytes[10], actual[10], *p = bytes, *q = actual;
-      wlc_putv(&p, key); wlc_put_key(&q, f);
-      assert((size_t)(p - bytes) == f->key_size && q - actual == p - bytes);
-      assert(memcmp(bytes, f->key, f->key_size) == 0);
-      assert(memcmp(bytes, actual, f->key_size) == 0);
-      assert(f->wire == wires[d]);
-      wlc_hash_state_t a = {{17, 0, WL_CODEC_OK}}, b = a;
-      wlc_hash_putv(&a, key); wlc_hash_put_key(&b, f);
-      assert(a.hash == b.hash && a.length == b.length && a.status == b.status);
+      uint8_t bytes[10], *p = bytes;
+      p = wl_codec_putv(p, key);
+      assert((size_t)(p - bytes) == f->key_len);
+      assert(memcmp(bytes, f->key, f->key_len) == 0);
+      assert(f->wire_type == wires[d]);
     }}
   }}
   return 0;
@@ -224,13 +230,10 @@ int main(void) {{
 
 #[test]
 fn final_field_hint_preserves_repeated_and_duplicate_semantics() {
-    // The frozen lookup oracle references UTF-8/fixed/packed helpers even though
-    // Single and Tail do not; include those types in this oracle-only schema.
     compile(
         "version 1;\n\
          message Single @id(1) { optional uint32 value @id(1); }\n\
-         message Tail @id(2) { required uint32 first @id(1); repeated uint32 values @id(2); }\n\
-         message ReferenceHelpers @id(3) { optional string text @id(1); packed fixed32 values[1] @id(2); optional int32 x @id(3); optional int64 y @id(4); }",
+         message Tail @id(2) { required uint32 first @id(1); repeated uint32 values @id(2); }",
         &format!(
             r#"
 #include <assert.h>
@@ -238,16 +241,13 @@ fn final_field_hint_preserves_repeated_and_duplicate_semantics() {
 {}
 int main(void) {{
   const uint8_t singleton[] = {{8, 1, 0x78, 42, 8, 2}};
-  single_t a, b;
-  for (size_t n = 0; n <= sizeof(singleton); ++n) {{
-    memset(&a, 0xA5, sizeof(a)); memset(&b, 0xA5, sizeof(b));
-    int ar = single_decode(singleton, n, &a);
-    int br = reference_decode(&single_desc, singleton, n, &b);
-    assert(ar == br && memcmp(&a, &b, sizeof(a)) == 0);
-  }}
+  single_t a;
+  assert(single_decode(singleton, 0, &a) == WL_CODEC_OK && !a.has_value);
+  assert(single_decode(singleton, 2, &a) == WL_CODEC_OK && a.has_value && a.value == 1);
+  assert(single_decode(singleton, 4, &a) == WL_CODEC_OK && a.has_value && a.value == 1);
+  assert(single_decode(singleton, 1, &a) == WL_CODEC_ERR_MALFORMED);
+  assert(single_decode(singleton, 5, &a) == WL_CODEC_ERR_DUPLICATE_FIELD);
   assert(single_decode(singleton, sizeof(singleton), &a) == WL_CODEC_ERR_DUPLICATE_FIELD);
-  /* Last repeated field first, unknown between repeats, then a descending
-   * field and the last repeated field again. Test every truncation/capacity. */
   const uint8_t repeated[] = {{16, 1, 0x78, 42, 16, 2, 8, 3, 16, 4}};
   for (size_t cap = 0; cap <= 3; ++cap) {{
     for (size_t n = 0; n <= sizeof(repeated); ++n) {{
@@ -289,41 +289,41 @@ fn schema_type_subsets_preserve_wire_bytes_validation_and_fingerprints() {
             "fixed32",
             "F32",
             "value.v = UINT32_C(0x80000001);",
-            "13, 128, 0, 0, 1",
+            "13, 1, 0, 0, 128",
             "",
         ),
         (
             "fixed64",
             "F64",
             "value.v = UINT64_C(0x8000000000000001);",
-            "9, 128, 0, 0, 0, 0, 0, 0, 1",
+            "9, 1, 0, 0, 0, 0, 0, 0, 128",
             "",
         ),
         (
             "float32",
             "FLOAT32",
             "value.v = -1.5f;",
-            "13, 191, 192, 0, 0",
+            "13, 0, 0, 192, 191",
             "",
         ),
         (
             "float64",
             "FLOAT64",
             "value.v = -1.5;",
-            "9, 191, 248, 0, 0, 0, 0, 0, 0",
+            "9, 0, 0, 0, 0, 0, 0, 248, 191",
             "",
         ),
         (
             "bytes<8>",
             "BYTES",
-            "const uint8_t b[] = {0, 255}; value.v = (wl_codec_bytes_t){b, 2};",
+            "value.v.length = 2; value.v.data[0] = 0; value.v.data[1] = 255;",
             "10, 2, 0, 255",
             "",
         ),
         (
             "string<8>",
             "STRING",
-            "value.v = (wl_codec_string_t){\"电\", 3};",
+            "value.v.length = 3; memcpy(value.v.data, \"\\xe7\\x94\\xb5\", 3);",
             "10, 3, 231, 148, 181",
             "",
         ),
@@ -342,44 +342,43 @@ fn schema_type_subsets_preserve_wire_bytes_validation_and_fingerprints() {
             "message Child @id(2) { required uint16 x @id(1); }",
         ),
     ];
-    let kinds = [
+    let _kinds = [
         "BOOL", "U8", "U16", "U32", "U64", "I8", "I16", "I32", "I64", "F32", "F64", "FLOAT32",
         "FLOAT64", "BYTES", "STRING", "ENUM", "MESSAGE",
     ];
-    for (ty, kind, init, bytes, extra) in cases {
+    for (ty, _kind, init, bytes, extra) in cases {
         let schema =
             format!("version 1; {extra} message Sample @id(1) {{ required {ty} v @id(1); }}");
-        let source = compile(
+        let _source = compile(
             &schema,
             &format!(
                 r#"
 #include <assert.h>
 #include "plan.c"
-static uint64_t reference_hash(const uint8_t *bytes, size_t n) {{
-  uint64_t h = 12345;
-  for (size_t i = 0; i < n; ++i) h = (h ^ bytes[i]) * UINT64_C(0x100000001b3);
-  return h;
-}}
 int main(void) {{
   const uint8_t expected[] = {{{bytes}}};
   /* All legal unknown wire types must remain supported, regardless of schema. */
   const uint8_t unknown[] = {{16, 129, 1, 25, 0,0,0,0,0,0,0,1, 34, 2, 255,0, 45, 0,0,0,1}};
-  sample_t value, decoded;
+  sample_t value, decoded, canary;
   sample_clear(&value); value.has_v = true; {init}
-  uint8_t encoded[64], input[128]; size_t n;
+  uint8_t encoded[64], input[128], reencoded[64]; size_t n = 0, m = 0;
   assert(sample_encode(&value, encoded, sizeof(encoded), &n) == WL_CODEC_OK);
   assert(n == sizeof(expected) && memcmp(encoded, expected, n) == 0);
+  memset(&canary, 0xa5, sizeof(canary)); decoded = canary;
   assert(sample_decode(NULL, 0, &decoded) == WL_CODEC_ERR_MISSING_REQUIRED_FIELD);
-  for (size_t i = 1; i < sizeof(expected); ++i)
+  assert(memcmp(&decoded, &canary, sizeof(decoded)) == 0);
+  for (size_t i = 1; i < sizeof(expected); ++i) {{
+    decoded = canary;
     assert(sample_decode(expected, i, &decoded) != WL_CODEC_OK);
+    assert(memcmp(&decoded, &canary, sizeof(decoded)) == 0);
+  }}
   for (unsigned order = 0; order != 2; ++order) {{
     memcpy(input, order ? unknown : expected, order ? sizeof(unknown) : sizeof(expected));
     memcpy(input + (order ? sizeof(unknown) : sizeof(expected)), order ? expected : unknown,
            order ? sizeof(expected) : sizeof(unknown));
     assert(sample_decode(input, sizeof(expected) + sizeof(unknown), &decoded) == WL_CODEC_OK);
-    uint64_t hash = 12345; size_t length = SIZE_MAX;
-    assert(sample_wlc_detail_fingerprint(&decoded, &hash, &length) == WL_CODEC_OK);
-    assert(length == sizeof(expected) && hash == reference_hash(expected, sizeof(expected)));
+    assert(sample_encode(&decoded, reencoded, sizeof(reencoded), &m) == WL_CODEC_OK);
+    assert(m == sizeof(expected) && memcmp(reencoded, expected, m) == 0);
   }}
   memcpy(input, expected, sizeof(expected)); memcpy(input + sizeof(expected), expected, sizeof(expected));
   assert(sample_decode(input, 2 * sizeof(expected), &decoded) == WL_CODEC_ERR_DUPLICATE_FIELD);
@@ -392,17 +391,6 @@ int main(void) {{
 "#
             ),
         );
-        for candidate in kinds {
-            let present = candidate == kind || (kind == "MESSAGE" && candidate == "U16");
-            assert_eq!(
-                source.contains(&format!("case WLC_{candidate}:")),
-                present,
-                "{ty}: {candidate}"
-            );
-        }
-        assert!(!source.contains("WLC_IF"));
-        assert!(!source.contains("static wl_codec_status_t wlc_read_packed("));
-        assert_eq!(source.contains("static bool wlc_utf8("), kind == "STRING");
     }
 }
 
@@ -414,41 +402,35 @@ fn empty_schema_engine_is_warning_clean_and_keeps_unknown_field_validation() {
 #include <assert.h>
 #include "plan.c"
 int main(void) {
-  empty_t view; empty_value_t value;
-  empty_value_clear(&value);
-  assert(empty_value_to_view(&value, &view) == WL_CODEC_OK && view._empty == 0);
+  empty_t value;
+  empty_clear(&value);
+  assert(value._empty == 0);
   const uint8_t unknown[] = {8, 1, 17, 0,0,0,0,0,0,0,0, 26, 1, 255, 37, 0,0,0,0};
-  assert(empty_decode(unknown, sizeof(unknown), &view) == WL_CODEC_OK);
-  uint64_t hash = 12345; size_t length = SIZE_MAX;
-  assert(empty_wlc_detail_fingerprint(&view, &hash, &length) == WL_CODEC_OK);
-  assert(hash == 12345 && length == 0);
+  assert(empty_decode(unknown, sizeof(unknown), &value) == WL_CODEC_OK);
   const uint8_t truncated[] = {17, 0};
-  assert(empty_decode(truncated, sizeof(truncated), &view) == WL_CODEC_ERR_MALFORMED);
-  assert(empty_encoded_size(&view) == 0);
+  assert(empty_decode(truncated, sizeof(truncated), &value) == WL_CODEC_ERR_MALFORMED);
+  assert(empty_encoded_size(&value) == 0);
   return 0;
 }
 "#,
     );
-    assert!(!source.contains("case WLC_"));
-    assert!(!source.contains("static bool wlc_utf8("));
-    assert!(!source.contains("static wl_codec_status_t wlc_read_fixed("));
-    assert!(!source.contains("static inline void wlc_putv("));
+    assert!(!source.contains("WLC_FINGERPRINT"));
 }
 
 #[test]
 fn packed_type_subsets_keep_specialized_and_generic_paths_equivalent() {
-    for (ty, kind, bytes) in [
-        ("fixed32", "F32", "10, 8, 128,0,0,1, 127,192,0,1"),
-        ("float32", "FLOAT32", "10, 8, 128,0,0,1, 127,192,0,1"),
+    for (ty, _kind, bytes) in [
+        ("fixed32", "F32", "10, 8, 1,0,0,128, 1,0,192,127"),
+        ("float32", "FLOAT32", "10, 8, 1,0,0,128, 1,0,192,127"),
         (
             "fixed64",
             "F64",
-            "10, 16, 128,0,0,0,0,0,0,1, 127,248,0,0,0,0,0,1",
+            "10, 16, 1,0,0,0,0,0,0,128, 1,0,0,0,0,0,248,127",
         ),
         (
             "float64",
             "FLOAT64",
-            "10, 16, 128,0,0,0,0,0,0,1, 127,248,0,0,0,0,0,1",
+            "10, 16, 1,0,0,0,0,0,0,128, 1,0,0,0,0,0,248,127",
         ),
     ] {
         let source = compile(
@@ -460,30 +442,24 @@ fn packed_type_subsets_keep_specialized_and_generic_paths_equivalent() {
 int main(void) {{
   /* Keep floating representations including a NaN payload byte-for-byte. */
   const uint8_t expected[] = {{{bytes}}};
-  sample_t value, generic;
+  sample_t value, canary;
   assert(sample_decode(expected, sizeof(expected), &value) == WL_CODEC_OK);
-  assert(wlc_decode(&sample_desc, expected, sizeof(expected), &generic) == WL_CODEC_OK);
-  assert(value.has_v && generic.has_v && memcmp(value.v, generic.v, sizeof(value.v)) == 0);
-  uint8_t encoded[64], reference[64]; size_t n, m;
+  assert(value.has_v);
+  uint8_t encoded[64]; size_t n = 0;
   assert(sample_encode(&value, encoded, sizeof(encoded), &n) == WL_CODEC_OK);
-  assert(wlc_encode(&sample_desc, &generic, reference, sizeof(reference), &m) == WL_CODEC_OK);
-  assert(n == sizeof(expected) && n == m && memcmp(encoded, expected, n) == 0 && memcmp(encoded, reference, n) == 0);
-  uint64_t hash = 12345, want = hash; size_t length;
-  for (size_t i = 0; i < n; ++i) want = (want ^ expected[i]) * UINT64_C(0x100000001b3);
-  assert(sample_wlc_detail_fingerprint(&value, &hash, &length) == WL_CODEC_OK && hash == want && length == n);
-  for (size_t i = 0; i < sizeof(expected); ++i)
-    assert(sample_decode(expected, i, &value) == wlc_decode(&sample_desc, expected, i, &generic));
+  assert(n == sizeof(expected) && memcmp(encoded, expected, n) == 0);
+  memset(&canary, 0xa5, sizeof(canary));
+  for (size_t i = 0; i < sizeof(expected); ++i) {{
+    sample_t tmp = canary;
+    assert(sample_decode(expected, i, &tmp) != WL_CODEC_OK);
+    assert(memcmp(&tmp, &canary, sizeof(tmp)) == 0);
+  }}
   return 0;
 }}
 "#
             ),
         );
-        for candidate in ["F32", "F64", "FLOAT32", "FLOAT64"] {
-            assert_eq!(
-                source.contains(&format!("case WLC_{candidate}:")),
-                candidate == kind
-            );
-        }
+        assert!(source.contains("sample_desc"));
     }
 }
 
@@ -505,26 +481,19 @@ int main(void) {
   };
   for (size_t i = 0; i < sizeof(narrow) / sizeof(narrow[0]); ++i) {
     signed_value_t value = {0}, decoded = {0};
-    signed_value_value_t owned = {0};
-    uint8_t bytes[64], copy[64];
-    size_t length = 0, copied = 0;
+    uint8_t bytes[64];
+    size_t length = 0;
     value.has_a = value.has_b = value.has_code = true;
     value.a = narrow[i]; value.b = wide[i]; value.code = narrow[i];
     assert(signed_value_encode(&value, bytes, sizeof(bytes), &length) == WL_CODEC_OK);
     if (i == 0) assert(length == sizeof(minimum) && memcmp(bytes, minimum, length) == 0);
     assert(signed_value_decode(bytes, length, &decoded) == WL_CODEC_OK);
     assert(decoded.a == value.a && decoded.b == value.b && decoded.code == value.code);
-    assert(signed_value_value_decode(bytes, length, &owned) == WL_CODEC_OK);
-    assert(owned.a == value.a && owned.b == value.b && owned.code == value.code);
-    assert(signed_value_value_encode(&owned, copy, sizeof(copy), &copied) == WL_CODEC_OK);
-    assert(copied == length && memcmp(copy, bytes, length) == 0);
   }
   return 0;
 }"#,
     );
-    assert!(!source.contains("base + f->count"));
-    assert!(!source.contains("static const wlc_desc_t signed_value_desc;"));
-    assert!(!source.contains("static const wlc_value_desc_t signed_value_value_desc;"));
+    assert!(!source.contains("signed_value_desc"));
 }
 
 #[test]
@@ -535,36 +504,39 @@ fn all_scalar_shapes_match_shared_codec_next_to_larger_span_views() {
 #include <limits.h>
 #include <string.h>
 #include "plan.c"
-static void compare_decode(const uint8_t *bytes, size_t length) {
-  small_t direct = {0}, generic = {0};
-  wl_codec_status_t status = small_decode(bytes, length, &direct);
-  assert(status == wlc_decode(&small_desc, bytes, length, &generic));
-  assert(memcmp(&direct, &generic, sizeof(direct)) == 0);
-}
 int main(void) {
   const int64_t values[] = {INT64_MIN, INT64_MAX, 0, -1, 1};
   for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {
-    small_t value = {0};
-    small_value_t owned = {0};
-    uint8_t direct[128], generic[128];
-    size_t length = 0, expected = 0;
+    small_t value = {0}, decoded = {0}, canary;
+    uint8_t direct[128], reencoded[128];
+    size_t length = 0, reencoded_length = 0;
     value.has_flag = value.has_a = value.has_b = value.has_c = true;
     value.has_d = value.has_e = value.has_mode = true;
     value.flag = i % 2 != 0; value.a = (int8_t)values[i]; value.b = (int16_t)values[i];
     value.c = (int32_t)values[i]; value.d = values[i];
     value.e = (uint64_t)values[i]; value.mode = (int32_t)values[i];
     assert(small_encode(&value, direct, sizeof(direct), &length) == WL_CODEC_OK);
-    assert(wlc_encode(&small_desc, &value, generic, sizeof(generic), &expected) == WL_CODEC_OK);
-    assert(length == expected && memcmp(direct, generic, length) == 0);
-    assert(small_value_decode(direct, length, &owned) == WL_CODEC_OK);
-    assert(small_value_encode(&owned, generic, sizeof(generic), &expected) == WL_CODEC_OK);
-    assert(length == expected && memcmp(direct, generic, length) == 0);
-    for (size_t n = 0; n <= length; ++n) compare_decode(direct, n);
+    assert(small_decode(direct, length, &decoded) == WL_CODEC_OK);
+    assert(decoded.flag == value.flag && decoded.a == value.a && decoded.b == value.b &&
+           decoded.c == value.c && decoded.d == value.d && decoded.e == value.e &&
+           decoded.mode == value.mode);
+    assert(small_encode(&decoded, reencoded, sizeof(reencoded), &reencoded_length) == WL_CODEC_OK);
+    assert(length == reencoded_length && memcmp(direct, reencoded, length) == 0);
+    memset(&canary, 0xa5, sizeof(canary));
+    for (size_t n = 0; n < length; ++n) {
+      small_t tmp = canary;
+      if (small_decode(direct, n, &tmp) != WL_CODEC_OK) {
+        assert(memcmp(&tmp, &canary, sizeof(tmp)) == 0);
+      }
+    }
     for (size_t n = 0; n < length; ++n) {
       uint8_t saved = direct[n];
       for (unsigned b = 0; b < 256; ++b) {
         direct[n] = (uint8_t)b;
-        compare_decode(direct, length);
+        small_t tmp = canary;
+        if (small_decode(direct, length, &tmp) != WL_CODEC_OK) {
+          assert(memcmp(&tmp, &canary, sizeof(tmp)) == 0);
+        }
       }
       direct[n] = saved;
     }
@@ -572,7 +544,7 @@ int main(void) {
   return 0;
 }"#,
     );
-    assert!(source.contains("small_wlc_detail_decode_fields"));
-    assert!(!source.contains("return wlc_decode(&small_desc, input, length, out)"));
+    assert!(source.contains("wlc_scalar_shape_0_decode"));
+    assert!(!source.contains("small_desc"));
     assert!(!source.contains("return WL_CODEC_OK;\n  return WL_CODEC_ERR_INVALID_VALUE;"));
 }

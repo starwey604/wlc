@@ -11,7 +11,7 @@ pub(super) fn emit(plan: &Plan<'_>, files: &mut BTreeMap<String, String>) {
     let name = &plan.options.name;
     // Keep system/Wirelink dependencies global, then isolate schema C typedefs
     // (e.g. Mode -> mode_t) from system typedefs in the C++ bridge.
-    files.insert("src/native.hpp".into(), format!("/* SPDX-License-Identifier: Apache-2.0 */\n#pragma once\n#include <cfloat>\n#include <cstddef>\n#include <cstdint>\n#include <wirelink/codec.h>\n// Only passive values cross this namespace. Endpoint callbacks stay in C.\nnamespace {name}::wlc_native {{\n#include \"{name}_values.h\"\n}}\n"));
+    files.insert("src/native.hpp".into(), format!("/* SPDX-License-Identifier: Apache-2.0 */\n#pragma once\n#include <cfloat>\n#include <cstddef>\n#include <cstdint>\n#include <wirelink/codec.h>\n// Only passive values cross this namespace. Endpoint callbacks stay in C.\nnamespace {name}::wlc_native {{\n#include \"{name}.h\"\n}}\n"));
     let native = files.get_mut("src/native.hpp").unwrap();
     native.push_str("// C enum macros must not rewrite scoped C++ enum member names.\n");
     for enumeration in &plan.enums {
@@ -82,7 +82,7 @@ pub(super) fn emit(plan: &Plan<'_>, files: &mut BTreeMap<String, String>) {
     for message in &plan.messages {
         let ty = type_name(&message.name);
         let c = c_type_name(&message.name);
-        writeln!(values, "inline bool to_c(const {ty}& input, wlc_native::{c}_value_t& output) {{\n  (void)input;\n  wlc_native::{c}_value_clear(&output);").unwrap();
+        writeln!(values, "inline bool to_c(const {ty}& input, wlc_native::{c}_t& output) {{\n  (void)input;\n  wlc_native::{c}_clear(&output);").unwrap();
         for field in &message.fields {
             let f = identifier(&field.name);
             let cf = c_identifier(&field.name);
@@ -145,7 +145,7 @@ pub(super) fn emit(plan: &Plan<'_>, files: &mut BTreeMap<String, String>) {
             }
             values.push_str("  }\n");
         }
-        writeln!(values, "  return true;\n}}\n\ninline {ty} from_c(const wlc_native::{c}_value_t& input) {{\n  (void)input;\n  {ty} output{{}};").unwrap();
+        writeln!(values, "  return true;\n}}\n\ninline {ty} from_c(const wlc_native::{c}_t& input) {{\n  (void)input;\n  {ty} output{{}};").unwrap();
         for field in &message.fields {
             let f = identifier(&field.name);
             let cf = c_identifier(&field.name);
@@ -260,9 +260,12 @@ wl_err_t {name}_sdk_endpoint_initialize(void* storage, uint32_t instance,
         writeln!(bridge_header, "wl_err_t {name}_sdk_{method}_submit({name}_sdk_call_t*, uint32_t, uint32_t, wl_host_rpc_notify_fn, void*, wl_kernel_call_handle_t*);").unwrap();
         writeln!(bridge_source, r#"static void {name}_sdk_{method}_done(void* context, wl_kernel_result_t result, const {resp}_t* response) {{
   {name}_sdk_call_t* state = context;
-  if (result.outcome == WL_KERNEL_SUCCESS &&
-      (response == NULL || {resp}_value_from_view(response, state->response) != WL_CODEC_OK))
-    result = (wl_kernel_result_t){{WL_KERNEL_LOCAL_ERROR, WL_ERR_CORRUPT_PAYLOAD}};
+  if (result.outcome == WL_KERNEL_SUCCESS) {{
+    if (response == NULL)
+      result = (wl_kernel_result_t){{WL_KERNEL_LOCAL_ERROR, WL_ERR_CORRUPT_PAYLOAD}};
+    else
+      memcpy(state->response, response, sizeof(*response));
+  }}
   state->notify(state->notify_context, result);
 }}
 wl_err_t {name}_sdk_{method}_submit({name}_sdk_call_t* state, uint32_t now, uint32_t timeout,
@@ -328,8 +331,8 @@ wirelink::Result<wirelink::Operation<{resp}>> Client::{method}_async(const {req}
   if (timeout.count() <= 0 || timeout.count() > INT32_MAX)
     return wirelink::Error::local(WL_ERR_INVALID_ARG);
   struct wlc_call_state final : wirelink::detail::OperationState<{resp}> {{
-    {c_req}_value_t request{{}};
-    {c_resp}_value_t response{{}};
+    {c_req}_t request{{}};
+    {c_resp}_t response{{}};
     {name}_sdk_call_t bridge{{}};
     wl_err_t submit(uint32_t now, uint32_t timeout, wl_host_rpc_notify_fn notify, void* context,
         wl_kernel_call_handle_t* call) noexcept override {{
@@ -361,8 +364,10 @@ fn default_cpp(field: &FieldSymbol) -> String {
         FieldDefault::Bool(b) => b.to_string(),
         FieldDefault::Enum(n) => format!("static_cast<{}>({n})", scalar_cpp(&field.ty)),
         FieldDefault::Int64(i64::MIN) => "(-INT64_C(9223372036854775807) - 1)".into(),
-        FieldDefault::Int64(_) => signed,
-        FieldDefault::Int8(_) | FieldDefault::Int16(_) | FieldDefault::Int32(_) => signed,
+        FieldDefault::Int64(_) => format!("INT64_C({signed})"),
+        FieldDefault::Int8(_) | FieldDefault::Int16(_) | FieldDefault::Int32(_) => {
+            signed.to_string()
+        }
         _ => format!("UINT64_C({unsigned})"),
     }
 }

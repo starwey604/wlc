@@ -7,7 +7,7 @@ use heck::{ToSnakeCase, ToUpperCamelCase};
 use crate::{
     BindingProfileModel, SemanticModel,
     ast::Cardinality,
-    codegen::{CModel, c_identifier},
+    codegen::{c_identifier, plan::CModel},
     endpoint_layout::EndpointEnvelope,
     semantic::{EnumSymbol, FieldSymbol, MessageSymbol, ResolvedType, Symbol},
 };
@@ -103,11 +103,9 @@ impl<'a> Plan<'a> {
             ));
         }
         let c = CModel::new(schema, name).map_err(|e| error(e.to_string()))?;
-        let rpc_plan = crate::codec_plan::CodecPlan::new(
-            schema,
-            crate::codec_plan::CodecProfile::ManagedTagged,
-        )
-        .map_err(|e| error(e.to_string()))?;
+        let rpc_plan =
+            crate::codec_plan::CodecPlan::new(schema, crate::codec_plan::CodecProfile::SchemaV1)
+                .map_err(|e| error(e.to_string()))?;
         let rpc_maxima = rpc_plan
             .messages
             .iter()

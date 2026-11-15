@@ -36,23 +36,18 @@ message Nested = 3 {
     .unwrap();
     let generated = generate_c(&model, "bounded_lengths").unwrap();
     for declaration in [
-        "wl_codec_string_t name;",
-        "wl_codec_bytes_t raw;",
+        "char data[5];",
+        "uint8_t data[3];",
         "wl_codec_string_t *labels;",
     ] {
         assert!(
             generated.header.contains(declaration),
-            "missing borrowed-view declaration `{declaration}`"
+            "missing inline/borrowed declaration `{declaration}`"
         );
     }
 
     let directory = tempdir().unwrap();
     fs::write(directory.path().join("bounded_lengths.h"), generated.header).unwrap();
-    fs::write(
-        directory.path().join("bounded_lengths_values.h"),
-        generated.values_header,
-    )
-    .unwrap();
     fs::write(directory.path().join("bounded_lengths.c"), generated.source).unwrap();
     fs::write(
         directory.path().join("main.c"),
@@ -90,9 +85,11 @@ static int test_valid_and_borrowed(void) {
   if (value.has_greeting || value.greeting.length != 3U ||
       memcmp(value.greeting.data, "\xE7\x94\xB5", 3U) != 0) return 1;
   value.has_name = true;
-  value.name = (wl_codec_string_t){"four", 4U};
+  value.name.length = 4U;
+  memcpy(value.name.data, "four", 4U);
   value.has_raw = true;
-  value.raw = (wl_codec_bytes_t){raw, sizeof(raw)};
+  value.raw.length = sizeof(raw);
+  memcpy(value.raw.data, raw, sizeof(raw));
   value.labels = labels;
   value.labels_count = 2U;
   value.labels_capacity = 2U;
@@ -105,9 +102,10 @@ static int test_valid_and_borrowed(void) {
   decoded.labels_capacity = 2U;
   if (bounded_decode(golden, sizeof(golden), &decoded) != WL_CODEC_OK ||
       !decoded.has_name || decoded.name.length != 4U ||
-      decoded.name.data != (const char *)(golden + 2U) ||
+      memcmp(decoded.name.data, "four", 4U) != 0 ||
+      decoded.name.data[4] != '\0' ||
       !decoded.has_raw || decoded.raw.length != 3U ||
-      decoded.raw.data != golden + 8U || decoded.labels_count != 2U ||
+      memcmp(decoded.raw.data, raw, 3U) != 0 || decoded.labels_count != 2U ||
       decoded.labels[0].data != (const char *)(golden + 13U) ||
       decoded.labels[1].data != (const char *)(golden + 17U) ||
       decoded.has_greeting || decoded.greeting.length != 3U) return 4;
@@ -115,7 +113,6 @@ static int test_valid_and_borrowed(void) {
 }
 
 static int test_encode_limits(void) {
-  static const uint8_t raw[] = {1U, 2U, 3U, 4U};
   static const uint8_t invalid_utf8[] = {0xC0U, 0x80U};
   wl_codec_string_t labels[] = {{"bad", 3U}};
   bounded_t value = {0};
@@ -123,14 +120,15 @@ static int test_encode_limits(void) {
   size_t length = 77U;
 
   value.has_name = true;
-  value.name = (wl_codec_string_t){"abcde", 5U};
+  value.name.length = 5U;
   if (bounded_encoded_size(&value) != SIZE_MAX ||
       bounded_encode(&value, encoded, sizeof(encoded), &length) !=
           WL_CODEC_ERR_INVALID_VALUE || length != 77U) return 1;
 
-  value.name = (wl_codec_string_t){"four", 4U};
+  value.name.length = 4U;
+  memcpy(value.name.data, "four", 4U);
   value.has_raw = true;
-  value.raw = (wl_codec_bytes_t){raw, sizeof(raw)};
+  value.raw.length = 4U;
   if (bounded_encode(&value, encoded, sizeof(encoded), &length) !=
       WL_CODEC_ERR_INVALID_VALUE) return 2;
 
@@ -142,8 +140,8 @@ static int test_encode_limits(void) {
       WL_CODEC_ERR_INVALID_VALUE) return 3;
 
   value.labels_count = 0U;
-  value.name = (wl_codec_string_t){(const char *)invalid_utf8,
-                                   sizeof(invalid_utf8)};
+  value.name.length = sizeof(invalid_utf8);
+  memcpy(value.name.data, invalid_utf8, sizeof(invalid_utf8));
   if (bounded_encode(&value, encoded, sizeof(encoded), &length) !=
       WL_CODEC_ERR_UTF8) return 4;
   return 0;
@@ -178,8 +176,6 @@ static int test_decode_limits(void) {
 }
 
 static int test_static_maxima(void) {
-  uint8_t blob[128] = {0};
-  char note[255] = {0};
   uint8_t fixed_encoded[FIXED_MAX_ENCODED_SIZE];
   uint8_t nested_encoded[NESTED_MAX_ENCODED_SIZE];
   fixed_t fixed = {0};
@@ -187,16 +183,17 @@ static int test_static_maxima(void) {
   size_t length = 0U;
 
   fixed.has_name = true;
-  fixed.name = (wl_codec_string_t){"max", 3U};
+  fixed.name.length = 3U;
+  memcpy(fixed.name.data, "max", 3U);
   fixed.has_blob = true;
-  fixed.blob = (wl_codec_bytes_t){blob, sizeof(blob)};
+  fixed.blob.length = sizeof(fixed.blob.data);
   if (fixed_encode(&fixed, fixed_encoded, sizeof(fixed_encoded), &length) !=
           WL_CODEC_OK ||
       length != FIXED_MAX_ENCODED_SIZE) return 1;
   nested.has_fixed = true;
   nested.fixed = fixed;
   nested.has_note = true;
-  nested.note = (wl_codec_string_t){note, sizeof(note)};
+  nested.note.length = 255U;
   if (nested_encode(&nested, nested_encoded, sizeof(nested_encoded), &length) !=
           WL_CODEC_OK ||
       length != NESTED_MAX_ENCODED_SIZE) return 2;
@@ -230,6 +227,7 @@ int main(void) {
         .arg(wirelink_include())
         .arg("-I")
         .arg(directory.path())
+        .arg(wirelink_include().parent().unwrap().join("src/codec.c"))
         .arg(directory.path().join("bounded_lengths.c"))
         .arg(directory.path().join("main.c"))
         .arg("-o")
@@ -245,8 +243,8 @@ int main(void) {
 
 #include <type_traits>
 
-static_assert(std::is_same_v<decltype(bounded_t::name), wl_codec_string_t>);
-static_assert(std::is_same_v<decltype(bounded_t::raw), wl_codec_bytes_t>);
+static_assert(sizeof(bounded_t::name.data) == 5U);
+static_assert(sizeof(bounded_t::raw.data) == 3U);
 static_assert(std::is_same_v<decltype(bounded_t::labels),
                              wl_codec_string_t *>);
 static_assert(FIXED_MAX_ENCODED_SIZE == UINT64_C(137));

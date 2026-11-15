@@ -54,10 +54,7 @@ fn project_is_deterministic_and_preserves_the_existing_c_artifacts() {
     let model = analyze_schema(&parse_schema(SCHEMA).unwrap()).unwrap();
     let c = wlc::generate_c(&model, "device").unwrap();
     assert!(!generated.files["generated/device.c"].contains("fingerprint"));
-    assert_eq!(
-        generated.files["generated/device_values.h"],
-        c.values_header
-    );
+    assert_eq!(generated.files["generated/device.h"], c.header);
     assert!(generated.files.contains_key("python/device_sdk/py.typed"));
     assert!(generated.files["wlc-sdk-manifest.json"].contains("python/device_sdk/__init__.py"));
     assert!(generated.files["cmake/DeviceSdkConfig.cmake.in"].starts_with("@PACKAGE_INIT@"));
@@ -244,10 +241,26 @@ fn cpp_values_round_trip_through_the_real_c_codec() {
     .arg(root.join("include"))
     .arg("-o")
     .arg(directory.path().join("codec.o"));
+    let mut cc_rt = Command::new("cc");
+    cc_rt
+        .args([
+            "-std=c11",
+            "-Wall",
+            "-Wextra",
+            "-Wpedantic",
+            "-Werror",
+            "-c",
+        ])
+        .arg(root.join("src/codec.c"))
+        .arg("-I")
+        .arg(root.join("include"))
+        .arg("-o")
+        .arg(directory.path().join("codec_rt.o"));
     let mut cxx = Command::new("c++");
     cxx.args(["-std=c++20", "-Wall", "-Wextra", "-Wpedantic", "-Werror"])
         .arg(directory.path().join("test.cpp"))
-        .arg(directory.path().join("codec.o"));
+        .arg(directory.path().join("codec.o"))
+        .arg(directory.path().join("codec_rt.o"));
     for include in [
         root.join("include"),
         directory.path().join("include"),
@@ -259,7 +272,7 @@ fn cpp_values_round_trip_through_the_real_c_codec() {
     let executable = directory.path().join("test");
     cxx.arg("-o").arg(&executable);
     if std::env::var_os("WLC_TEST_SANITIZE").is_some() {
-        for command in [&mut cc, &mut cxx] {
+        for command in [&mut cc, &mut cc_rt, &mut cxx] {
             command.args([
                 "-fsanitize=address,undefined",
                 "-fno-omit-frame-pointer",
@@ -269,6 +282,7 @@ fn cpp_values_round_trip_through_the_real_c_codec() {
     }
     if std::env::var_os("WLC_TEST_X87").is_some() {
         cc.args(["-mfpmath=387", "-mno-sse"]);
+        cc_rt.args(["-mfpmath=387", "-mno-sse"]);
         cxx.args(["-mfpmath=387"]);
     }
     // Compile the actual sync/async facade and C-only callback bridge too. This
@@ -312,6 +326,7 @@ fn cpp_values_round_trip_through_the_real_c_codec() {
     }
     for command in [
         &mut cc,
+        &mut cc_rt,
         &mut cxx,
         &mut bridge,
         &mut client,

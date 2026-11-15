@@ -76,58 +76,47 @@ message MaximumBound = 13 { required bytes<65535> value = 1; }
     let generated = generate_c(&model, "bounded").unwrap();
 
     assert_eq!(
-        macro_value(&generated.values_header, "LEAF_MAX_ENCODED_SIZE"),
+        macro_value(&generated.header, "LEAF_MAX_ENCODED_SIZE"),
         Some(218)
     );
     assert_eq!(
-        macro_value(&generated.values_header, "OUTER_MAX_ENCODED_SIZE"),
+        macro_value(&generated.header, "OUTER_MAX_ENCODED_SIZE"),
         Some(352)
     );
     assert_eq!(
-        macro_value(&generated.values_header, "EMPTY_MAX_ENCODED_SIZE"),
+        macro_value(&generated.header, "EMPTY_MAX_ENCODED_SIZE"),
         Some(0)
     );
     assert_eq!(
-        macro_value(&generated.values_header, "BOUNDED_TEXT_MAX_ENCODED_SIZE"),
+        macro_value(&generated.header, "BOUNDED_TEXT_MAX_ENCODED_SIZE"),
         Some(33)
     );
     assert_eq!(
-        macro_value(&generated.values_header, "BOUNDED_BLOB_MAX_ENCODED_SIZE"),
+        macro_value(&generated.header, "BOUNDED_BLOB_MAX_ENCODED_SIZE"),
         Some(132)
     );
     assert_eq!(
-        macro_value(
-            &generated.values_header,
-            "BOUNDED_ENVELOPE_MAX_ENCODED_SIZE"
-        ),
+        macro_value(&generated.header, "BOUNDED_ENVELOPE_MAX_ENCODED_SIZE"),
         Some(35)
     );
     assert_eq!(
-        macro_value(&generated.values_header, "MAXIMUM_BOUND_MAX_ENCODED_SIZE"),
+        macro_value(&generated.header, "MAXIMUM_BOUND_MAX_ENCODED_SIZE"),
         Some(65539)
     );
     for name in ["TEXT", "BLOB", "SERIES", "TEXT_ENVELOPE", "BOUNDED_SERIES"] {
         assert!(
             generated
-                .values_header
+                .header
                 .contains(&format!("#define {name}_HAS_MAX_ENCODED_SIZE 0"))
         );
         assert_eq!(
-            macro_value(
-                &generated.values_header,
-                &format!("{name}_MAX_ENCODED_SIZE")
-            ),
+            macro_value(&generated.header, &format!("{name}_MAX_ENCODED_SIZE")),
             None
         );
     }
 
     let directory = tempdir().unwrap();
     fs::write(directory.path().join("bounded.h"), generated.header).unwrap();
-    fs::write(
-        directory.path().join("bounded_values.h"),
-        generated.values_header,
-    )
-    .unwrap();
     fs::write(directory.path().join("bounded.c"), generated.source).unwrap();
     fs::write(
         directory.path().join("main.c"),
@@ -226,6 +215,7 @@ int main(void) {
         .arg(wirelink_root().join("include"))
         .arg("-I")
         .arg(directory.path())
+        .arg(wirelink_root().join("src/codec.c"))
         .arg(directory.path().join("bounded.c"))
         .arg(directory.path().join("main.c"))
         .arg("-o")
@@ -341,24 +331,16 @@ message JointMitCommand = 25345 {
     .unwrap();
     let generated = generate_c(&model, "fci_arm").unwrap();
     assert_eq!(
-        macro_value(&generated.values_header, "ARM_STATUS_MAX_ENCODED_SIZE"),
+        macro_value(&generated.header, "ARM_STATUS_MAX_ENCODED_SIZE"),
         Some(233)
     );
     assert_eq!(
-        macro_value(
-            &generated.values_header,
-            "JOINT_MIT_COMMAND_MAX_ENCODED_SIZE"
-        ),
+        macro_value(&generated.header, "JOINT_MIT_COMMAND_MAX_ENCODED_SIZE"),
         Some(160)
     );
 
     let directory = tempdir().unwrap();
     fs::write(directory.path().join("fci_arm.h"), generated.header).unwrap();
-    fs::write(
-        directory.path().join("fci_arm_values.h"),
-        generated.values_header,
-    )
-    .unwrap();
     fs::write(directory.path().join("fci_arm.c"), generated.source).unwrap();
     fs::write(
         directory.path().join("main.c"),
@@ -430,6 +412,7 @@ int main(void) {
         .arg(wirelink_root().join("include"))
         .arg("-I")
         .arg(directory.path())
+        .arg(wirelink_root().join("src/codec.c"))
         .arg(directory.path().join("fci_arm.c"))
         .arg(directory.path().join("main.c"))
         .arg("-o")
@@ -467,11 +450,11 @@ proptest! {
             + varint_size(leaf_maximum) + leaf_maximum;
 
         prop_assert_eq!(
-            macro_value(&generated.values_header, "LEAF_MAX_ENCODED_SIZE"),
+            macro_value(&generated.header, "LEAF_MAX_ENCODED_SIZE"),
             Some(leaf_maximum)
         );
         prop_assert_eq!(
-            macro_value(&generated.values_header, "OUTER_MAX_ENCODED_SIZE"),
+            macro_value(&generated.header, "OUTER_MAX_ENCODED_SIZE"),
             Some(outer_maximum)
         );
     }

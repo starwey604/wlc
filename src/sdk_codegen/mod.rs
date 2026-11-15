@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use crate::{
     BindingProfileModel, KernelProfile, ManifestArtifact, SemanticModel, binding_profile_identity,
-    generate_codegen_manifest, generate_kernel_c,
+    generate_codegen_manifest,
 };
 
 mod cpp;
@@ -47,9 +47,10 @@ pub fn generate_sdk(
     let name = &options.name;
     let kernel = KernelProfile::from_bindings(profile.clone())
         .map_err(|e| SdkCodegenError(e.to_string()))?;
-    let artifacts = generate_kernel_c(schema, &kernel, name)
-        .map_err(|e| SdkCodegenError(e.to_string()))?
-        .files;
+    let artifacts =
+        crate::kernel_codegen::generate_kernel_c_with_pruning(schema, &kernel, name, false)
+            .map_err(|e| SdkCodegenError(e.to_string()))?
+            .files;
     let mut files = artifacts
         .into_iter()
         .map(|(p, c)| (format!("generated/{p}"), c))

@@ -330,7 +330,6 @@ fn main() -> Result<()> {
                 let c = wlc::generate_c(&model, stem).map_err(miette::Report::new)?;
                 std::collections::BTreeMap::from([
                     (format!("{stem}.h"), c.header),
-                    (format!("{stem}_values.h"), c.values_header),
                     (format!("{stem}.c"), c.source),
                 ])
             };

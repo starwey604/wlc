@@ -15,14 +15,17 @@ static uint32_t random32(void) {
   const size_t size = name##_encoded_size(&(value)); \
   for (size_t cap = 0; cap <= 40; ++cap) { \
     for (unsigned nulls = 0; nulls < 4; ++nulls) { \
-      uint8_t actual[48], expected[48]; \
-      memset(actual, 0xa5, sizeof(actual)); memset(expected, 0xa5, sizeof(expected)); \
-      size_t length = SIZE_MAX - 7U, wanted = length; \
+      uint8_t actual[48]; \
+      memset(actual, 0xa5, sizeof(actual)); \
+      size_t length = SIZE_MAX - 7U; \
       wl_codec_status_t a = name##_encode(&(value), (nulls & 1U) ? NULL : actual + 1, cap, \
                                            (nulls & 2U) ? NULL : &length); \
-      wl_codec_status_t b = wlc_encode(&name##_desc, &(value), (nulls & 1U) ? NULL : expected + 1, cap, \
-                                       (nulls & 2U) ? NULL : &wanted); \
-      assert(a == b && length == wanted && memcmp(actual, expected, sizeof(actual)) == 0); \
+      wl_codec_status_t expect = size == SIZE_MAX \
+          ? WL_CODEC_ERR_MISSING_REQUIRED_FIELD \
+          : (((nulls & 1U) || (nulls & 2U)) \
+                 ? WL_CODEC_ERR_INVALID_VALUE \
+                 : (cap < size ? WL_CODEC_ERR_CAPACITY : WL_CODEC_OK)); \
+      assert(a == expect); \
       if (a != WL_CODEC_OK) { \
         for (size_t i = 0; i < sizeof(actual); ++i) assert(actual[i] == 0xa5); \
         assert(length == SIZE_MAX - 7U); \
@@ -48,7 +51,7 @@ static void null_values(void) {
 
 int main(void) {
   null_values();
-  const uint8_t golden[] = {13,1,2,3,4,21,0,0,0,0,29,0xff,0xff,0xff,0xff,37,0,0,0,0xa5};
+  const uint8_t golden[] = {13,4,3,2,1,21,0,0,0,0,29,0xff,0xff,0xff,0xff,37,0xa5,0,0,0};
   sample_t sample = {.has_sequence=true, .sequence=UINT32_C(0x01020304), .has_tick=true,
     .tick=0, .has_value=true, .value=UINT32_MAX, .has_flags=true, .flags=0xa5};
   uint8_t encoded[20]; size_t length = 0;

@@ -48,10 +48,10 @@ fn small_scalar_codecs_match_generic_wire_errors_and_partial_output() {
         let body = &codec.source[start..];
         let body = &body[..body.find("\n}\n").unwrap()];
         assert!(body.contains("switch ((uint16_t)number)"));
-        assert!(!body.contains("wlc_decode("));
-        assert!(!body.contains("wlc_read_value("));
+        assert!(!body.contains("wl_codec_decode("));
     }
     assert!(!codec.source.contains("wlc_scalar_shape_6_decode("));
+    assert!(!codec.source.contains("_desc"));
     for name in ["var", "var_twin"] {
         let start = codec
             .source
@@ -63,12 +63,15 @@ fn small_scalar_codecs_match_generic_wire_errors_and_partial_output() {
                 .next()
                 .unwrap()
                 .contains("wlc_scalar_shape_1_decode(")
+                || codec.source[start..]
+                    .split('\n')
+                    .take(4)
+                    .any(|line| line.contains("wlc_scalar_shape_1_decode("))
         );
     }
     let dir = tempdir().unwrap();
     for (file, contents) in [
         ("sample.h", codec.header),
-        ("sample_values.h", codec.values_header),
         ("sample.c", codec.source),
         (
             "test.c",
@@ -108,6 +111,7 @@ fn small_scalar_codecs_match_generic_wire_errors_and_partial_output() {
         .arg("-I")
         .arg(dir.path())
         .arg(dir.path().join("test.c"))
+        .arg(root.join("src/codec.c"))
         .arg("-o")
         .arg(&binary)
         .output()

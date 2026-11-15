@@ -36,24 +36,6 @@ pub(crate) fn c_type(ty: &ResolvedType) -> String {
     }
 }
 
-pub(super) fn ieee_float_usage(model: &SemanticModel) -> (bool, bool) {
-    let mut float32 = false;
-    let mut float64 = false;
-    for field in model
-        .declarations
-        .iter()
-        .filter_map(|symbol| match symbol {
-            Symbol::Message(message) => Some(message.fields.as_slice()),
-            Symbol::Enum(_) => None,
-        })
-        .flatten()
-    {
-        float32 |= matches!(field.ty, ResolvedType::Float32);
-        float64 |= matches!(field.ty, ResolvedType::Float64);
-    }
-    (float32, float64)
-}
-
 pub(super) fn ordered_messages(model: &SemanticModel) -> Result<Vec<&MessageSymbol>, CodegenError> {
     let messages: HashMap<&str, &MessageSymbol> = model
         .declarations
@@ -114,17 +96,9 @@ pub(super) fn validate_names(
                     format!("{prefix}_CODEC_PROFILE"),
                     format!("{prefix}_CODEC_FORMAT"),
                     format!("{prefix}_HAS_MAX_ENCODED_SIZE"),
-                    format!("{prefix}_HAS_VALUE"),
                 ];
                 if maxima.get(&message.id).copied().flatten().is_some() {
                     generated.push(format!("{prefix}_MAX_ENCODED_SIZE"));
-                    generated.push(format!("{prefix}_VALUE_SIZE"));
-                    let name = format!("{}_value", type_name(&message.name));
-                    if names.contains(&name) {
-                        return Err(CodegenError(format!(
-                            "declaration collides with generated value `{name}_t`"
-                        )));
-                    }
                 }
                 for name in generated {
                     if !macros.insert(name.clone()) {

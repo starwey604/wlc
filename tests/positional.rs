@@ -32,7 +32,7 @@ fn positional_public_vectors_preserve_the_full_legal_value_domain() {
         "Request", "Values", "Bits", "Empty", "Small", "Narrow", "Wide", "OpenEnum", "Sample",
     ] {
         text.push_str(&format!(
-            "send {name} {{ delivery=unreliable; codec=positional_v1; }}"
+            "send {name} {{ delivery=unreliable; codec=positional_v1; }} direct {name} {{ delivery=unreliable; codec=positional_v1; }}"
         ));
     }
     text.push_str("rpc FloatProbe { request=RpcFloat; response=RpcFloatReply; }");
@@ -62,6 +62,7 @@ fn positional_public_vectors_preserve_the_full_legal_value_domain() {
         .arg(root.join("include"))
         .arg("-I")
         .arg(dir.path())
+        .arg(root.join("src/codec.c"))
         .arg(dir.path().join("demo.c"))
         .arg(dir.path().join("test.c"))
         .arg("-o")
@@ -79,6 +80,22 @@ fn positional_public_vectors_preserve_the_full_legal_value_domain() {
             .unwrap()
             .success()
     );
+
+    // Verify route direction pruning in compile-kernel.
+    let send_only = analyze_binding_profile(
+        &parse_binding_profile(
+            "profile version 2; endpoint { envelope=native_packet; } send Request { delivery=unreliable; codec=positional_v1; }",
+        )
+        .unwrap(),
+        &schema,
+    )
+    .unwrap();
+    let pruned_kernel = wlc::KernelProfile::from_bindings(send_only).unwrap();
+    let pruned = wlc::generate_kernel_c(&schema, &pruned_kernel, "pruned").unwrap();
+    assert!(pruned.files["pruned.h"].contains("request_encode("));
+    assert!(!pruned.files["pruned.h"].contains("request_decode("));
+    assert!(!pruned.files["pruned.h"].contains("values_encode("));
+    assert!(!pruned.files["pruned.h"].contains("values_decode("));
     let old = wlc::generate_c(&schema, "demo").unwrap();
     fs::write(dir.path().join("demo.c"), old.source).unwrap();
     let out = Command::new("cc")

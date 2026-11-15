@@ -1,162 +1,290 @@
 // SPDX-License-Identifier: Apache-2.0
-use super::Symbols;
-use super::descriptor::emit_descriptor;
-use super::features::Features;
-use super::plan::MessagePlan;
-use super::type_name;
-use crate::semantic::MessageSymbol;
-const COMMON_C: &str = include_str!("templates/common.c.in");
-const EMIT_C: &str = include_str!("templates/emit.c.in");
-const CODEC_TAIL_C: &str = include_str!("templates/decode.c.in");
+use std::collections::{BTreeSet, HashMap};
+
+use super::{
+    MessageDirections, Symbols, c_identifier, c_type, descriptor, fixed, packed, plan::MessagePlan,
+    positional, type_name,
+};
+use crate::{
+    ast::Cardinality,
+    codec_plan::{CodecPlan, CodecProfile},
+    semantic::{FieldDefault, MessageSymbol, ResolvedType},
+};
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Kind {
+    DirectFixed(usize),
+    DirectPacked,
+    GenericPositional,
+    GenericTagged,
+}
 
 pub(super) fn emit_source(
+    module: &str,
     messages: &[&MessageSymbol],
-    codecs: &crate::codec_plan::CodecPlan<'_>,
-    fingerprints: Option<&std::collections::BTreeSet<u16>>,
+    codecs: &CodecPlan<'_>,
+    directions: &HashMap<u16, MessageDirections>,
     symbols: &Symbols,
 ) -> String {
-    let plans = messages
+    let mut source = format!(
+        "/* SPDX-License-Identifier: Apache-2.0 */\n#include \"{module}.h\"\n#include <stddef.h>\n#include <string.h>\n\n"
+    );
+
+    let plans: Vec<MessagePlan<'_>> = messages
         .iter()
         .map(|message| MessagePlan::from_codec(&codecs.messages[&message.id]))
-        .collect::<Vec<_>>();
-    let fingerprint = |id: u16| fingerprints.is_none_or(|ids| ids.contains(&id));
-    let features = Features::new(messages, codecs)
-        .with_fingerprints(messages.iter().any(|m| fingerprint(m.id)));
-    let mut source = symbols.render(&features.select(COMMON_C), &[]);
-    if symbols.prefix.is_empty() {
-        for plan in &plans {
-            source.push_str(&format!(
-                "#if {}_CODEC_PROFILE != {}U\n#error \"Codec source/header profile mismatch; regenerate the matched artifacts.\"\n#endif\n",
-                super::upper_snake(&plan.message.name), plan.profile.code()
-            ));
-        }
-    }
-    source.push_str(&emit_fields(Sink::Bytes, &features, symbols));
-    source.push_str(&symbols.render(&features.select(CODEC_TAIL_C), &[]));
-    source.push_str(&symbols.render(
-        &features.select(include_str!("templates/decode_fields.c.in")),
-        &[
-            ("DECODE", &format!("{}decode", symbols.helper)),
-            ("CLEAR", &format!("{}clear(d, out)", symbols.helper)),
-            ("READ_VALUE", &format!("{}read_value", symbols.helper)),
-        ],
-    ));
-    if codecs.messages.values().any(|p| {
-        p.profile == crate::codec_plan::CodecProfile::PositionalV1
-            && !super::fixed::supports(&MessagePlan::from_codec(p))
-    }) {
-        source.push_str(&symbols.render(
-            &features.select(include_str!("templates/positional.c.in")),
-            &[],
+        .collect();
+
+    for plan in &plans {
+        source.push_str(&format!(
+            "#if {}_CODEC_PROFILE != {}U\n#error \"Codec source/header profile mismatch; regenerate the matched artifacts.\"\n#endif\n",
+            super::upper_snake(&plan.message.name),
+            plan.profile.code()
         ));
     }
-    if messages.iter().any(|m| fingerprint(m.id)) {
-        source
-            .push_str(&symbols.render(&features.select(include_str!("../fingerprint.c.in")), &[]));
-        // One canonical field traversal, specialized at generation time: no sink
-        // callback or per-byte mode branch on the ordinary encoder's hot path.
-        source.push_str(&emit_fields(Sink::Fingerprint, &features, symbols));
+    if !plans.is_empty() {
+        source.push('\n');
     }
-    // ordered_messages is child-first. Emit initialized definitions directly:
-    // tentative static const declarations are not portable to MSVC's C frontend.
-    let mut scalar_shapes: Vec<&MessagePlan<'_>> = Vec::new();
-    for id in super::descriptor::tagged_dependencies(codecs, false) {
-        let plan = MessagePlan::with_profile(codecs.messages[&id].message, codecs.profile);
-        emit_descriptor(&mut source, &plan, codecs, symbols);
-    }
+
+    let mut shapes: Vec<(MessagePlan<'_>, MessageDirections)> = Vec::new();
+    let mut kinds: Vec<Kind> = Vec::with_capacity(plans.len());
     for plan in &plans {
-        emit_descriptor(&mut source, plan, codecs, symbols);
-    }
-    for plan in &plans {
-        let message = plan.message;
-        let name = symbols.message(message);
-        let ty = type_name(&message.name);
-        let p = &symbols.helper;
-        let storage = symbols.storage;
-        if plan.profile == crate::codec_plan::CodecProfile::PositionalV1
-            && !super::fixed::supports(plan)
-        {
-            source.push_str(&super::positional::source(
-                &codecs.messages[&message.id],
-                symbols,
-            ));
-        } else if super::fixed::supports(plan) {
-            let index = scalar_shapes
+        let dir = directions
+            .get(&plan.message.id)
+            .copied()
+            .unwrap_or_default();
+        if fixed::supports(plan) {
+            let idx = if let Some(existing) = shapes
                 .iter()
-                .position(|first| super::fixed::same_shape(first, plan))
-                .unwrap_or_else(|| {
-                    let index = scalar_shapes.len();
-                    let needs_hash = plans.iter().any(|other| {
-                        super::fixed::same_shape(plan, other) && fingerprint(other.message.id)
-                    });
-                    source.push_str(&super::fixed::shape_source(
-                        plan, index, needs_hash, symbols,
-                    ));
-                    scalar_shapes.push(plan);
-                    index
-                });
-            let shape = super::fixed::shape_name(plan, index, symbols);
-            source.push_str(&super::fixed::wrappers(
-                plan,
-                index,
-                fingerprint(message.id),
-                symbols,
-            ));
-            source.push_str(&format!("static inline wl_codec_status_t {name}_wlc_detail_decode_fields(const uint8_t *input, size_t length, void *out) {{ return {shape}_decode(input, length, out); }}\n"));
-            source.push_str(&format!("static inline size_t {name}_wlc_detail_encoded_size_fields(const void *value) {{ return {shape}_encoded_size(value); }}\nstatic inline wl_codec_status_t {name}_wlc_detail_encode_fields(const void *value, uint8_t *out, size_t capacity, size_t *length) {{ return {shape}_encode(value, out, capacity, length); }}\n"));
-            continue;
-        }
-        if plan.profile != crate::codec_plan::CodecProfile::PositionalV1 {
-            if codecs.messages[&message.id].max_encoded_size.is_some() {
-                source.push_str(&format!("static inline wl_codec_status_t {name}_wlc_detail_measure(const {ty}_t *value, size_t *size) {{ return {p}measure(&{name}_desc, value, size); }}\n"));
-            }
-            source.push_str(&format!("{storage}void {name}_clear({ty}_t *value) {{ if (value != NULL) {p}clear(&{name}_desc, value); }}\n"));
-            if let Some(specialized) = super::packed::source(plan, symbols) {
-                source.push_str(&specialized);
+                .position(|(candidate, _)| fixed::same_shape(candidate, plan))
+            {
+                shapes[existing].1.encode |= dir.encode;
+                shapes[existing].1.decode |= dir.decode;
+                existing
             } else {
-                source.push_str(&format!("{storage}size_t {name}_encoded_size(const {ty}_t *value) {{ size_t size; return {p}measure(&{name}_desc, value, &size) == WL_CODEC_OK ? size : SIZE_MAX; }}\n"));
-                source.push_str(&format!("{storage}wl_codec_status_t {name}_encode(const {ty}_t *value, uint8_t *out, size_t cap, size_t *length) {{ return {p}encode(&{name}_desc, value, out, cap, length); }}\n"));
-                source.push_str(&format!("{storage}wl_codec_status_t {name}_decode(const uint8_t *input, size_t length, {ty}_t *out) {{ return {p}decode(&{name}_desc, input, length, out); }}\n\n"));
-            }
-        }
-        if fingerprint(message.id) {
-            source.push_str(&format!("/* Generator-private: value must be the unmodified result of successful decode.\n * hash supplies the caller domain seed; codec has no RPC identity policy. */\n{storage}wl_codec_status_t {name}_wlc_detail_fingerprint(const {ty}_t *value, uint64_t *hash, size_t *length) {{\n  {p}hash_state_t state = {{*hash, 0U, WL_CODEC_OK}};\n  wl_codec_status_t status = {p}hash_emit_fields(&{name}_desc, value, &state);\n  if (status != WL_CODEC_OK) return status;\n  if (state.status != WL_CODEC_OK) return state.status;\n  *hash = state.hash;\n  *length = state.length;\n  return WL_CODEC_OK;\n}}\n\n"));
+                let idx = shapes.len();
+                shapes.push((plan.clone(), dir));
+                idx
+            };
+            kinds.push(Kind::DirectFixed(idx));
+        } else if plan.profile == CodecProfile::SchemaV1 && plan.packed.is_some() {
+            kinds.push(Kind::DirectPacked);
+        } else if plan.profile == CodecProfile::PositionalV1 {
+            kinds.push(Kind::GenericPositional);
+        } else {
+            kinds.push(Kind::GenericTagged);
         }
     }
+
+    let kind_by_id: HashMap<u16, Kind> = plans
+        .iter()
+        .zip(&kinds)
+        .map(|(plan, kind)| (plan.message.id, *kind))
+        .collect();
+
+    let uses_generic_desc = |id: u16| -> bool {
+        let dir = directions.get(&id).copied().unwrap_or_default();
+        match kind_by_id[&id] {
+            Kind::DirectFixed(_) | Kind::GenericPositional => false,
+            Kind::DirectPacked => dir.decode,
+            Kind::GenericTagged => true,
+        }
+    };
+
+    let needed_desc = descriptor::tagged_dependencies(codecs, directions, &uses_generic_desc);
+    let mut referenced_as_child = BTreeSet::new();
+    for (plan, kind) in plans.iter().zip(&kinds) {
+        let dir = directions
+            .get(&plan.message.id)
+            .copied()
+            .unwrap_or_default();
+        let emits_fields = match kind {
+            Kind::GenericTagged => dir.encode || dir.decode,
+            Kind::DirectPacked => dir.decode,
+            Kind::DirectFixed(_) | Kind::GenericPositional => false,
+        };
+        if emits_fields {
+            for field in &plan.message.fields {
+                if let ResolvedType::Message { id, .. } = field.ty {
+                    referenced_as_child.insert(id);
+                }
+            }
+        }
+    }
+
+    let mut has_repeated_map: HashMap<u16, bool> = HashMap::new();
+    for plan in &plans {
+        let has_rep = plan.message.fields.iter().any(|field| {
+            field.cardinality == Cardinality::Repeated
+                || matches!(
+                    field.ty,
+                    ResolvedType::Message { id, .. } if *has_repeated_map.get(&id).unwrap_or(&false)
+                )
+        });
+        has_repeated_map.insert(plan.message.id, has_rep);
+    }
+
+    let mut has_forward = false;
+    for (plan, kind) in plans.iter().zip(&kinds) {
+        let name = symbols.message_name(plan.message);
+        if needed_desc.contains(&plan.message.id) {
+            source.push_str(&format!("static const wl_codec_desc_t {name}_desc;\n"));
+            has_forward = true;
+        }
+        if *kind == Kind::GenericPositional {
+            source.push_str(&format!("static const wl_codec_desc_t {name}_pos_desc;\n"));
+            has_forward = true;
+        }
+    }
+    if has_forward {
+        source.push('\n');
+    }
+
+    for (index, (shape, shape_dir)) in shapes.iter().enumerate() {
+        let name = fixed::shape_name(index);
+        source.push_str(&fixed::shape_source(shape, &name, *shape_dir, symbols));
+    }
+
+    for (plan, kind) in plans.iter().zip(&kinds) {
+        let dir = directions
+            .get(&plan.message.id)
+            .copied()
+            .unwrap_or_default();
+        match kind {
+            Kind::DirectFixed(shape_idx) => {
+                let shape = fixed::shape_name(*shape_idx);
+                source.push_str(&fixed::wrappers(plan, &shape, dir, symbols));
+            }
+            Kind::DirectPacked => {
+                source.push_str(&packed::source(plan, symbols, dir).expect("packed plan"));
+            }
+            Kind::GenericPositional => {
+                source.push_str(&positional::source(
+                    &codecs.messages[&plan.message.id],
+                    symbols,
+                    dir,
+                ));
+                descriptor::emit_descriptor(
+                    &mut source,
+                    plan,
+                    symbols,
+                    true,
+                    false,
+                    dir,
+                    false,
+                    true,
+                );
+            }
+            Kind::GenericTagged => {
+                let name = symbols.message_name(plan.message);
+                let ty = type_name(&plan.message.name);
+                let storage = symbols.storage;
+                let p = symbols.fn_prefix;
+                if needed_desc.contains(&plan.message.id) {
+                    source.push_str(&format!(
+                        "{storage}void {name}_clear({ty}_t *value) {{ {p}clear(&{name}_desc, value); }}\n"
+                    ));
+                } else {
+                    source.push_str(&emit_direct_clear(plan, symbols));
+                }
+                if dir.encode {
+                    source.push_str(&format!(
+                        "{storage}size_t {name}_encoded_size(const {ty}_t *value) {{ size_t size = 0U; return {p}measure(&{name}_desc, value, &size) == WL_CODEC_OK ? size : SIZE_MAX; }}\n{storage}wl_codec_status_t {name}_encode(const {ty}_t *value, uint8_t *out, size_t out_capacity, size_t *out_length) {{ return {p}encode(&{name}_desc, value, out, out_capacity, out_length); }}\n"
+                    ));
+                }
+                if dir.decode {
+                    source.push_str(&format!(
+                        "{storage}wl_codec_status_t {name}_decode(const uint8_t *input, size_t input_length, {ty}_t *out) {{ if (out == NULL) return WL_CODEC_ERR_INVALID_VALUE; {ty}_t scratch; return {p}decode(&{name}_desc, input, input_length, out, &scratch); }}\n"
+                    ));
+                }
+                source.push('\n');
+            }
+        }
+
+        if needed_desc.contains(&plan.message.id) {
+            let emit_fields = match kind {
+                Kind::GenericTagged => true,
+                Kind::GenericPositional => true,
+                Kind::DirectPacked => dir.decode || plan.profile == CodecProfile::PositionalV1,
+                Kind::DirectFixed(_) => plan.profile == CodecProfile::PositionalV1,
+            };
+            let is_child = referenced_as_child.contains(&plan.message.id);
+            descriptor::emit_descriptor(
+                &mut source,
+                plan,
+                symbols,
+                emit_fields,
+                is_child,
+                dir,
+                has_repeated_map[&plan.message.id],
+                false,
+            );
+        }
+    }
+
     source
 }
 
-enum Sink {
-    Bytes,
-    Fingerprint,
-}
-
-fn emit_fields(sink: Sink, features: &Features, symbols: &Symbols) -> String {
-    let p = &symbols.helper;
-    let (emit, put, copy, out, measure): (&str, &str, &str, &str, &str) = match sink {
-        Sink::Bytes => (
-            &format!("{p}emit"),
-            &format!("{p}put"),
-            &format!("{p}copy_span"),
-            "uint8_t **out",
-            &format!("{p}measure"),
-        ),
-        Sink::Fingerprint => (
-            &format!("{p}hash_emit"),
-            &format!("{p}hash_put"),
-            &format!("{p}hash_copy_span"),
-            &format!("{p}hash_state_t *out"),
-            &format!("{p}measure_validated"),
-        ),
-    };
-    symbols.render(
-        &features.select(EMIT_C),
-        &[
-            ("EMIT", emit),
-            ("PUT", put),
-            ("COPY_SPAN", copy),
-            ("OUT", out),
-            ("MEASURE", measure),
-        ],
-    )
+fn emit_direct_clear(plan: &MessagePlan<'_>, symbols: &Symbols) -> String {
+    let name = symbols.message_name(plan.message);
+    let ty = type_name(&plan.message.name);
+    let storage = symbols.storage;
+    let mut out = format!(
+        "{storage}void {name}_clear({ty}_t *value) {{\n  if (value == NULL) return;\n  memset(value, 0, sizeof(*value));\n"
+    );
+    for field in &plan.message.fields {
+        if !matches!(
+            field.cardinality,
+            Cardinality::Optional | Cardinality::Required
+        ) {
+            continue;
+        }
+        let ident = c_identifier(&field.name);
+        if let ResolvedType::Message { name: child, .. } = &field.ty {
+            let child_fn = type_name(child);
+            out.push_str(&format!("  {child_fn}_clear(&value->{ident});\n"));
+            continue;
+        }
+        let Some(default) = &field.default else {
+            continue;
+        };
+        let (_, signed, unsigned, literal, _) = descriptor::field_descriptor_data(field);
+        match default {
+            FieldDefault::Bool(true) => {
+                out.push_str(&format!("  value->{ident} = true;\n"));
+            }
+            FieldDefault::String(s) if !s.is_empty() => {
+                if field.max_length.is_some() {
+                    out.push_str(&format!(
+                        "  value->{ident}.length = {unsigned}U;\n  memcpy(value->{ident}.data, {literal}, {unsigned}U);\n"
+                    ));
+                } else {
+                    out.push_str(&format!(
+                        "  value->{ident}.data = {literal};\n  value->{ident}.length = {unsigned}U;\n"
+                    ));
+                }
+            }
+            FieldDefault::Int8(_)
+            | FieldDefault::Int16(_)
+            | FieldDefault::Int32(_)
+            | FieldDefault::Int64(_)
+            | FieldDefault::Enum(_)
+                if signed != 0 =>
+            {
+                out.push_str(&format!(
+                    "  value->{ident} = ({})({signed}LL);\n",
+                    c_type(&field.ty)
+                ));
+            }
+            _ if unsigned != 0 => {
+                out.push_str(&format!(
+                    "  value->{ident} = ({})UINT64_C({unsigned});\n",
+                    c_type(&field.ty)
+                ));
+            }
+            _ => {}
+        }
+    }
+    out.push_str("}\n");
+    out
 }

@@ -16,7 +16,7 @@ static void require(int condition) {
     exit(EXIT_FAILURE);
   }
 }
-static int32_t apply(void *user, const control_t *request, control_result_value_t *response) {
+static int32_t apply(void *user, const control_t *request, control_result_t *response) {
   (void)user;
   require(request->has_operation_id && request->operation_id == UINT32_MAX);
   require(request->has_joints && request->joints[0] == -1.5f && request->joints[5] == 3.25f);
@@ -43,7 +43,7 @@ int main(void) {
     require(wl_packet_init(&ports[side], &config) == WL_OK);
     release_smoke_kernel_handlers_t handlers = {.on_rpc_apply_control = apply};
     require(release_smoke_kernel_init(&endpoints[side], &ports[side], &handlers, NULL, NULL) == WL_OK);
-    control_value_t request = {.has_operation_id = true, .operation_id = UINT32_MAX,
+    control_t request = {.has_operation_id = true, .operation_id = UINT32_MAX,
         .has_joints = true, .joints = {-1.5f, 0.0f, 1.0f, 2.0f, -0.5f, 3.25f}};
     wl_kernel_call_handle_t call;
     require(release_smoke_kernel_apply_control_start(&endpoints[side], &request, 0U, 500U,

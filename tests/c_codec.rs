@@ -37,11 +37,6 @@ fn generated_c_compiles_and_round_trips_scalars_repeated_and_nested_messages() {
     let generated = generate_c(&model, "sample").unwrap();
     let directory = tempdir().unwrap();
     fs::write(directory.path().join("sample.h"), generated.header).unwrap();
-    fs::write(
-        directory.path().join("sample_values.h"),
-        generated.values_header,
-    )
-    .unwrap();
     fs::write(directory.path().join("sample.c"), generated.source).unwrap();
     fs::write(
         directory.path().join("main.c"),
@@ -99,9 +94,10 @@ int main(void) {
     let executable = directory.path().join("codec-test");
     let status = Command::new("cc")
         .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-I"])
-        .arg(include)
+        .arg(&include)
         .arg("-I")
         .arg(directory.path())
+        .arg(include.parent().unwrap().join("src/codec.c"))
         .arg(directory.path().join("sample.c"))
         .arg(directory.path().join("main.c"))
         .arg("-o")
@@ -135,11 +131,6 @@ fn generated_c_preserves_dense_numeric_golden_bits_and_validates_packed_lengths(
     let generated = generate_c(&model, "dense_numeric").unwrap();
     let directory = tempdir().unwrap();
     fs::write(directory.path().join("dense_numeric.h"), generated.header).unwrap();
-    fs::write(
-        directory.path().join("dense_numeric_values.h"),
-        generated.values_header,
-    )
-    .unwrap();
     fs::write(directory.path().join("dense_numeric.c"), generated.source).unwrap();
     fs::write(
         directory.path().join("main.c"),
@@ -170,18 +161,18 @@ static uint64_t double_bits(double value) {
 
 int main(void) {
   static const uint8_t golden[] = {
-    0x0DU, 0x7FU, 0xC1U, 0x23U, 0x45U,
-    0x11U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x01U,
+    0x0DU, 0x45U, 0x23U, 0xC1U, 0x7FU,
+    0x11U, 0x01U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U,
     0x1AU, 0x10U,
       0x00U, 0x00U, 0x00U, 0x00U,
-      0x80U, 0x00U, 0x00U, 0x00U,
-      0x7FU, 0x7FU, 0xFFU, 0xFFU,
-      0x7FU, 0xC0U, 0x00U, 0x42U,
+      0x00U, 0x00U, 0x00U, 0x80U,
+      0xFFU, 0xFFU, 0x7FU, 0x7FU,
+      0x42U, 0x00U, 0xC0U, 0x7FU,
     0x22U, 0x20U,
       0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U,
-      0x80U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U,
-      0x7FU, 0xEFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU,
-      0x7FU, 0xF8U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x42U,
+      0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0x80U,
+      0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xEFU, 0x7FU,
+      0x42U, 0x00U, 0x00U, 0x00U, 0x00U, 0x00U, 0xF8U, 0x7FU,
     0x2AU, 0x08U,
       0x00U, 0x00U, 0x00U, 0x00U, 0xFFU, 0xFFU, 0xFFU, 0xFFU,
     0x32U, 0x10U,
@@ -291,9 +282,10 @@ int main(void) {
     let executable = directory.path().join("dense-codec-test");
     let status = Command::new("cc")
         .args(["-std=c11", "-Wall", "-Wextra", "-Werror", "-I"])
-        .arg(include)
+        .arg(&include)
         .arg("-I")
         .arg(directory.path())
+        .arg(include.parent().unwrap().join("src/codec.c"))
         .arg(directory.path().join("dense_numeric.c"))
         .arg(directory.path().join("main.c"))
         .arg("-o")
@@ -310,11 +302,6 @@ fn generated_c_compiles_an_empty_message() {
     let generated = generate_c(&model, "empty").unwrap();
     let directory = tempdir().unwrap();
     fs::write(directory.path().join("empty.h"), generated.header).unwrap();
-    fs::write(
-        directory.path().join("empty_values.h"),
-        generated.values_header,
-    )
-    .unwrap();
     fs::write(directory.path().join("empty.c"), generated.source).unwrap();
     let include = wirelink_include();
     let status = Command::new("cc")

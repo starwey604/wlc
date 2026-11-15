@@ -18,13 +18,11 @@
   ],
   "artifact_digest_algorithm": "fnv1a64-domain-bytes-v1",
   "artifacts": [
-    {"path": "business.c", "size": 15357, "digest": "0xb138d6a4976bc503"},
-    {"path": "business.h", "size": 899, "digest": "0x10f8c723973861f8"},
-    {"path": "business_kernel.c", "size": 2845, "digest": "0xcbab18ee536b2cfc"},
-    {"path": "business_kernel.h", "size": 1335, "digest": "0x8ab933893dc46f56"},
-    {"path": "business_kernel_codecs.h", "size": 137, "digest": "0x227926230f7fcb92"},
+    {"path": "business.c", "size": 1016, "digest": "0x22984d3105f719cc"},
+    {"path": "business.h", "size": 757, "digest": "0x7659209f765d5675"},
+    {"path": "business_kernel.c", "size": 2122, "digest": "0xcb47e3e7e79ebd33"},
+    {"path": "business_kernel.h", "size": 1164, "digest": "0xb48994b333dc1f14"},
     {"path": "business_kernel_deployment.json", "size": 419, "digest": "0x228559034668d138"},
-    {"path": "business_kernel_manifest.json", "size": 1060, "digest": "0xd1ccf30dd0c4afc5"},
-    {"path": "business_values.h", "size": 1240, "digest": "0x93d24f3e344cbf3a"}
+    {"path": "business_kernel_manifest.json", "size": 891, "digest": "0xbbc608497b91cd5f"}
   ]
 }

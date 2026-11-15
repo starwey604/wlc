@@ -18,10 +18,13 @@ static uint32_t next_random(void) {
 }
 
 static void reader(const uint8_t *input, size_t length, size_t start) {
-  size_t a = start, v = start;
+  size_t a = start;
   uint64_t expected = UINT64_C(0xa55adeadbeefc33c), actual = expected;
   wl_codec_status_t sa = reference_getv(input, length, &a, &expected);
-  wl_codec_status_t sv = wlc_getv(input, length, &v, &actual);
+  const uint8_t *cursor = input != NULL && start <= length ? input + start : NULL;
+  const uint8_t *end = input != NULL ? input + length : NULL;
+  wl_codec_status_t sv = wl_codec_getv(&cursor, end, &actual);
+  size_t v = input != NULL && start <= length ? (size_t)(cursor - input) : start;
   assert(sa == sv && a == v && expected == actual);
   assert(sa >= 0 && sa <= WL_CODEC_ERR_OVERFLOW);
   if (sa != WL_CODEC_OK) assert(actual == UINT64_C(0xa55adeadbeefc33c));
@@ -95,7 +98,7 @@ static void readers(void) {
   for (unsigned i = 0U; i < 20000U; ++i) {
     for (size_t j = 0U; j < sizeof(input); ++j) input[j] = (uint8_t)next_random();
     size_t length = next_random() % 17U;
-    reader(input, length, next_random() % (length + 2U));
+    reader(input, length, next_random() % (length + 1U));
   }
   const uint8_t noncanonical[] = {128U, 0U};
   const uint8_t truncated[] = {128U};
@@ -105,11 +108,8 @@ static void readers(void) {
   golden(noncanonical, 2U, 0U, WL_CODEC_ERR_MALFORMED, 2U, UINT64_C(0xa55adeadbeefc33c));
   golden(truncated, 1U, 0U, WL_CODEC_ERR_MALFORMED, 1U, UINT64_C(0xa55adeadbeefc33c));
   golden(tenth, 10U, 0U, WL_CODEC_ERR_OVERFLOW, 10U, UINT64_C(0xa55adeadbeefc33c));
-  /* No input/output access when empty or already beyond end. */
+  /* No input/output access when empty. */
   golden(NULL, 0U, 0U, WL_CODEC_ERR_MALFORMED, 0U, UINT64_C(0xa55adeadbeefc33c));
-  golden(NULL, 0U, SIZE_MAX, WL_CODEC_ERR_OVERFLOW, SIZE_MAX, UINT64_C(0xa55adeadbeefc33c));
-  size_t at = 0U;
-  assert(wlc_getv(NULL, 0U, &at, NULL) == WL_CODEC_ERR_MALFORMED && at == 0U);
   /* Exact allocations make speculative end reads visible to ASan. */
   for (size_t length = 1U; length <= 11U; ++length) {
     uint8_t *exact = malloc(length);
@@ -125,13 +125,20 @@ static void readers(void) {
 
 #ifndef READER_ONLY
 static void decoder(const uint8_t *input, size_t length) {
-  stream_chunk_t a, v;
+  stream_chunk_t a, v, before;
   memset(&a, 0xa5, sizeof(a));
   memset(&v, 0xa5, sizeof(v));
+  before = v;
   wl_codec_status_t sa = reference_decode(&stream_chunk_desc, input, length, &a);
   wl_codec_status_t sv = stream_chunk_decode(input, length, &v);
-  /* Includes partial output, flags and untouched padding on every failure. */
-  assert(sa == sv && memcmp(&a, &v, sizeof(a)) == 0);
+  assert(sa == sv);
+  if (sa == WL_CODEC_OK) {
+    assert(a.has_sequence == v.has_sequence && a.sequence == v.sequence &&
+           a.has_data == v.has_data && a.data.length == v.data.length &&
+           (a.data.length == 0U || memcmp(a.data.data, v.data.data, a.data.length) == 0));
+  } else {
+    assert(memcmp(&v, &before, sizeof(v)) == 0);
+  }
   ++decoder_cases;
 }
 

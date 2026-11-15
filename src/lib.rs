@@ -17,7 +17,6 @@ pub mod profile_semantic;
 pub mod sdk_codegen;
 pub mod semantic;
 mod template;
-mod value_codegen;
 
 pub use codegen::{GeneratedC, generate_c, generate_c_for_profile};
 pub use identity::{IDENTITY_ALGORITHM, binding_profile_identity, schema_identity};

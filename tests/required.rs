@@ -33,19 +33,10 @@ message Envelope = 2 {
     assert!(generated.header.contains("bool has_sequence;"));
     assert!(generated.header.contains("bool has_child;"));
     assert!(generated.header.contains("bool has_axes;"));
-    assert!(
-        generated
-            .source
-            .contains("WL_CODEC_ERR_MISSING_REQUIRED_FIELD")
-    );
+    assert!(generated.header.contains("ENVELOPE_HAS_MAX_ENCODED_SIZE 1"));
 
     let directory = tempdir().unwrap();
     fs::write(directory.path().join("required_fields.h"), generated.header).unwrap();
-    fs::write(
-        directory.path().join("required_fields_values.h"),
-        generated.values_header,
-    )
-    .unwrap();
     fs::write(directory.path().join("required_fields.c"), generated.source).unwrap();
     fs::write(
         directory.path().join("main.c"),
@@ -59,8 +50,8 @@ static const uint8_t golden[] = {
   0x12U, 0x0CU,
     0x08U, 0x01U,
     0x12U, 0x08U,
-      0x01U, 0x02U, 0x03U, 0x04U,
-      0xAAU, 0xBBU, 0xCCU, 0xDDU
+      0x04U, 0x03U, 0x02U, 0x01U,
+      0xDDU, 0xCCU, 0xBBU, 0xAAU
 };
 
 _Static_assert(CHILD_MAX_ENCODED_SIZE == UINT64_C(16),
@@ -177,6 +168,7 @@ int main(void) {
         .arg(wirelink_include())
         .arg("-I")
         .arg(directory.path())
+        .arg(wirelink_include().parent().unwrap().join("src/codec.c"))
         .arg(directory.path().join("required_fields.c"))
         .arg(directory.path().join("main.c"))
         .arg("-o")

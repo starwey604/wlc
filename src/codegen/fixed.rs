@@ -1,70 +1,32 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Direct codecs for small scalar messages. The public wire remains TLV.
 use std::fmt::Write;
 
-use super::Symbols;
 use super::{
-    c_identifier, c_type, descriptor::field_descriptor_data, plan::MessagePlan, type_name,
+    MessageDirections, Symbols, c_type, descriptor::field_descriptor_data, plan::MessagePlan,
+    type_name,
 };
-use crate::{ast::Cardinality, semantic::ResolvedType};
+use crate::{
+    ast::Cardinality,
+    codec_plan::{CodecProfile, ValueEncoding, field_encoding},
+    semantic::{FieldDefault, FieldSymbol, ResolvedType},
+};
 
 pub(super) fn supports(plan: &MessagePlan<'_>) -> bool {
-    !plan.message.fields.is_empty()
-        && plan.message.fields.len() <= 8
-        && plan.message.fields.iter().all(|field| {
-            matches!(
-                field.cardinality,
-                Cardinality::Required | Cardinality::Optional
-            ) && (matches!(
-                field.ty,
-                ResolvedType::Uint32
-                    | ResolvedType::Fixed32
-                    | ResolvedType::Fixed64
-                    | ResolvedType::Float32
-                    | ResolvedType::Float64
-            ) || (plan.profile != crate::codec_plan::CodecProfile::PositionalV1
-                && varint(&field.ty)))
-        })
-}
-
-fn varint(ty: &ResolvedType) -> bool {
-    matches!(
-        ty,
-        ResolvedType::Bool
-            | ResolvedType::Uint8
-            | ResolvedType::Uint16
-            | ResolvedType::Uint32
-            | ResolvedType::Uint64
-            | ResolvedType::Int8
-            | ResolvedType::Int16
-            | ResolvedType::Int32
-            | ResolvedType::Int64
-            | ResolvedType::Enum { .. }
-    )
-}
-
-fn wire_value(ty: &ResolvedType, value: &str, p: &str) -> String {
-    match ty {
-        ResolvedType::Int8
-        | ResolvedType::Int16
-        | ResolvedType::Int32
-        | ResolvedType::Enum { .. } => format!("{p}z32({value})"),
-        ResolvedType::Int64 => format!("{p}z64({value})"),
-        _ => value.to_owned(),
+    if plan.message.fields.len() > 8 {
+        return false;
     }
-}
-
-pub(super) fn width(ty: &ResolvedType) -> usize {
-    match ty {
-        ResolvedType::Bool | ResolvedType::Uint8 | ResolvedType::Int8 => 1,
-        ResolvedType::Uint16 | ResolvedType::Int16 => 2,
-        ResolvedType::Uint32
-        | ResolvedType::Int32
-        | ResolvedType::Enum { .. }
-        | ResolvedType::Fixed32
-        | ResolvedType::Float32 => 4,
-        _ => 8,
+    if plan.profile == CodecProfile::SchemaV1 && plan.message.fields.is_empty() {
+        return false;
     }
+    plan.message.fields.iter().all(|field| {
+        matches!(
+            field.cardinality,
+            Cardinality::Optional | Cardinality::Required
+        ) && !matches!(
+            field.ty,
+            ResolvedType::Bytes | ResolvedType::String | ResolvedType::Message { .. }
+        )
+    })
 }
 
 pub(super) fn same_shape(a: &MessagePlan<'_>, b: &MessagePlan<'_>) -> bool {
@@ -74,297 +36,488 @@ pub(super) fn same_shape(a: &MessagePlan<'_>, b: &MessagePlan<'_>) -> bool {
             .fields
             .iter()
             .zip(&b.message.fields)
-            .all(|(a, b)| {
-                a.number == b.number
-                    && a.cardinality == b.cardinality
-                    && a.ty == b.ty
-                    && a.default == b.default
-                    && a.max_length == b.max_length
+            .all(|(left, right)| {
+                left.number == right.number
+                    && left.cardinality == right.cardinality
+                    && left.ty == right.ty
+                    && left.default == right.default
             })
 }
 
-pub(super) fn shape_name(plan: &MessagePlan<'_>, index: usize, symbols: &Symbols) -> String {
-    let kind = if plan.profile == crate::codec_plan::CodecProfile::PositionalV1 {
-        "positional_scalar_shape"
+pub(super) fn shape_name(index: usize) -> String {
+    format!("wlc_scalar_shape_{index}")
+}
+
+pub(super) fn max_field_value_bytes(plan: &MessagePlan<'_>, field: &FieldSymbol) -> usize {
+    match field_encoding(field, plan.profile) {
+        ValueEncoding::Bool => 1,
+        ValueEncoding::UnsignedVarint(bits) | ValueEncoding::ZigzagVarint(bits) => match bits {
+            8 => 2,
+            16 => 3,
+            32 => 5,
+            _ => 10,
+        },
+        ValueEncoding::EnumZigzag => 5,
+        ValueEncoding::LittleEndian(w) | ValueEncoding::IeeeLittleEndian(w) => usize::from(w),
+        ValueEncoding::Bytes | ValueEncoding::Utf8 | ValueEncoding::Message(_) => 0,
+    }
+}
+
+pub(super) fn shape_struct_def(plan: &MessagePlan<'_>, name: &str) -> String {
+    let mut out = format!("typedef struct {name}_s {{\n");
+    if plan.message.fields.is_empty() {
+        writeln!(out, "  uint8_t _empty;").unwrap();
     } else {
-        "scalar_shape"
-    };
-    format!("{}{kind}_{index}", symbols.helper)
+        for (i, field) in plan.message.fields.iter().enumerate() {
+            writeln!(out, "  bool h{i};").unwrap();
+            writeln!(out, "  {} v{i};", c_type(&field.ty)).unwrap();
+        }
+    }
+    writeln!(out, "}} {name}_t;\n").unwrap();
+    out
 }
 
 pub(super) fn shape_source(
     plan: &MessagePlan<'_>,
-    index: usize,
-    fingerprint: bool,
+    name: &str,
+    directions: MessageDirections,
     symbols: &Symbols,
 ) -> String {
-    let name = shape_name(plan, index, symbols);
-    if plan.profile == crate::codec_plan::CodecProfile::PositionalV1 {
-        super::positional_fixed::source(plan, &name, fingerprint, symbols)
-    } else {
-        source(plan, &name, fingerprint, symbols)
+    if plan.profile == CodecProfile::PositionalV1 {
+        return super::positional_fixed::source(plan, name, directions, symbols);
     }
-}
-
-// Shared shapes use primitive lvalues and schema offsets, never casts between
-// distinct message structs. Names and accesses are selected before C emission.
-pub(super) fn access(
-    plan: &MessagePlan<'_>,
-    field: &crate::semantic::FieldSymbol,
-    base: &str,
-    mutable: bool,
-    presence: bool,
-) -> String {
-    let ty = type_name(&plan.message.name);
-    let f = c_identifier(&field.name);
-    let member = if presence { format!("has_{f}") } else { f };
-    let primitive = if presence {
-        "bool".into()
-    } else {
-        c_type(&field.ty)
-    };
-    let qualifier = if mutable { "" } else { "const " };
-    format!(
-        "(*({qualifier}{primitive} *)(({qualifier}uint8_t *){base} + offsetof({ty}_t, {member})))"
-    )
+    schema_v1_shape_source(plan, name, directions)
 }
 
 pub(super) fn wrappers(
     plan: &MessagePlan<'_>,
-    index: usize,
-    fingerprint: bool,
+    shape: &str,
+    directions: MessageDirections,
     symbols: &Symbols,
 ) -> String {
-    let name = symbols.message(plan.message);
+    let name = symbols.message_name(plan.message);
     let ty = type_name(&plan.message.name);
     let storage = symbols.storage;
-    let shape = shape_name(plan, index, symbols);
     let mut out = String::new();
-    writeln!(out, "static inline wl_codec_status_t {name}_wlc_detail_measure(const {ty}_t *value, size_t *size) {{\n  (void){name}_desc;\n  return {shape}_wlc_detail_measure(value, size);\n}}\n{storage}void {name}_clear({ty}_t *value) {{ {shape}_clear(value); }}\n{storage}size_t {name}_encoded_size(const {ty}_t *value) {{ return {shape}_encoded_size(value); }}\n{storage}wl_codec_status_t {name}_encode(const {ty}_t *value, uint8_t *out, size_t capacity, size_t *length) {{ return {shape}_encode(value, out, capacity, length); }}\n{storage}wl_codec_status_t {name}_decode(const uint8_t *input, size_t length, {ty}_t *out) {{ return {shape}_decode(input, length, out); }}\n").unwrap();
-    if fingerprint {
-        writeln!(out, "{storage}wl_codec_status_t {name}_wlc_detail_fingerprint(const {ty}_t *value, uint64_t *hash, size_t *length) {{ return {shape}_wlc_detail_fingerprint(value, hash, length); }}").unwrap();
-    }
-    out
-}
-
-fn source(plan: &MessagePlan<'_>, name: &str, fingerprint: bool, symbols: &Symbols) -> String {
-    let p = &symbols.helper;
-    let storage = "static ";
-    let mut out = format!(
-        "/* Schema-specialized scalars; ordinary Schema-v1 TLV bytes. */\nstatic inline wl_codec_status_t {name}_wlc_detail_measure(const void *value, size_t *size) {{\n  if (value == NULL || size == NULL) return WL_CODEC_ERR_INVALID_VALUE;\n"
-    );
-    let mut required = Vec::new();
-    let mut size = Vec::new();
-    for (field, key) in plan.message.fields.iter().zip(&plan.keys) {
-        let v = access(plan, field, "value", false, false);
-        let vh = access(plan, field, "value", false, true);
-        let field_size = if plan.varuint32(field) {
-            format!("({}U + {p}vsize32({v}))", key.length)
-        } else if varint(&field.ty) {
-            let wire = wire_value(&field.ty, &v, p);
-            format!("({}U + {p}vsize({wire}))", key.length)
-        } else {
-            format!("{}U", key.length + width(&field.ty))
-        };
-        if field.cardinality == Cardinality::Required {
-            required.push(format!("!{vh}"));
-            size.push(field_size);
-        } else {
-            size.push(format!("({vh} ? {field_size} : 0U)"));
-        }
-    }
-    if !required.is_empty() {
+    writeln!(
+        out,
+        "{storage}void {name}_clear({ty}_t *value) {{\n  _Static_assert(sizeof({ty}_t) == sizeof({shape}_t), \"shape layout mismatch\");\n  {shape}_clear(value);\n}}"
+    )
+    .unwrap();
+    if directions.encode {
         writeln!(
             out,
-            "  if ({}) return WL_CODEC_ERR_MISSING_REQUIRED_FIELD;",
-            required.join(" || ")
+            "{storage}size_t {name}_encoded_size(const {ty}_t *value) {{ return {shape}_encoded_size(value); }}"
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "{storage}wl_codec_status_t {name}_encode(const {ty}_t *value, uint8_t *out, size_t out_capacity, size_t *out_length) {{ return {shape}_encode(value, out, out_capacity, out_length); }}"
         )
         .unwrap();
     }
-    writeln!(out, "  *size = {};\n  return WL_CODEC_OK;\n}}\n\n{storage}void {name}_clear(void *value) {{\n  if (value == NULL) return;", size.join(" + ")).unwrap();
-    for field in &plan.message.fields {
-        let mv = access(plan, field, "value", true, false);
-        let mh = access(plan, field, "value", true, true);
-        let (_, signed, unsigned, _, _) = field_descriptor_data(field);
-        let default = match field.ty {
-            ResolvedType::Uint32 | ResolvedType::Fixed32 => format!("UINT32_C({unsigned})"),
-            ResolvedType::Fixed64 | ResolvedType::Uint64 => format!("UINT64_C({unsigned})"),
-            ResolvedType::Bool | ResolvedType::Uint8 | ResolvedType::Uint16 => unsigned,
-            ResolvedType::Int8
-            | ResolvedType::Int16
-            | ResolvedType::Int32
-            | ResolvedType::Int64
-            | ResolvedType::Enum { .. } => signed,
-            _ => "0.0".to_owned(),
-        };
-        writeln!(out, "  {mh} = false;\n  {mv} = {default};").unwrap();
+    if directions.decode {
+        writeln!(
+            out,
+            "{storage}wl_codec_status_t {name}_decode(const uint8_t *input, size_t input_length, {ty}_t *out) {{\n  if (out == NULL) return WL_CODEC_ERR_INVALID_VALUE;\n  {ty}_t temp;\n  wl_codec_status_t status = {shape}_decode(input, input_length, &temp);\n  if (status == WL_CODEC_OK) memcpy(out, &temp, sizeof(temp));\n  return status;\n}}"
+        )
+        .unwrap();
     }
-    writeln!(out, "}}\n\n{storage}size_t {name}_encoded_size(const void *value) {{\n  size_t size;\n  return {name}_wlc_detail_measure(value, &size) == WL_CODEC_OK ? size : SIZE_MAX;\n}}\n\n{storage}wl_codec_status_t {name}_encode(const void *value, uint8_t *out, size_t capacity, size_t *length) {{\n  size_t size;\n  wl_codec_status_t status = {name}_wlc_detail_measure(value, &size);\n  if (status != WL_CODEC_OK) return status;\n  if (length == NULL || (size != 0U && out == NULL)) return WL_CODEC_ERR_INVALID_VALUE;\n  if (capacity < size) return WL_CODEC_ERR_CAPACITY;\n  uint8_t *cursor = out;").unwrap();
-    emit_scalar_fields(&mut out, plan, symbols, false);
-    writeln!(out, "  *length = size;\n  return WL_CODEC_OK;\n}}\n\n{storage}wl_codec_status_t {name}_decode(const uint8_t *input, size_t length, void *out) {{\n  if (out == NULL || (length != 0U && input == NULL)) return WL_CODEC_ERR_INVALID_VALUE;\n  {name}_clear(out);\n  for (size_t at = 0U; at < length;) {{\n    uint32_t key;\n    wl_codec_status_t status;\n    if (input[at] < 128U) key = input[at++];\n    else {{\n      uint64_t wide;\n      status = {p}getv(input, length, &at, &wide);\n      if (status != WL_CODEC_OK) return status;\n      if (wide > UINT32_C(0x7ffff)) return WL_CODEC_ERR_MALFORMED;\n      key = (uint32_t)wide;\n    }}\n    uint32_t number = key >> 3U;\n    uint8_t wire = (uint8_t)(key & 7U);\n    if (number == 0U || number > 65535U ||\n        (wire != 0U && wire != 1U && wire != 2U && wire != 5U))\n      return WL_CODEC_ERR_MALFORMED;\n    switch ((uint16_t)number) {{").unwrap();
-    for (field, key) in plan.message.fields.iter().zip(&plan.keys) {
-        let o = access(plan, field, "out", true, false);
-        let oh = access(plan, field, "out", true, true);
-        let bytes = width(&field.ty);
-        if plan.varuint32(field) {
-            writeln!(out, "      case {}U: {{\n        if (wire != 0U) return WL_CODEC_ERR_WIRE_TYPE;\n        if ({oh}) return WL_CODEC_ERR_DUPLICATE_FIELD;\n        uint32_t bits;\n        status = {p}getv32(input, length, &at, &bits);\n        if (status != WL_CODEC_OK) return status;\n        {o} = bits;\n        {oh} = true;\n        break;\n      }}", field.number).unwrap();
+    out.push('\n');
+    out
+}
+
+fn emit_shape_clear(out: &mut String, plan: &MessagePlan<'_>, name: &str) {
+    writeln!(
+        out,
+        "static void {name}_clear(void *value) {{\n  if (value == NULL) return;\n  {name}_t temp = {{0}};"
+    )
+    .unwrap();
+    for (i, field) in plan.message.fields.iter().enumerate() {
+        let Some(default) = &field.default else {
             continue;
-        }
-        if varint(&field.ty) {
-            writeln!(out, "      case {}U: {{\n        if (wire != 0U) return WL_CODEC_ERR_WIRE_TYPE;\n        if ({oh}) return WL_CODEC_ERR_DUPLICATE_FIELD;\n        uint64_t bits;\n        status = {p}getv(input, length, &at, &bits);\n        if (status != WL_CODEC_OK) return status;", field.number).unwrap();
-            let bound = match field.ty {
-                ResolvedType::Bool => Some(("1U", "WL_CODEC_ERR_INVALID_VALUE")),
-                ResolvedType::Uint8 | ResolvedType::Int8 => {
-                    Some(("UINT8_MAX", "WL_CODEC_ERR_OVERFLOW"))
-                }
-                ResolvedType::Uint16 | ResolvedType::Int16 => {
-                    Some(("UINT16_MAX", "WL_CODEC_ERR_OVERFLOW"))
-                }
-                ResolvedType::Int32 | ResolvedType::Enum { .. } => {
-                    Some(("UINT32_MAX", "WL_CODEC_ERR_OVERFLOW"))
-                }
-                _ => None,
-            };
-            if let Some((maximum, error)) = bound {
-                writeln!(out, "        if (bits > {maximum}) return {error};").unwrap();
+        };
+        let (_, signed, unsigned, _, _) = field_descriptor_data(field);
+        match default {
+            FieldDefault::Bool(b) if *b => writeln!(out, "  temp.v{i} = true;").unwrap(),
+            FieldDefault::Int8(_)
+            | FieldDefault::Int16(_)
+            | FieldDefault::Int32(_)
+            | FieldDefault::Int64(_)
+            | FieldDefault::Enum(_)
+                if signed != 0 =>
+            {
+                writeln!(out, "  temp.v{i} = ({})({signed}LL);", c_type(&field.ty)).unwrap();
             }
-            let value = match field.ty {
-                ResolvedType::Int8
-                | ResolvedType::Int16
-                | ResolvedType::Int32
-                | ResolvedType::Enum { .. } => format!("{p}uz32((uint32_t)bits)"),
-                ResolvedType::Int64 => format!("{p}uz64(bits)"),
-                _ => "bits".to_owned(),
+            _ if unsigned != 0 => {
+                writeln!(
+                    out,
+                    "  temp.v{i} = ({})UINT64_C({unsigned});",
+                    c_type(&field.ty)
+                )
+                .unwrap();
+            }
+            _ => {}
+        }
+    }
+    writeln!(out, "  memcpy(value, &temp, sizeof(temp));\n}}\n").unwrap();
+}
+
+pub(super) fn emit_shape_default_clear(out: &mut String, plan: &MessagePlan<'_>, name: &str) {
+    emit_shape_clear(out, plan, name);
+}
+
+fn schema_v1_shape_source(
+    plan: &MessagePlan<'_>,
+    name: &str,
+    directions: MessageDirections,
+) -> String {
+    let mut out = shape_struct_def(plan, name);
+    emit_shape_clear(&mut out, plan, name);
+
+    let max_size: usize = plan
+        .message
+        .fields
+        .iter()
+        .enumerate()
+        .map(|(i, field)| plan.keys[i].length + max_field_value_bytes(plan, field))
+        .sum();
+    let all_required_fixed = plan.message.fields.iter().all(|field| {
+        field.cardinality == Cardinality::Required
+            && matches!(
+                field.ty,
+                ResolvedType::Fixed32
+                    | ResolvedType::Fixed64
+                    | ResolvedType::Float32
+                    | ResolvedType::Float64
+            )
+    });
+
+    if directions.encode {
+        if !all_required_fixed {
+            writeln!(
+                out,
+                "static size_t {name}_measure_fields(const {name}_t *v) {{\n  (void)v;\n  size_t size = 0U;"
+            )
+            .unwrap();
+            for (i, field) in plan.message.fields.iter().enumerate() {
+                let klen = plan.keys[i].length;
+                if field.cardinality != Cardinality::Required {
+                    writeln!(out, "  if (v->h{i}) {{").unwrap();
+                }
+                match field.ty {
+                    ResolvedType::Bool => writeln!(out, "    size += {}U;", klen + 1).unwrap(),
+                    ResolvedType::Uint8 | ResolvedType::Uint16 | ResolvedType::Uint32 => {
+                        writeln!(
+                            out,
+                            "    size += {klen}U + wl_codec_vsize((uint64_t)v->v{i});"
+                        )
+                        .unwrap();
+                    }
+                    ResolvedType::Uint64 => {
+                        writeln!(out, "    size += {klen}U + wl_codec_vsize(v->v{i});").unwrap();
+                    }
+                    ResolvedType::Int8
+                    | ResolvedType::Int16
+                    | ResolvedType::Int32
+                    | ResolvedType::Enum { .. } => {
+                        writeln!(
+                            out,
+                            "    size += {klen}U + wl_codec_vsize((uint64_t)wl_codec_zz32(v->v{i}));"
+                        )
+                        .unwrap();
+                    }
+                    ResolvedType::Int64 => {
+                        writeln!(
+                            out,
+                            "    size += {klen}U + wl_codec_vsize(wl_codec_zz64(v->v{i}));"
+                        )
+                        .unwrap();
+                    }
+                    ResolvedType::Fixed32 | ResolvedType::Float32 => {
+                        writeln!(out, "    size += {}U;", klen + 4).unwrap();
+                    }
+                    ResolvedType::Fixed64 | ResolvedType::Float64 => {
+                        writeln!(out, "    size += {}U;", klen + 8).unwrap();
+                    }
+                    ResolvedType::Bytes | ResolvedType::String | ResolvedType::Message { .. } => {
+                        unreachable!()
+                    }
+                }
+                if field.cardinality != Cardinality::Required {
+                    writeln!(out, "  }}").unwrap();
+                }
+            }
+            writeln!(out, "  return size;\n}}\n").unwrap();
+        }
+
+        writeln!(
+            out,
+            "static size_t {name}_encoded_size(const void *value) {{\n  if (value == NULL) return SIZE_MAX;\n  {name}_t v;\n  memcpy(&v, value, sizeof(v));"
+        )
+        .unwrap();
+        for (i, field) in plan.message.fields.iter().enumerate() {
+            if field.cardinality == Cardinality::Required {
+                writeln!(out, "  if (!v.h{i}) return SIZE_MAX;").unwrap();
+            }
+        }
+        if all_required_fixed {
+            writeln!(out, "  return {max_size}U;\n}}\n").unwrap();
+        } else {
+            writeln!(out, "  return {name}_measure_fields(&v);\n}}\n").unwrap();
+        }
+
+        writeln!(
+            out,
+            "static wl_codec_status_t {name}_encode(const void *value, uint8_t *out, size_t capacity, size_t *length) {{\n  if (value == NULL) return WL_CODEC_ERR_INVALID_VALUE;\n  {name}_t v;\n  memcpy(&v, value, sizeof(v));"
+        )
+        .unwrap();
+        for (i, field) in plan.message.fields.iter().enumerate() {
+            if field.cardinality == Cardinality::Required {
+                writeln!(
+                    out,
+                    "  if (!v.h{i}) return WL_CODEC_ERR_MISSING_REQUIRED_FIELD;"
+                )
+                .unwrap();
+            }
+        }
+        if all_required_fixed {
+            if max_size > 0 {
+                writeln!(
+                    out,
+                    "  if (length == NULL || out == NULL) return WL_CODEC_ERR_INVALID_VALUE;\n  if (capacity < {max_size}U) return WL_CODEC_ERR_CAPACITY;"
+                )
+                .unwrap();
+            } else {
+                writeln!(
+                    out,
+                    "  if (length == NULL) return WL_CODEC_ERR_INVALID_VALUE;"
+                )
+                .unwrap();
+            }
+        } else {
+            writeln!(
+                out,
+                "  if (length == NULL) return WL_CODEC_ERR_INVALID_VALUE;\n  if (out == NULL || capacity < {max_size}U) {{\n    const size_t need = {name}_measure_fields(&v);\n    if (need != 0U && out == NULL) return WL_CODEC_ERR_INVALID_VALUE;\n    if (capacity < need) return WL_CODEC_ERR_CAPACITY;\n    if (need == 0U) {{ *length = 0U; return WL_CODEC_OK; }}\n  }}"
+            )
+            .unwrap();
+        }
+        writeln!(out, "  uint8_t *cursor = out;").unwrap();
+        for (i, field) in plan.message.fields.iter().enumerate() {
+            let key = &plan.keys[i];
+            let indent = if field.cardinality != Cardinality::Required {
+                writeln!(out, "  if (v.h{i}) {{").unwrap();
+                "    "
+            } else {
+                "  "
+            };
+            for byte in &key.bytes[..key.length] {
+                writeln!(out, "{indent}*cursor++ = 0x{byte:02x}U;").unwrap();
+            }
+            emit_scalar_write(&mut out, field, &format!("v.v{i}"), indent, false);
+            if field.cardinality != Cardinality::Required {
+                writeln!(out, "  }}").unwrap();
+            }
+        }
+        writeln!(
+            out,
+            "  *length = (size_t)(cursor - out);\n  return WL_CODEC_OK;\n}}\n"
+        )
+        .unwrap();
+    }
+
+    if directions.decode {
+        writeln!(
+            out,
+            "static wl_codec_status_t {name}_decode(const uint8_t *input, size_t length, void *out) {{\n  if (out == NULL || (length != 0U && input == NULL)) return WL_CODEC_ERR_INVALID_VALUE;\n  {name}_t temp;\n  {name}_clear(&temp);\n  const uint8_t *cursor = input;\n  const uint8_t *end = length != 0U ? input + length : input;\n  while (cursor < end) {{\n    uint64_t wide_key = 0U;\n    wl_codec_status_t status = wl_codec_getv(&cursor, end, &wide_key);\n    if (status != WL_CODEC_OK) return status;\n    const uint64_t number = wide_key >> 3U;\n    const uint8_t wire = (uint8_t)(wide_key & 7U);\n    if (number == 0U || number > UINT16_MAX || (wire != 0U && wire != 1U && wire != 2U && wire != 5U))\n      return WL_CODEC_ERR_MALFORMED;\n    switch ((uint16_t)number) {{"
+        )
+        .unwrap();
+        for (i, field) in plan.message.fields.iter().enumerate() {
+            let wire = plan.keys[i].wire;
+            writeln!(
+                out,
+                "      case {}U: {{\n        if (wire != {wire}U) return WL_CODEC_ERR_WIRE_TYPE;\n        if (temp.h{i}) return WL_CODEC_ERR_DUPLICATE_FIELD;",
+                field.number
+            )
+            .unwrap();
+            emit_scalar_read(&mut out, field, &format!("temp.v{i}"), "        ", false);
+            writeln!(out, "        temp.h{i} = true;\n        break;\n      }}").unwrap();
+        }
+        writeln!(
+            out,
+            "      default: {{\n        status = wl_codec_skip(&cursor, end, wire);\n        if (status != WL_CODEC_OK) return status;\n        break;\n      }}\n    }}\n  }}"
+        )
+        .unwrap();
+        for (i, field) in plan.message.fields.iter().enumerate() {
+            if field.cardinality == Cardinality::Required {
+                writeln!(
+                    out,
+                    "  if (!temp.h{i}) return WL_CODEC_ERR_MISSING_REQUIRED_FIELD;"
+                )
+                .unwrap();
+            }
+        }
+        writeln!(
+            out,
+            "  memcpy(out, &temp, sizeof(temp));\n  return WL_CODEC_OK;\n}}\n"
+        )
+        .unwrap();
+    }
+
+    out
+}
+
+pub(super) fn emit_scalar_write(
+    out: &mut String,
+    field: &FieldSymbol,
+    expr: &str,
+    indent: &str,
+    positional_fixed32_varint: bool,
+) {
+    match field.ty {
+        ResolvedType::Bool => {
+            writeln!(out, "{indent}*cursor++ = ({expr}) ? 1U : 0U;").unwrap();
+        }
+        ResolvedType::Uint8 | ResolvedType::Uint16 | ResolvedType::Uint32 => {
+            writeln!(
+                out,
+                "{indent}cursor = wl_codec_putv(cursor, (uint64_t){expr});"
+            )
+            .unwrap();
+        }
+        ResolvedType::Uint64 => {
+            writeln!(out, "{indent}cursor = wl_codec_putv(cursor, {expr});").unwrap();
+        }
+        ResolvedType::Int8
+        | ResolvedType::Int16
+        | ResolvedType::Int32
+        | ResolvedType::Enum { .. } => {
+            writeln!(
+                out,
+                "{indent}cursor = wl_codec_putv(cursor, (uint64_t)wl_codec_zz32({expr}));"
+            )
+            .unwrap();
+        }
+        ResolvedType::Int64 => {
+            writeln!(
+                out,
+                "{indent}cursor = wl_codec_putv(cursor, wl_codec_zz64({expr}));"
+            )
+            .unwrap();
+        }
+        ResolvedType::Fixed32 if positional_fixed32_varint => {
+            writeln!(
+                out,
+                "{indent}cursor = wl_codec_putv(cursor, (uint64_t){expr});"
+            )
+            .unwrap();
+        }
+        ResolvedType::Fixed32 | ResolvedType::Float32 => {
+            writeln!(
+                out,
+                "{indent}{{\n{indent}  uint32_t bits = 0U;\n{indent}  memcpy(&bits, &{expr}, 4U);\n{indent}  wl_codec_put_le32(cursor, bits);\n{indent}  cursor += 4U;\n{indent}}}"
+            )
+            .unwrap();
+        }
+        ResolvedType::Fixed64 | ResolvedType::Float64 => {
+            writeln!(
+                out,
+                "{indent}{{\n{indent}  uint64_t bits = 0U;\n{indent}  memcpy(&bits, &{expr}, 8U);\n{indent}  wl_codec_put_le64(cursor, bits);\n{indent}  cursor += 8U;\n{indent}}}"
+            )
+            .unwrap();
+        }
+        ResolvedType::Bytes | ResolvedType::String | ResolvedType::Message { .. } => unreachable!(),
+    }
+}
+
+pub(super) fn emit_scalar_read(
+    out: &mut String,
+    field: &FieldSymbol,
+    dst: &str,
+    indent: &str,
+    positional_fixed32_varint: bool,
+) {
+    match field.ty {
+        ResolvedType::Bool => {
+            let err = if positional_fixed32_varint {
+                "WL_CODEC_ERR_MALFORMED"
+            } else {
+                "WL_CODEC_ERR_INVALID_VALUE"
             };
             writeln!(
                 out,
-                "        {o} = ({})({value});\n        {oh} = true;\n        break;\n      }}",
-                c_type(&field.ty)
+                "{indent}uint64_t w = 0U;\n{indent}wl_codec_status_t s = wl_codec_getv(&cursor, end, &w);\n{indent}if (s != WL_CODEC_OK) return s;\n{indent}if (w > 1U) return {err};\n{indent}{dst} = (w != 0U);"
             )
             .unwrap();
-            continue;
         }
-        writeln!(out, "      case {}U: {{\n        if (wire != {}U) return WL_CODEC_ERR_WIRE_TYPE;\n        if ({oh}) return WL_CODEC_ERR_DUPLICATE_FIELD;\n        if (length - at < {bytes}U) return WL_CODEC_ERR_MALFORMED;", field.number, key.wire).unwrap();
-        let terms = (0..bytes)
-            .map(|i| {
-                format!(
-                    "((uint{}_t)input[at + {i}U] << {}U)",
-                    bytes * 8,
-                    (bytes - i - 1) * 8
-                )
-            })
-            .collect::<Vec<_>>();
-        writeln!(
-            out,
-            "        uint{}_t bits = {};",
-            bytes * 8,
-            terms.join(" | ")
-        )
-        .unwrap();
-        if matches!(field.ty, ResolvedType::Float32 | ResolvedType::Float64) {
-            writeln!(out, "        memcpy(&{o}, &bits, sizeof(bits));").unwrap();
-        } else {
-            writeln!(out, "        {o} = bits;").unwrap();
-        }
-        writeln!(
-            out,
-            "        {oh} = true;\n        at += {bytes}U;\n        break;\n      }}"
-        )
-        .unwrap();
-    }
-    writeln!(out, "      default:\n        status = {p}skip(wire, input, length, &at);\n        if (status != WL_CODEC_OK) return status;\n        break;\n    }}\n  }}").unwrap();
-    if !required.is_empty() {
-        writeln!(
-            out,
-            "  if ({}) return WL_CODEC_ERR_MISSING_REQUIRED_FIELD;",
-            plan.message
-                .fields
-                .iter()
-                .filter(|f| f.cardinality == Cardinality::Required)
-                .map(|f| format!("!{}", access(plan, f, "out", true, true)))
-                .collect::<Vec<_>>()
-                .join(" || ")
-        )
-        .unwrap();
-    }
-    writeln!(out, "  return WL_CODEC_OK;\n}}\n").unwrap();
-    if fingerprint {
-        let maximum = plan
-            .message
-            .fields
-            .iter()
-            .zip(&plan.keys)
-            .map(|(field, key)| {
-                key.length
-                    + if plan.varuint32(field) {
-                        5
-                    } else if varint(&field.ty) {
-                        (width(&field.ty) * 8).div_ceil(7)
-                    } else {
-                        width(&field.ty)
-                    }
-            })
-            .sum::<usize>();
-        writeln!(out, "/* Generator-private: unmodified successful decode, caller supplies domain seed.\n * Reuse the direct encoder, then one byte loop; no per-field FNV expansion. */\n{storage}wl_codec_status_t {name}_wlc_detail_fingerprint(const void *value, uint64_t *hash, size_t *length) {{\n  uint8_t bytes[{maximum}];\n  size_t size;\n  wl_codec_status_t status = {name}_encode(value, bytes, sizeof(bytes), &size);\n  if (status != WL_CODEC_OK) return status;\n  {p}hash_state_t state = {{*hash, 0U, WL_CODEC_OK}};\n  {p}hash_copy_span(&state, bytes, size);\n  *hash = state.hash;\n  *length = state.length;\n  return WL_CODEC_OK;\n}}\n").unwrap();
-    }
-    out
-}
-
-fn emit_scalar_fields(
-    out: &mut String,
-    plan: &MessagePlan<'_>,
-    symbols: &Symbols,
-    direct_fixed: bool,
-) {
-    let p = &symbols.helper;
-    for (field, key) in plan.message.fields.iter().zip(&plan.keys) {
-        let v = access(plan, field, "value", false, false);
-        let vh = access(plan, field, "value", false, true);
-        writeln!(out, "  if ({vh}) {{").unwrap();
-        for b in &key.bytes[..key.length] {
-            writeln!(out, "    *cursor++ = {b}U;").unwrap();
-        }
-        if varint(&field.ty) {
-            let bits = wire_value(&field.ty, &v, p);
-            let put = if plan.varuint32(field) {
-                format!("{p}putv32")
-            } else {
-                format!("{p}putv")
+        ResolvedType::Uint8 | ResolvedType::Uint16 | ResolvedType::Uint32 => {
+            let limit = match field.ty {
+                ResolvedType::Uint8 => "UINT8_MAX",
+                ResolvedType::Uint16 => "UINT16_MAX",
+                _ => "UINT32_MAX",
             };
-            writeln!(out, "    {put}(&cursor, {bits});\n  }}").unwrap();
-            continue;
+            let ty = c_type(&field.ty);
+            writeln!(
+                out,
+                "{indent}uint64_t w = 0U;\n{indent}wl_codec_status_t s = wl_codec_getv(&cursor, end, &w);\n{indent}if (s != WL_CODEC_OK) return s;\n{indent}if (w > {limit}) return WL_CODEC_ERR_OVERFLOW;\n{indent}{dst} = ({ty})w;"
+            )
+            .unwrap();
         }
-        emit_bits(out, field, &v, "    ");
-        let put = if plan.varuint32(field) {
-            format!("{p}putv32")
-        } else {
-            format!("{p}put{}", width(&field.ty) * 8)
-        };
-        if direct_fixed && !plan.varuint32(field) {
-            for byte in (0..width(&field.ty)).rev() {
-                writeln!(out, "    *cursor++ = (uint8_t)(bits >> {}U);", byte * 8).unwrap();
-            }
-            out.push_str("  }\n");
-        } else {
-            writeln!(out, "    {put}(&cursor, bits);\n  }}").unwrap();
+        ResolvedType::Fixed32 if positional_fixed32_varint => {
+            writeln!(
+                out,
+                "{indent}uint64_t w = 0U;\n{indent}wl_codec_status_t s = wl_codec_getv(&cursor, end, &w);\n{indent}if (s != WL_CODEC_OK) return s;\n{indent}if (w > UINT32_MAX) return WL_CODEC_ERR_OVERFLOW;\n{indent}{dst} = (uint32_t)w;"
+            )
+            .unwrap();
         }
-    }
-}
-
-pub(super) fn emit_bits(
-    out: &mut String,
-    field: &crate::semantic::FieldSymbol,
-    value: &str,
-    indent: &str,
-) {
-    let bits = width(&field.ty) * 8;
-    if matches!(field.ty, ResolvedType::Float32 | ResolvedType::Float64) {
-        writeln!(
-            out,
-            "{indent}uint{bits}_t bits;\n{indent}memcpy(&bits, &{value}, sizeof(bits));"
-        )
-        .unwrap();
-    } else {
-        writeln!(out, "{indent}uint{bits}_t bits = {value};").unwrap();
+        ResolvedType::Uint64 => {
+            writeln!(
+                out,
+                "{indent}uint64_t w = 0U;\n{indent}wl_codec_status_t s = wl_codec_getv(&cursor, end, &w);\n{indent}if (s != WL_CODEC_OK) return s;\n{indent}{dst} = w;"
+            )
+            .unwrap();
+        }
+        ResolvedType::Int8
+        | ResolvedType::Int16
+        | ResolvedType::Int32
+        | ResolvedType::Enum { .. } => {
+            let narrow = match field.ty {
+                ResolvedType::Int8 => {
+                    "if (sv < INT8_MIN || sv > INT8_MAX) return WL_CODEC_ERR_OVERFLOW;\n"
+                }
+                ResolvedType::Int16 => {
+                    "if (sv < INT16_MIN || sv > INT16_MAX) return WL_CODEC_ERR_OVERFLOW;\n"
+                }
+                _ => "",
+            };
+            let ty = c_type(&field.ty);
+            writeln!(
+                out,
+                "{indent}uint64_t w = 0U;\n{indent}wl_codec_status_t s = wl_codec_getv(&cursor, end, &w);\n{indent}if (s != WL_CODEC_OK) return s;\n{indent}if (w > UINT32_MAX) return WL_CODEC_ERR_OVERFLOW;\n{indent}const int32_t sv = wl_codec_unzz32((uint32_t)w);\n{indent}{narrow}{dst} = ({ty})sv;"
+            )
+            .unwrap();
+        }
+        ResolvedType::Int64 => {
+            writeln!(
+                out,
+                "{indent}uint64_t w = 0U;\n{indent}wl_codec_status_t s = wl_codec_getv(&cursor, end, &w);\n{indent}if (s != WL_CODEC_OK) return s;\n{indent}{dst} = wl_codec_unzz64(w);"
+            )
+            .unwrap();
+        }
+        ResolvedType::Fixed32 | ResolvedType::Float32 => {
+            writeln!(
+                out,
+                "{indent}if ((size_t)(end - cursor) < 4U) return WL_CODEC_ERR_MALFORMED;\n{indent}const uint32_t bits = wl_codec_get_le32(cursor);\n{indent}cursor += 4U;\n{indent}memcpy(&{dst}, &bits, 4U);"
+            )
+            .unwrap();
+        }
+        ResolvedType::Fixed64 | ResolvedType::Float64 => {
+            writeln!(
+                out,
+                "{indent}if ((size_t)(end - cursor) < 8U) return WL_CODEC_ERR_MALFORMED;\n{indent}const uint64_t bits = wl_codec_get_le64(cursor);\n{indent}cursor += 8U;\n{indent}memcpy(&{dst}, &bits, 8U);"
+            )
+            .unwrap();
+        }
+        ResolvedType::Bytes | ResolvedType::String | ResolvedType::Message { .. } => unreachable!(),
     }
 }

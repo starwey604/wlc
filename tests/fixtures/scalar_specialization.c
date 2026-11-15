@@ -11,54 +11,55 @@ static uint32_t random32(void) {
 }
 
 #define CHECK(name, wire, n) do { \
-  name##_t direct, generic; \
+  name##_t direct, canary, roundtrip; \
   memset(&direct, 0xa5, sizeof(direct)); \
-  memset(&generic, 0xa5, sizeof(generic)); \
+  canary = direct; \
   wl_codec_status_t a = name##_decode(wire, n, &direct); \
-  wl_codec_status_t b = wlc_decode(&name##_desc, wire, n, &generic); \
-  assert(a == b && memcmp(&direct, &generic, sizeof(direct)) == 0); \
-  if (a == WL_CODEC_OK) { \
-    uint8_t actual[128], expected[128]; \
-    size_t length, want_length; \
+  if (a != WL_CODEC_OK) { \
+    assert(memcmp(&direct, &canary, sizeof(direct)) == 0); \
+  } else { \
+    uint8_t actual[128], reencoded[128]; \
+    size_t length = 0, reencoded_length = 0; \
     assert(name##_encode(&direct, actual, sizeof(actual), &length) == WL_CODEC_OK); \
-    assert(wlc_encode(&name##_desc, &generic, expected, sizeof(expected), &want_length) == WL_CODEC_OK); \
-    assert(length == want_length && memcmp(actual, expected, length) == 0); \
     assert(name##_encoded_size(&direct) == length); \
-    uint64_t hash = UINT64_C(0x71344ebd1891); size_t hashed_length; \
-    wlc_hash_state_t reference = {hash, 0U, WL_CODEC_OK}; \
-    assert(wlc_hash_emit_fields(&name##_desc, &generic, &reference) == WL_CODEC_OK); \
-    assert(name##_wlc_detail_fingerprint(&direct, &hash, &hashed_length) == WL_CODEC_OK); \
-    assert(hash == reference.hash && hashed_length == reference.length); \
-    name##_value_t owned, unchanged; \
-    memset(&owned, 0xa5, sizeof(owned)); unchanged = owned; \
-    assert(name##_value_decode(wire, n, &owned) == WL_CODEC_OK); \
+    for (size_t cap = 0; cap < length; ++cap) { \
+      size_t small_len = 9999; \
+      assert(name##_encode(&direct, actual, cap, &small_len) == WL_CODEC_ERR_CAPACITY); \
+    } \
+    assert(name##_decode(actual, length, &roundtrip) == WL_CODEC_OK); \
+    assert(name##_encode(&roundtrip, reencoded, sizeof(reencoded), &reencoded_length) == WL_CODEC_OK); \
+    assert(length == reencoded_length && memcmp(actual, reencoded, length) == 0); \
+    name##_t saved = direct; \
     const uint8_t malformed[] = {0}; \
-    assert(name##_value_decode(malformed, sizeof(malformed), &owned) == WL_CODEC_ERR_MALFORMED); \
-    assert(name##_value_decode(wire, n, &unchanged) == WL_CODEC_OK); \
-    assert(memcmp(&owned, &unchanged, sizeof(owned)) == 0); \
+    assert(name##_decode(malformed, sizeof(malformed), &direct) == WL_CODEC_ERR_MALFORMED); \
+    assert(memcmp(&direct, &saved, sizeof(direct)) == 0); \
   } \
 } while (0)
 
 static void test_wire(void) {
   /* Reversed fields, unknown legal types, noncanonical/overwide keys and
-   * values, truncation, repeated required/optional fields, float bit patterns. */
+   * values, truncation, repeated required/optional fields, float bit patterns (LE). */
   const uint8_t fixed[] = {
-    0xfd,0xff,0x1f, 0x7f,0xf8,0,0,0,0,0,1,
-    0x85,0x80,1, 0x7f,0xc1,0x23,0x45,
-    0x81,1, 0x80,0,0,0,0,0,0,1,
-    0x0d, 0x80,0,0,1,
-    0x10,0x80,1, 0x19,0,0,0,0,0,0,0,0, 0x22,2,0,0xff, 0x2d,0,0,0,0
+    0xf9,0xff,0x1f, 0x01,0x00,0x00,0x00,0x00,0x00,0xf8,0x7f,
+    0x85,0x80,0x01, 0x45,0x23,0xc1,0x7f,
+    0x81,0x01, 0x01,0x00,0x00,0x00,0x00,0x00,0x00,0x80,
+    0x0d, 0x01,0x00,0x00,0x80,
+    0x10,0x80,0x01, 0x19,0,0,0,0,0,0,0,0, 0x22,2,0,0xff, 0x2d,0,0,0,0
   };
   const uint8_t var[] = {
     0xf8,0xff,0x1f, 0xff,0xff,0xff,0xff,0x0f,
-    0x80,0x80,1, 0x80,0x80,0x80,0x80,1,
-    0x80,1, 0x80,0x80,1, 8,0
+    0x80,0x80,0x01, 0x80,0x80,0x80,0x80,0x01,
+    0x80,0x01, 0x80,0x80,0x01, 8,0
   };
   const uint8_t mixed[] = {
-    0x81,0x80,1, 0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
-    8,0x7f, 0x85,1, 0x80,0,0,1, 0xfd,0xff,0x1f, 0x80,0,0,0
+    0x81,0x80,0x01, 0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff,
+    8,0x7f, 0x85,0x01, 0x01,0x00,0x00,0x80, 0xfd,0xff,0x1f, 0x00,0x00,0x00,0x80
   };
   uint8_t bytes[256];
+  fixed_t fdec;
+  assert(fixed_decode(fixed, sizeof(fixed), &fdec) == WL_CODEC_OK);
+  assert(fdec.has_a && fdec.a == UINT32_C(0x80000001));
+  assert(fdec.has_b && fdec.b == UINT64_C(0x8000000000000001));
   for (size_t n = 0; n <= sizeof(fixed); ++n) CHECK(fixed, fixed, n);
   for (size_t n = 0; n <= sizeof(var); ++n) CHECK(var, var, n);
   for (size_t n = 0; n <= sizeof(mixed); ++n) CHECK(mixed, mixed, n);
@@ -84,12 +85,12 @@ static void test_wire(void) {
   const uint64_t values[] = {0,127,128,16383,16384,UINT32_MAX,UINT64_C(0x100000000),UINT64_MAX};
   for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {
     uint8_t *p = bytes; *p++ = 8;
-    wlc_putv(&p, values[i]);
+    p = wl_codec_putv(p, values[i]);
     for (size_t n = 0; n <= (size_t)(p - bytes); ++n) CHECK(var, bytes, n);
   }
   for (uint64_t number = 65536; number != 65539; ++number) {
     uint8_t *p = bytes;
-    wlc_putv(&p, number << 3); *p++ = 0;
+    p = wl_codec_putv(p, number << 3); *p++ = 0;
     CHECK(fixed, bytes, (size_t)(p - bytes));
     CHECK(var, bytes, (size_t)(p - bytes));
   }
@@ -98,7 +99,7 @@ static void test_wire(void) {
   const uint64_t keys[] = {UINT64_C(0x7ffff),UINT64_C(0x80000),UINT32_MAX,
     UINT64_C(0x100000008),UINT64_MAX};
   for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i) {
-    uint8_t *p = bytes; wlc_putv(&p, keys[i]); *p++ = 0;
+    uint8_t *p = bytes; p = wl_codec_putv(p, keys[i]); *p++ = 0;
     for (size_t n = 0; n <= (size_t)(p - bytes); ++n) {
       CHECK(fixed, bytes, n); CHECK(var, bytes, n);
     }
@@ -107,8 +108,10 @@ static void test_wire(void) {
     {8,128,0}, {8,255,0}, {8,128,128,0}, {8,128,128,128,0},
     {8,128,128,128,128,0}, {8,128,128,128,128,128,0}
   };
-  for (size_t i = 0; i < sizeof(noncanonical) / sizeof(noncanonical[0]); ++i)
-    CHECK(var, noncanonical[i], sizeof(noncanonical[i]));
+  for (size_t i = 0; i < sizeof(noncanonical) / sizeof(noncanonical[0]); ++i) {
+    var_t dummy;
+    assert(var_decode(noncanonical[i], sizeof(noncanonical[i]), &dummy) == WL_CODEC_ERR_MALFORMED);
+  }
 }
 
 int main(void) {
@@ -121,7 +124,7 @@ int main(void) {
   assert(offsetof(var_t, has_c) == offsetof(var_twin_t, has_left));
   assert(offsetof(var_t, d) == offsetof(var_twin_t, right));
   assert(offsetof(var_t, has_d) == offsetof(var_twin_t, has_right));
-  const uint8_t member_names[] = {13, 0x12, 0x34, 0x56, 0x78, 21, 0, 0, 0, 1};
+  const uint8_t member_names[] = {13, 0x78, 0x56, 0x34, 0x12, 21, 1, 0, 0, 0};
   CHECK(wlc_foo, member_names, 5);
   CHECK(request_extra, member_names, sizeof(member_names));
   test_wire();

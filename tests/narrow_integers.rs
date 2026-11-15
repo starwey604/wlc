@@ -55,11 +55,6 @@ message NarrowList = 3 {
 
     let directory = tempdir().unwrap();
     fs::write(directory.path().join("narrow_integer.h"), generated.header).unwrap();
-    fs::write(
-        directory.path().join("narrow_integer_values.h"),
-        generated.values_header,
-    )
-    .unwrap();
     fs::write(directory.path().join("narrow_integer.c"), generated.source).unwrap();
     fs::write(
         directory.path().join("main.c"),
@@ -192,6 +187,7 @@ int main(void) {
         .arg(wirelink_include())
         .arg("-I")
         .arg(directory.path())
+        .arg(wirelink_include().parent().unwrap().join("src/codec.c"))
         .arg(directory.path().join("narrow_integer.c"))
         .arg(directory.path().join("main.c"))
         .arg("-o")

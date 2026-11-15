@@ -134,9 +134,9 @@ fn validate(bindings: &BindingProfileModel) -> Result<(), KernelError> {
         }
     }
     for service in &bindings.rpc_services {
-        if service.codec != CodecProfile::ManagedTagged {
+        if service.codec != CodecProfile::SchemaV1 {
             return Err(KernelError(
-                "RPC requires managed_tagged; positional RPC is unsupported and must be explicitly migrated".into(),
+                "RPC requires schema_v1; positional RPC is unsupported and must be explicitly migrated".into(),
             ));
         }
     }

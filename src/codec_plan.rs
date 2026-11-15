@@ -12,7 +12,6 @@ use crate::{
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum CodecProfile {
     SchemaV1,
-    ManagedTagged,
     PositionalV1,
 }
 
@@ -21,7 +20,6 @@ impl CodecProfile {
     pub fn code(self) -> u8 {
         match self {
             Self::SchemaV1 => 1,
-            Self::ManagedTagged => 2,
             Self::PositionalV1 => 3,
         }
     }
@@ -29,7 +27,6 @@ impl CodecProfile {
     pub fn name(self) -> &'static str {
         match self {
             Self::SchemaV1 => "schema-v1",
-            Self::ManagedTagged => "managed-rpc-v4-tagged-varuint32",
             Self::PositionalV1 => "positional-v1",
         }
     }
@@ -41,8 +38,8 @@ pub enum ValueEncoding {
     UnsignedVarint(u8),
     ZigzagVarint(u8),
     EnumZigzag,
-    BigEndian(u8),
-    IeeeBigEndian(u8),
+    LittleEndian(u8),
+    IeeeLittleEndian(u8),
     Bytes,
     Utf8,
     Message(u16),
@@ -119,6 +116,35 @@ impl<'a> CodecPlan<'a> {
             messages: plans,
         })
     }
+
+    /// Build all messages under `default_profile` (preserving Schema-v1 nested semantics),
+    /// then replace selected root message IDs with per-route profile overrides.
+    pub fn with_overrides(
+        schema: &'a SemanticModel,
+        default_profile: CodecProfile,
+        overrides: impl IntoIterator<Item = (u16, CodecProfile)>,
+    ) -> Result<Self, CodecPlanError> {
+        let mut plan = Self::new(schema, default_profile)?;
+        let messages = schema
+            .declarations
+            .iter()
+            .filter_map(|symbol| match symbol {
+                Symbol::Message(message) => Some((message.id, message)),
+                Symbol::Enum(_) => None,
+            })
+            .collect::<BTreeMap<_, _>>();
+        let ordered_overrides: BTreeMap<u16, CodecProfile> = overrides.into_iter().collect();
+        for (id, profile) in ordered_overrides {
+            if profile != default_profile {
+                let mut scratch = BTreeMap::new();
+                build_message(id, profile, &messages, &mut scratch, &mut BTreeSet::new())?;
+                if let Some(overridden) = scratch.remove(&id) {
+                    plan.messages.insert(id, overridden);
+                }
+            }
+        }
+        Ok(plan)
+    }
 }
 
 pub(crate) fn field_encoding(field: &FieldSymbol, profile: CodecProfile) -> ValueEncoding {
@@ -137,11 +163,13 @@ pub(crate) fn field_encoding(field: &FieldSymbol, profile: CodecProfile) -> Valu
         ResolvedType::Int16 => ZigzagVarint(16),
         ResolvedType::Int32 => ZigzagVarint(32),
         ResolvedType::Int64 => ZigzagVarint(64),
-        ResolvedType::Fixed32 if scalar && profile != CodecProfile::SchemaV1 => UnsignedVarint(32),
-        ResolvedType::Fixed32 => BigEndian(4),
-        ResolvedType::Fixed64 => BigEndian(8),
-        ResolvedType::Float32 => IeeeBigEndian(4),
-        ResolvedType::Float64 => IeeeBigEndian(8),
+        ResolvedType::Fixed32 if scalar && profile == CodecProfile::PositionalV1 => {
+            UnsignedVarint(32)
+        }
+        ResolvedType::Fixed32 => LittleEndian(4),
+        ResolvedType::Fixed64 => LittleEndian(8),
+        ResolvedType::Float32 => IeeeLittleEndian(4),
+        ResolvedType::Float64 => IeeeLittleEndian(8),
         ResolvedType::Enum { .. } => EnumZigzag,
         ResolvedType::Bytes => Bytes,
         ResolvedType::String => Utf8,
@@ -157,9 +185,9 @@ pub(crate) fn field_wire_type(field: &FieldSymbol, profile: CodecProfile) -> u8 
         return 2;
     }
     match field_encoding(field, profile) {
-        ValueEncoding::BigEndian(8) | ValueEncoding::IeeeBigEndian(8) => 1,
+        ValueEncoding::LittleEndian(8) | ValueEncoding::IeeeLittleEndian(8) => 1,
         ValueEncoding::Bytes | ValueEncoding::Utf8 | ValueEncoding::Message(_) => 2,
-        ValueEncoding::BigEndian(4) | ValueEncoding::IeeeBigEndian(4) => 5,
+        ValueEncoding::LittleEndian(4) | ValueEncoding::IeeeLittleEndian(4) => 5,
         _ => 0,
     }
 }
@@ -216,7 +244,7 @@ fn build_message<'a>(
                 Some(u64::from(bits).div_ceil(7))
             }
             ValueEncoding::EnumZigzag => Some(5),
-            ValueEncoding::BigEndian(width) | ValueEncoding::IeeeBigEndian(width) => {
+            ValueEncoding::LittleEndian(width) | ValueEncoding::IeeeLittleEndian(width) => {
                 Some(u64::from(width))
             }
             ValueEncoding::Bytes | ValueEncoding::Utf8 => field.max_length.map(u64::from),

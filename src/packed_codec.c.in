@@ -1,54 +1,66 @@
-/* Single fixed-array recipe: constant prefix/length, looped elements. */
+@STORAGE@void @NAME@_clear(@TYPE@_t *value) {
+  if (value != NULL) {
+    memset(value, 0, sizeof(*value));
+  }
+}
+
+/* PACKED_ENCODE_BEGIN */
 @STORAGE@size_t @NAME@_encoded_size(const @TYPE@_t *value) {
-  if (value == NULL || (@REQUIRED@ && !value->has_@FIELD@)) return SIZE_MAX;
-  return value->has_@FIELD@ ? @TOTAL@U : 0U;
-}
-@STORAGE@wl_codec_status_t @NAME@_encode(const @TYPE@_t *value, uint8_t *out,
-                               size_t capacity, size_t *length) {
-  if (value == NULL) return WL_CODEC_ERR_INVALID_VALUE;
-  if (@REQUIRED@ && !value->has_@FIELD@) return WL_CODEC_ERR_MISSING_REQUIRED_FIELD;
-  size_t n = value->has_@FIELD@ ? @TOTAL@U : 0U;
-  if (length == NULL || (n != 0U && out == NULL)) return WL_CODEC_ERR_INVALID_VALUE;
-  if (capacity < n) return WL_CODEC_ERR_CAPACITY;
-  if (value->has_@FIELD@) {
-    static const uint8_t header[] = {@HEADER@};
-    memcpy(out, header, sizeof(header));
-    uint8_t *cursor = out + @HEADER_LEN@U;
-    for (size_t i = 0U; i < @COUNT@U; ++i) {
-      uint@BITS@_t bits;
-      memcpy(&bits, &value->@FIELD@[i], sizeof(bits));
-      @C@put@BITS@(&cursor, bits);
-    }
+  if (value == NULL) {
+    return SIZE_MAX;
   }
-  *length = n;
+  if (!value->has_@FIELD@) {
+    return @ABSENT_SIZE@;
+  }
+  return @WIRE_BYTES@U;
+}
+
+@STORAGE@wl_codec_status_t @NAME@_encode(const @TYPE@_t *value, uint8_t *out, size_t out_capacity, size_t *out_length) {
+  if (value == NULL) {
+    return WL_CODEC_ERR_INVALID_VALUE;
+  }
+  if (!value->has_@FIELD@) {
+    @ABSENT_ENCODE@
+  }
+  if (out_length == NULL || out == NULL) {
+    return WL_CODEC_ERR_INVALID_VALUE;
+  }
+  if (out_capacity < @WIRE_BYTES@U) {
+    return WL_CODEC_ERR_CAPACITY;
+  }
+  static const uint8_t prefix[@PREFIX_BYTES@] = {@PREFIX_INIT@};
+  memcpy(out, prefix, sizeof(prefix));
+  uint8_t *cursor = out + sizeof(prefix);
+  for (size_t i = 0U; i < @COUNT@U; ++i) {
+    @UINT_TYPE@ bits = 0U;
+    memcpy(&bits, &value->@FIELD@[i], sizeof(bits));
+    @PUT_LE@(cursor, bits);
+    cursor += @ELEM_BYTES@U;
+  }
+  *out_length = @WIRE_BYTES@U;
   return WL_CODEC_OK;
 }
-@STORAGE@wl_codec_status_t @NAME@_decode(const uint8_t *in, size_t n, @TYPE@_t *out) {
-  if (out == NULL || (n != 0U && in == NULL)) return WL_CODEC_ERR_INVALID_VALUE;
-  @NAME@_clear(out);
-  for (size_t at = 0U; at < n;) {
-    uint64_t key, bytes;
-    wl_codec_status_t status = @C@getv(in, n, &at, &key);
-    if (status != WL_CODEC_OK) return status;
-    uint64_t number = key >> 3U;
-    uint8_t wire = (uint8_t)(key & 7U);
-    if (number == 0U || number > 65535U ||
-        (wire != 0U && wire != 1U && wire != 2U && wire != 5U))
-      return WL_CODEC_ERR_MALFORMED;
-    if (number != @NUMBER@U) {
-      if ((status = @C@skip(wire, in, n, &at)) != WL_CODEC_OK) return status;
-      continue;
-    }
-    if (wire != 2U) return WL_CODEC_ERR_WIRE_TYPE;
-    if (out->has_@FIELD@) return WL_CODEC_ERR_DUPLICATE_FIELD;
-    if ((status = @C@getv(in, n, &at, &bytes)) != WL_CODEC_OK) return status;
-    if (bytes != sizeof(out->@FIELD@) || bytes > n - at) return WL_CODEC_ERR_MALFORMED;
-    for (size_t i = 0U; i < @COUNT@U; ++i) {
-      @READ_BITS@
-      memcpy(&out->@FIELD@[i], &bits, sizeof(bits));
-    }
-    out->has_@FIELD@ = true;
+/* PACKED_ENCODE_END */
+
+/* PACKED_DECODE_BEGIN */
+@STORAGE@wl_codec_status_t @NAME@_decode(const uint8_t *input, size_t input_length, @TYPE@_t *out) {
+  if (out == NULL || (input_length != 0U && input == NULL)) {
+    return WL_CODEC_ERR_INVALID_VALUE;
   }
-  if (@REQUIRED@ && !out->has_@FIELD@) return WL_CODEC_ERR_MISSING_REQUIRED_FIELD;
-  return WL_CODEC_OK;
+  if (input_length == @WIRE_BYTES@U) {
+    static const uint8_t prefix[@PREFIX_BYTES@] = {@PREFIX_INIT@};
+    if (memcmp(input, prefix, sizeof(prefix)) == 0) {
+      const uint8_t *cursor = input + sizeof(prefix);
+      out->has_@FIELD@ = true;
+      for (size_t i = 0U; i < @COUNT@U; ++i) {
+        @UINT_TYPE@ bits = @GET_LE@(cursor);
+        memcpy(&out->@FIELD@[i], &bits, sizeof(bits));
+        cursor += @ELEM_BYTES@U;
+      }
+      return WL_CODEC_OK;
+    }
+  }
+  @TYPE@_t scratch;
+  return wl_codec_decode(&@NAME@_desc, input, input_length, out, &scratch);
 }
+/* PACKED_DECODE_END */
