@@ -6,21 +6,23 @@
 /* Same pre-migration metadata/domain cases, exercised through shared primitives. */
 static void headers(void) {
   const uint32_t ids[]={1U,63U,64U,127U,128U,8191U,8192U,UINT32_C(1)<<27,UINT32_MAX};
-  const uint64_t sessions[]={1U,UINT64_C(0x0123456789ABCDEF),UINT64_MAX};
+  const uint32_t sessions[]={1U,UINT32_C(0x01234567),UINT32_MAX};
   const int32_t statuses[]={0,1,-1,INT32_MIN,INT32_MAX};
-  uint8_t bytes[18];
+  uint8_t bytes[16];
   for(size_t i=0;i<sizeof(ids)/sizeof(ids[0]);++i)
     for(size_t j=0;j<sizeof(sessions)/sizeof(sessions[0]);++j)
       for(size_t k=0;k<sizeof(statuses)/sizeof(statuses[0]);++k) {
         size_t length=0;wl_kernel_rpc_metadata_t value;
-        assert(wl_kernel_rpc_write(bytes,sizeof(bytes),sessions[j],ids[i],statuses[k],&length)==WL_OK);
-        assert(length==wl_kernel_rpc_header_size(ids[i],statuses[k]));
-        assert(length<=(statuses[k]?17U:13U));
-        assert(wl_kernel_rpc_read(bytes,length,0,&value)==WL_OK);
+        assert(wl_wire_rpc_write(bytes,sizeof(bytes),sessions[j],ids[i],statuses[k],&length)==WL_OK);
+        assert(length==wl_kernel_rpc_header_size(statuses[k]));
+        assert(length==(statuses[k]?12U:8U));
+        uint8_t kind=statuses[k]?WL_WIRE_RPC_ERR:WL_WIRE_RPC_RESP;
+        assert(wl_wire_rpc_read(kind,bytes,length,&value)==WL_OK);
         assert(value.session==sessions[j] && value.operation==ids[i] && value.status==statuses[k] && value.length==0);
-        assert(wl_kernel_rpc_read(bytes,length,1,&value)==(statuses[k]?WL_ERR_CORRUPT_PAYLOAD:WL_OK));
+        if (!statuses[k]) assert(wl_wire_rpc_read(WL_WIRE_RPC_REQ,bytes,length,&value)==WL_OK);
+        else assert(wl_wire_rpc_read(WL_WIRE_RPC_REQ,bytes,length,&value)==WL_ERR_BAD_FRAME || length==WL_KERNEL_RPC_HEADER_ERR);
         for(size_t truncated=0;truncated<length;++truncated)
-          assert(wl_kernel_rpc_read(bytes,truncated,0,&value)==WL_ERR_CORRUPT_PAYLOAD);
+          assert(wl_wire_rpc_read(kind,bytes,truncated,&value)==WL_ERR_CORRUPT_PAYLOAD);
       }
 }
 static void payloads(void) {

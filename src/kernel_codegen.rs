@@ -47,8 +47,8 @@ pub fn generate_kernel_c(
         EndpointEnvelope::Any => return Err(KernelError("select an explicit deployment".into())),
     };
     let mut capacities = BTreeMap::new();
-    let mut req_max = 17u64;
-    let mut resp_max = 21u64;
+    let mut req_max = 12u64;
+    let mut resp_max = 16u64;
     let mut msg_max = 4u64;
     for service in &p.rpc_services {
         for (id, response) in [(service.request_id, false), (service.response_id, true)] {
@@ -56,9 +56,9 @@ pub fn generate_kernel_c(
                 .map_err(|e| KernelError(e.to_string()))?;
             let body = bounded(plan.messages[&id].max_encoded_size)?;
             let frame = if response {
-                (body + 17).max(21)
+                (body + 12).max(16)
             } else {
-                body + 17
+                body + 12
             };
             capacities.insert(id, (body, frame, service.codec.name()));
             if response {
@@ -188,11 +188,11 @@ pub fn generate_kernel_c(
         let name = type_name(&service.name);
         let req = type_name(&service.request_name);
         let resp = type_name(&service.response_name);
-        writeln!(source, "  case {}U: return wl_kernel_response(core, frame->message_id, frame->payload, frame->length);\n  case {}U: {{\n    if (endpoint->handlers.on_rpc_{name} == NULL) return WL_ERR_NOT_SUPPORTED;\n    wl_kernel_rpc_metadata_t metadata;\n    wl_err_t error = wl_kernel_rpc_read(frame->payload, frame->length, 1, &metadata);\n    if (error != WL_OK) return error;\n    unsigned reply;\n    error = wl_kernel_reply_reserve(core, &reply);\n    if (error != WL_OK) return error;\n    {req}_t request;\n    if ({m}_rpc_{req}_decode(metadata.body, metadata.length, &request) != WL_CODEC_OK) {{\n      wl_kernel_reply_abort(core, reply);\n      return WL_ERR_CORRUPT_PAYLOAD;\n    }}\n    {m}_rpc_{resp}_value_clear(&endpoint->reply.{name});\n    int32_t status = endpoint->handlers.on_rpc_{name}(endpoint->user, &request, &endpoint->reply.{name});\n    return wl_kernel_reply_finish(core, reply, {}U, &metadata, status, &endpoint->reply.{name}, {m}_kernel_encode_{resp});\n  }}", service.response_id, service.request_id, service.response_id).unwrap();
+        writeln!(source, "  case {}U: return wl_kernel_response(core, frame);\n  case {}U: {{\n    if (frame->kind != WL_WIRE_RPC_REQ) return WL_ERR_CORRUPT_PAYLOAD;\n    if (endpoint->handlers.on_rpc_{name} == NULL) return WL_ERR_NOT_SUPPORTED;\n    wl_kernel_rpc_metadata_t metadata;\n    wl_err_t error = wl_wire_rpc_read(frame->kind, frame->payload, frame->length, &metadata);\n    if (error != WL_OK) return error;\n    unsigned reply;\n    error = wl_kernel_reply_reserve(core, &reply);\n    if (error != WL_OK) return error;\n    {req}_t request;\n    if ({m}_rpc_{req}_decode(metadata.body, metadata.length, &request) != WL_CODEC_OK) {{\n      wl_kernel_reply_abort(core, reply);\n      return WL_ERR_CORRUPT_PAYLOAD;\n    }}\n    {m}_rpc_{resp}_value_clear(&endpoint->reply.{name});\n    int32_t status = endpoint->handlers.on_rpc_{name}(endpoint->user, &request, &endpoint->reply.{name});\n    return wl_kernel_reply_finish(core, reply, {}U, &metadata, status, &endpoint->reply.{name}, {m}_kernel_encode_{resp});\n  }}", service.response_id, service.request_id, service.response_id).unwrap();
     }
     for route in &p.direct_routes {
         let name = type_name(&route.message_name);
-        writeln!(source, "  case {}U: {{\n    {name}_t message;\n    if ({name}_decode(frame->payload, frame->length, &message) != WL_CODEC_OK) return WL_ERR_CORRUPT_PAYLOAD;\n    if (endpoint->handlers.on_message_{name} != NULL) endpoint->handlers.on_message_{name}(endpoint->user, &message);\n    return WL_OK;\n  }}", route.message_id).unwrap();
+        writeln!(source, "  case {}U: {{\n    if (frame->kind != WL_WIRE_MSG) return WL_ERR_CORRUPT_PAYLOAD;\n    {name}_t message;\n    if ({name}_decode(frame->payload, frame->length, &message) != WL_CODEC_OK) return WL_ERR_CORRUPT_PAYLOAD;\n    if (endpoint->handlers.on_message_{name} != NULL) endpoint->handlers.on_message_{name}(endpoint->user, &message);\n    return WL_OK;\n  }}", route.message_id).unwrap();
     }
     writeln!(source, "  default: return WL_ERR_NOT_SUPPORTED;\n  }}\n}}\nwl_err_t {m}_kernel_init({m}_kernel_t *endpoint, wl_packet_port_t *port, const {m}_kernel_handlers_t *handlers, wl_kernel_error_fn error, void *user) {{\n  if (endpoint == NULL || port == NULL || handlers == NULL) return WL_ERR_INVALID_ARG;\n  const {m}_kernel_handlers_t saved = *handlers;\n  memset(endpoint, 0, sizeof(*endpoint));\n  endpoint->handlers = saved;\n  endpoint->user = user;\n  wl_kernel_config_t config = {{.port = port, .route = {m}_kernel_route, .on_error = error, .user = user}};\n  for (unsigned i = 0U; i < WL_KERNEL_CALLS; ++i) config.tx_storage[i] = (wl_span_t){{endpoint->requests[i], sizeof(endpoint->requests[i])}};\n  for (unsigned i = 0U; i < WL_KERNEL_REPLIES; ++i) config.tx_storage[i + WL_KERNEL_CALLS] = (wl_span_t){{endpoint->replies[i], sizeof(endpoint->replies[i])}};\n  config.tx_storage[WL_KERNEL_TX_COUNT - 1U] = (wl_span_t){{endpoint->message, sizeof(endpoint->message)}};\n  return wl_kernel_init(&endpoint->core, &config);\n}}\nwl_err_t {m}_kernel_step({m}_kernel_t *endpoint, uint32_t now) {{\n  return endpoint == NULL ? WL_ERR_INVALID_ARG : wl_kernel_step(&endpoint->core, now, WL_KERNEL_BUDGET);\n}}").unwrap();
     let mut files = BTreeMap::from([
@@ -223,7 +223,7 @@ extern "C" {{
 /* Stop the I/O producer and acknowledge physical drain before destroying
  * stream, port, RX or wire storage. Generated routing uses canonical DATA;
  * only this selected framing connector handles the external wire. */
-wl_err_t {m}_kernel_transport_init(wl_packet_stream_t *, wl_packet_port_t *, uint64_t,
+wl_err_t {m}_kernel_transport_init(wl_packet_stream_t *, wl_packet_port_t *, uint32_t,
     wl_span_t rx, size_t rx_unit_size, wl_span_t wire, wl_packet_sink_fn,
     wl_packet_notify_fn, void *);
 wl_err_t {m}_kernel_transport_feed(wl_packet_stream_t *, const uint8_t *, size_t, size_t *);
@@ -239,7 +239,7 @@ wl_err_t {m}_kernel_transport_feed(wl_packet_stream_t *, const uint8_t *, size_t
 #include "{m}_kernel.h"
 #include <string.h>
 wl_err_t {m}_kernel_transport_init(wl_packet_stream_t *stream, wl_packet_port_t *port,
-    uint64_t instance, wl_span_t rx, size_t unit_size, wl_span_t wire,
+    uint32_t instance, wl_span_t rx, size_t unit_size, wl_span_t wire,
     wl_packet_sink_fn submit, wl_packet_notify_fn notify, void *user) {{
   if (stream == NULL || port == NULL || submit == NULL ||
       wire.length < {wire_max}U || unit_size < {wire_max}U) return WL_ERR_INVALID_ARG;

@@ -212,7 +212,7 @@ extern "C" {{
 size_t {name}_sdk_endpoint_size(void);
 size_t {name}_sdk_endpoint_alignment(void);
 wl_err_t {name}_sdk_endpoint_prepare(void*, wl_host_endpoint_t*);
-wl_err_t {name}_sdk_endpoint_initialize(void*, uint64_t, wl_packet_sink_fn, wl_packet_notify_fn, void*);
+wl_err_t {name}_sdk_endpoint_initialize(void*, uint32_t, wl_packet_sink_fn, wl_packet_notify_fn, void*);
 typedef struct {{
   void* endpoint;
   const void* request;
@@ -241,7 +241,7 @@ wl_err_t {name}_sdk_endpoint_prepare(void* storage, wl_host_endpoint_t* descript
   *descriptor = (wl_host_endpoint_t){{owner, &owner->endpoint.core, &owner->port, 2052}};
   return WL_OK;
 }}
-wl_err_t {name}_sdk_endpoint_initialize(void* storage, uint64_t instance,
+wl_err_t {name}_sdk_endpoint_initialize(void* storage, uint32_t instance,
     wl_packet_sink_fn sink, wl_packet_notify_fn notify, void* user) {{
   {name}_sdk_owner_t* owner = storage;
   wl_packet_config_t config = {{.instance = instance, .rx_storage = &owner->rx[0][0],

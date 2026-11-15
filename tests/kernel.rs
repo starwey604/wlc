@@ -213,7 +213,7 @@ int main(void) {
     for file in ["demo.c", "demo_kernel.c", "test.c"] {
         cc.arg(directory.path().join(file));
     }
-    for file in ["kernel.c", "packet_port.c", "native_none.c", "rpc_wire.c"] {
+    for file in ["kernel.c", "packet_port.c"] {
         cc.arg(prototype.join("src").join(file));
     }
     let binary = directory.path().join("test");
@@ -342,13 +342,7 @@ int main(void) {
         ] {
             cc.arg(directory.path().join(file));
         }
-        for file in [
-            "kernel.c",
-            "packet_port.c",
-            "native_none.c",
-            "rpc_wire.c",
-            "packet_stream.c",
-        ] {
+        for file in ["kernel.c", "packet_port.c", "packet_stream.c"] {
             cc.arg(prototype.join("src").join(file));
         }
         cc.arg(prototype.join("src").join(format!("{connector}_stream.c")));

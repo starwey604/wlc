@@ -127,11 +127,11 @@ impl RpcService {
 
     /// Maximum request and successful-response header length.
     pub fn metadata_size(&self) -> u64 {
-        if self.is_managed() { 13 } else { 0 }
+        if self.is_managed() { 8 } else { 0 }
     }
     /// A rejection must fit even when the response business message is empty.
     pub fn minimum_response_size(&self) -> u64 {
-        if self.is_managed() { 17 } else { 0 }
+        if self.is_managed() { 12 } else { 0 }
     }
 }
 

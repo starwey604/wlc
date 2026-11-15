@@ -18,7 +18,7 @@ message Telemetry @id(6) { required string<32> label @id(1); }
     let profile=analyze_kernel_profile(&parse_binding_profile("profile version 2; endpoint {envelope=native_packet;} rpc Execute {request=Request;response=Response;} rpc Names {request=WlcFoo;response=RequestExtra;} direct Telemetry {delivery=unreliable;}").unwrap(),&schema).unwrap();
     let files = generate_kernel_c(&schema, &profile, "wire").unwrap().files;
     assert!(files["wire_values.h"].contains("REQUEST_MAX_ENCODED_SIZE UINT64_C(15)"));
-    assert!(files["wire_kernel.h"].contains("WIRE_KERNEL_REQUEST_FRAME_MAX 35U"));
+    assert!(files["wire_kernel.h"].contains("WIRE_KERNEL_REQUEST_FRAME_MAX 30U"));
     assert!(!files["wire_kernel_codecs.h"].contains("fingerprint"));
     let dir = tempfile::tempdir().unwrap();
     for (name, contents) in files {
@@ -51,7 +51,6 @@ message Telemetry @id(6) { required string<32> label @id(1); }
         .arg("-I")
         .arg(dir.path())
         .arg(dir.path().join("wire.c"))
-        .arg(root.join("src/rpc_wire.c"))
         .arg(dir.path().join("test.c"))
         .arg("-o")
         .arg(dir.path().join("test"))
