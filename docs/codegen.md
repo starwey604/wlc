@@ -1,63 +1,36 @@
-# Generate codecs and inspect a deployment
+# Generate codecs, nodes, and inspect plans
 
-[中文](codegen-cn.md) · [Typed endpoint](static-kernel.md) · [SDK](sdk.md)
+[中文](codegen-cn.md) · [Typed nodes](static-kernel.md) · [SDK](sdk.md)
 
-Use WLC 0.13.0 / contract 0.13 with matching Wirelink 0.13.0. From a directory
-containing your schema, run:
+Use WLC 0.14.0 / codegen contract 0.14 with matching Wirelink 0.14.0. Messages, RPCs, and node roles live in a single `.wl` schema:
 
 ```sh
-wlc validate device.wl
-wlc compile device.wl --out-dir generated-codec
-wlc compile device.wl --profile device.bind.wl --out-dir generated-endpoint
-wlc plan device.wl --profile device.bind.wl
-wlc identity device.wl --profile device.bind.wl
+wlc validate device.wl [--previous old.wl]
+wlc compile device.wl --out-dir generated-codec                # pure codec when schema has no nodes
+wlc compile device.wl --node server --out-dir generated-server # single node role
+wlc compile device.wl --all-nodes --out-dir generated-loopback # in-process loopback
+wlc plan device.wl --node server
+wlc identity device.wl
 wlc dependencies device.wl
 wlc module-name device.wl
 ```
 
-Without a profile, `compile` emits `<module>.h`, `_values.h`, `.c` and a manifest.
-The public codec uses `wirelink/codec.h`; it does not bring an endpoint into your firmware.
-With a profile, it also emits the [typed kernel](static-kernel.md) and its selected
-connector. `compile-kernel` is an alias of `compile --profile`.
+`compile` emits one pair `<stem>.h` / `<stem>.c` and `<stem>_manifest.json` (the legacy `_values.h`, `_kernel.h`, `.bind.wl`, `--profile`, and `compile-kernel` entries are removed). Zero nodes emit pure codecs; a single node is selected automatically; multiple nodes require `--node <name>` or `--all-nodes`.
 
-## Borrow views or retain owned values
+## Default-required fields, borrowed views, and bounded storage
 
-Public Schema-v1 codecs preserve integer widths, unknown signed enum values,
-IEEE floating-point bits, optional presence and defaults, bounded UTF-8/NUL,
-bytes, fixed packed arrays, nested messages and repeated borrowed views.
-Repeated fields use caller-provided pointer/count/capacity storage. Unknown fields
-are validated and skipped. See [schema and wire rules](https://github.com/starwey604/wirelink/blob/main/docs/schema-v1.md).
-
-Finite types get `<message>_value_t` in `_values.h`. String/bytes storage is inline,
-and nested values own their contents. `*_value_from_view` copies borrowed input;
-`*_value_to_view` borrows the owned value. Check conversion results. Bounds are
-encoded bytes, and a string's extra terminating NUL is not encoded. `*_VALUE_SIZE`
-is target `sizeof`, not maximum wire length. Unbounded types have `*_HAS_VALUE=0`.
+- **Default-required fields**: Unqualified fields and bare `packed` fixed arrays are required by default and omit `has_<field>`; only `optional` and `optional packed` emit presence members. Decoders still reject inputs missing any required field. Migrate legacy optional packed arrays explicitly to `optional packed`.
+- **Bounded vs. borrowed storage**: Bounded `string<N>` / `bytes<N>` store data inline in the message struct with checked setters. Unbounded `string` / `bytes` and `repeated` use caller-owned borrowed views/backing in standalone codecs; node routes require bounded frames.
+- **Wire rules**: See [Wire v2 format](https://github.com/starwey604/wirelink/blob/main/docs/wire-format.md) and the [0.14 migration notes](https://github.com/starwey604/wirelink/blob/main/docs/release-v0.14.0-cn.md).
 
 ## Validate composition and evolution
 
-Imports resolve relative to the importing schema. `dependencies` lists canonical
-transitive inputs; `module-name` prints the exact C filename/symbol prefix,
-including keyword escaping. Repeating `--profile` composes declarations with
-conflict checks, not overrides. Profile version 2 must select a connector explicitly.
+Imports resolve relative to the importing schema. `dependencies` prints canonical transitive inputs; `module-name` prints the sanitized C module stem.
 
-Use `validate --previous previous.wl` or `compile --previous previous.wl` to check
-schema evolution. Identity is exact, not compatibility-aware. `plan` reports actual
-four-call/four-reply kernel resources, bounded TX storage and selected codec field
-facts. Identity and FNV artifact digests serve diagnostics, not authentication.
+Use `validate --previous previous.wl` or `compile --previous previous.wl` to check schema evolution compatibility. `identity` prints exact schema/node hashes, and `plan` reports node routes, frame bounds, storage sizing, and codec plans for diagnostics.
 
-## Integrate generation into a build
+## Integrate generation into CMake
 
-The installed Wirelink CMake package provides `wirelink_wlc_generate(TARGET ...
-SCHEMA ... PROFILE ...)` for endpoints and `wirelink_wlc_generate_codec` for codecs.
-Set `WIRELINK_WLC_EXECUTABLE` to the matching local compiler; imports and profiles
-become build/reconfigure dependencies. See [build commands](https://github.com/starwey604/wirelink/blob/main/docs/development.md).
+Wirelink provides `wirelink_wlc_generate(TARGET ... SCHEMA ... [NODE name | ALL_NODES] [PREVIOUS old.wl])` for node targets and `wirelink_wlc_generate_codec(TARGET ... SCHEMA ...)` for codec-only targets. Set `WIRELINK_WLC_EXECUTABLE` to the matching local 0.14 compiler; transitive imports are tracked as build dependencies. See [development checks](https://github.com/starwey604/wirelink/blob/main/docs/development.md).
 
-Use a dedicated output directory per deployment. An incompatible artifact set,
-including a stream connector left by another deployment, requires a fresh directory.
-Keep provenance with the generated files. Changing templates requires rebuilding WLC
-before regeneration because templates are compiled into the tool.
-
-For generator changes, exercise public byte vectors and malformed-input cases as
-well as generated-C compilation/execution. A changed snapshot alone does not establish
-wire correctness.
+Use a dedicated output directory per deployment so stale generated ABI files are never mixed. Rebuild WLC after changing codegen templates before regenerating C or SDK outputs, and validate generated code with wire vectors, malformed inputs, and compiled C consumers.

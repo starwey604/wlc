@@ -1,6 +1,18 @@
 # Changelog
 
-## Unreleased
+## 0.14.0
+
+- Replace `.bind.wl` profiles and `compile-kernel` with single-file `rpc` and
+  `node` declarations, `--node` / `--all-nodes`, and a single C source/header pair.
+- Default fields to required, including bare packed arrays; only `optional` and
+  `optional packed` retain C presence members. Generate bounded value setters.
+- Generate static handlers, embedded native/COBS/length16 I/O, role-sized
+  storage, recoverable backpressure and safe half-frame shutdown. Keep explicit
+  dynamic/external options and explicit-time RPC for host SDKs.
+- Upgrade generated-code contract to 0.14 and SDK packages to paired core 0.14.0.
+  Reject ambiguous client selection and C symbol/member collisions.
+
+## 0.13.0
 
 - Qualify release archives against the current Wirelink kernel: profile-v2
   RPC smoke, codegen contract 0.13, binding API 3, exact source-pair provenance

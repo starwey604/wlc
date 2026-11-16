@@ -1,35 +1,42 @@
-# 组装类型化 kernel 端点
+# 组装单文件声明的类型化节点
 
 [English](static-kernel.md) · [代码生成](codegen-cn.md)
 
-为部署生成 route 和有界存储：
+在同一 `.wl` 文件中声明消息、RPC 与 `node`，生成单个 `<stem>.h/.c` 和 `<stem>_manifest.json`：
 
 ```sh
-wlc compile device.wl --profile device.bind.wl --out-dir generated
+wlc compile device.wl --node device --out-dir generated
 ```
 
-schema 定义消息，profile version 2 选择 route 与 connector：
+```wl
+message ReadRequest @id(1) { uint32 address @id(1); }
+message ReadResponse @id(2) { uint32 value @id(1); }
+message Sample @id(3) { uint32 value @id(1); }
 
-```text
-profile version 2;
-endpoint { envelope = native_packet; }
-rpc Read { request = ReadRequest; response = ReadResponse; }
-send Sample { delivery = unreliable; }
-direct Sample { delivery = unreliable; }
+rpc Read(ReadRequest) -> ReadResponse;
+
+node device {
+  framing = native;       // native | cobs_crc16 | length16
+  io = embedded;          // embedded | external
+  handlers = static;      // static | dynamic
+  timeout_ms = 500;       // 1..2147483647
+  serve Read;
+  send Sample;
+}
 ```
 
-使用 WLC 0.13.0 / 契约 0.13 和 Wirelink 0.13.0。选择 `native_packet`/NONE、`cobs_stream`/CRC16 或 `bus_length16`/NONE；RPC 两端均启用发起/处理能力。普通消息使用公开 Schema-v1 或显式 positional-v1；RPC 使用 managed tagged body 与 instance/operation 元数据。kernel route 要求有界类型；repeated view 属于独立 codec。
+使用 WLC 0.14.0 / 生成契约 0.14 与 Wirelink 0.14.0。RPC 固定使用 Schema-v1；普通消息可使用 `codec = positional_v1` 或 `@codec(positional_v1)`。节点路由要求有界类型，存储严格按所选 `call` / `serve` / `send` 角色裁剪。
 
-## 组装 port、route 和 owner
+## embedded 默认装配与 external 异步路径
 
-`<module>_kernel.h/.c` 将类型化 route 连接到 `wl_kernel_t`。私有 RPC codec 位于 `_kernel_codecs.h`；`_kernel_deployment.json` 报告 bounds/roles/storage，`_kernel_manifest.json` 记录输入及生成产物。stream profile 只生成所选 connector。
+- **embedded（默认）**：`<node>_node_t` 内嵌 `wl_packet_port_t`、双 RX 缓冲与流缓冲（若使用 `cobs_crc16` / `length16`）。调用 `<node>_init(&node)`（或 `<node>_init_with_instance(&node, id)`），实现整帧发送钩子 `<node>_tx_write(self, data, length)`；忙后恢复可写时调用 `<node>_tx_ready(&node)`。接收调用 `<node>_rx_packet(...)`（native）或 `<node>_rx_feed(..., &consumed)`（流模式，保留未消费尾部）。
+- **external**：设置 `io = external` 时，由应用装配 `wl_packet_port_t`（异步 DMA、零拷贝、UDP/UART 适配器），通过 `<node>_init(&node, &port)` 传入。物理发送保持 `SENT / STARTED / BUSY / FAILED` 语义。
+- **static（默认）vs dynamic**：静态模式下直接链接 `<node>_on_<msg/rpc>(self, ...)`，可从 `self->user` 读取业务上下文；`handlers = dynamic` 才生成 `<node>_handlers_t` 并以 `void *user` 作为回调首参。
 
-应用拥有从 C 初始化的 packet port、两个 RX unit、生成端点和时间源。提供非零的新鲜 instance 身份、sink 和通知回调，再调用 `<module>_kernel_init`。同一 owner 执行接纳、取消、handler、终态回调和 `wl_kernel_step`。等待前，将 `wl_kernel_ready` 返回的 readiness/最早 deadline 与 adapter readiness、锁存唤醒合并。参阅 [owner loop 教程](https://github.com/starwey604/wirelink/blob/main/docs/tutorial-integration-cn.md)。
+## 接纳、推进与关闭
 
-## 接纳、完成与关闭
+核心固定支持 **4 个出站调用槽、3 个回复槽、1 个普通消息快照槽**，并由单一 owner 串行调用 `init`、`send`、`call`、`cancel`、`step`、`close` 与 `quiescent`。
 
-kernel 有四个出站调用、四份 reply snapshot 和一份普通 TX snapshot。类型化 `_start` 在成功返回前完成请求快照；失败不创建调用，也不产生后续回调。传入 owner tick 的 `now` 与 `1..INT32_MAX` 的相对 timeout；排队计入 timeout。物理 TX lease 必要时会超过逻辑终态，仍需源已消费和物理已 drain/error 通知。
-
-handler 是短同步业务函数：填写自持响应，返回零表示成功，非零有符号业务 status 表示拒绝。终态回调借用响应 view 到返回；用 `*_value_from_view` 复制以保留。每个已接纳调用交付一次终态，随后 handle 失效。回调可提交/取消，但不能递归 step/close。本地 cancel/timeout 不能撤回远端执行。应用负责重试/幂等和[长任务](https://github.com/starwey604/wirelink/blob/main/docs/tutorial-jobs-cn.md)。
-
-关闭 kernel，停止/join 真实 I/O，交付最终 completion，并 step 到 `wl_kernel_quiescent` 后再释放存储。[kernel API](https://github.com/starwey604/wirelink/blob/main/docs/kernel-api-cn.md)定义错误与生命周期细节；[开发检查](https://github.com/starwey604/wirelink/blob/main/docs/development-cn.md)提供构建与测试命令。
+- **简化调用与 `_ex`**：`<node>_call_<rpc>(self, &req, done)` 回调首参为节点指针，使用 `timeout_ms`，且从**下一次 `step(now)`** 开始计时；`<node>_call_<rpc>_ex(self, &req, now, timeout, done, user, out)` 从显式 `now` 计时，可传入上下文与可选取消句柄。
+- **handler 与回调生命周期**：服务端 handler 填写响应后返回 `0`（成功）或非零 `int32_t` 业务拒绝码；完成回调借用响应视图至返回前，需保留时直接按值复制有界结构体。`cancel` / `timeout` 不撤销远端执行，应用自行处理重试与幂等。
+- **关闭顺序**：先停止 RX 生产者，再调用 `<node>_close(&node)`（external 同步停止驱动并归还 TX 租约），持续推进 `<node>_step(&node, now)` 直至 `<node>_quiescent(&node)` 返回非零后再释放或复用存储。完整移植契约见 [传输层移植指南](https://github.com/starwey604/wirelink/blob/main/docs/porting-adapters.md)。

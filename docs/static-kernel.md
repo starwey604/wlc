@@ -1,60 +1,42 @@
-# Assemble a typed kernel endpoint
+# Assemble a typed node from a single `.wl` schema
 
 [中文](static-kernel-cn.md) · [Code generation](codegen.md)
 
-Generate routes and bounded storage for your deployment:
+Declare messages, RPCs, and `node` endpoints in one `.wl` file to emit a single `<stem>.h/.c` pair and `<stem>_manifest.json`:
 
 ```sh
-wlc compile device.wl --profile device.bind.wl --out-dir generated
+wlc compile device.wl --node device --out-dir generated
 ```
 
-The schema defines messages. A profile version 2 selects routes and connector:
+```wl
+message ReadRequest @id(1) { uint32 address @id(1); }
+message ReadResponse @id(2) { uint32 value @id(1); }
+message Sample @id(3) { uint32 value @id(1); }
 
-```text
-profile version 2;
-endpoint { envelope = native_packet; }
-rpc Read { request = ReadRequest; response = ReadResponse; }
-send Sample { delivery = unreliable; }
-direct Sample { delivery = unreliable; }
+rpc Read(ReadRequest) -> ReadResponse;
+
+node device {
+  framing = native;       // native | cobs_crc16 | length16
+  io = embedded;          // embedded | external
+  handlers = static;      // static | dynamic
+  timeout_ms = 500;       // 1..2147483647
+  serve Read;
+  send Sample;
+}
 ```
 
-Use WLC 0.13.0 / contract 0.13 and Wirelink 0.13.0. Choose `native_packet`/NONE,
-`cobs_stream`/CRC16 or `bus_length16`/NONE; both RPC roles are enabled. Ordinary
-messages use public Schema-v1 or explicit positional-v1. RPC uses managed tagged
-bodies with instance and operation metadata. Kernel routes require bounded types;
-repeated views belong to standalone codecs.
+Use WLC 0.14.0 / codegen contract 0.14 with matching Wirelink 0.14.0. RPC routes always use Schema-v1; ordinary messages may select `positional_v1` per node or per route. Node routes require bounded types, and TX storage is pruned by declared `call` / `serve` / `send` roles.
 
-## Assemble port, routes and owner
+## Embedded defaults vs. external drivers
 
-`<module>_kernel.h/.c` connects typed routes to `wl_kernel_t`. Private RPC codecs
-are in `_kernel_codecs.h`; `_kernel_deployment.json` reports bounds/roles/storage,
-and `_kernel_manifest.json` records inputs and generated artifacts. A stream
-profile emits only its selected connector.
+- **Embedded (default)**: `<node>_node_t` embeds `wl_packet_port_t`, two RX slots, and stream state when using `cobs_crc16` / `length16`. Call `<node>_init(&node)` (or `<node>_init_with_instance(&node, id)`), implement whole-frame `<node>_tx_write(self, data, length)`, and call `<node>_tx_ready(&node)` when a busy sink becomes writable. Deliver RX via `<node>_rx_packet(...)` (native) or `<node>_rx_feed(..., &consumed)` (streams, preserving any unconsumed tail).
+- **External (`io = external`)**: The application supplies an initialized `wl_packet_port_t` via `<node>_init(&node, &port)` for async DMA, zero-copy, or UDP/UART adapters, preserving `SENT / STARTED / BUSY / FAILED` physical lease ownership.
+- **Static (default) vs. dynamic**: Static handlers link directly as `<node>_on_<msg/rpc>(self, ...)` with context in `self->user`; `handlers = dynamic` generates `<node>_handlers_t` taking `void *user`.
 
-The application owns the C-initialized packet port, two RX units, generated
-endpoint and time source. Supply a nonzero fresh instance identity, sink and
-notification callbacks; then call `<module>_kernel_init`. The same owner performs
-admission, cancellation, handlers, terminal callbacks and `wl_kernel_step`.
-Merge readiness and the earliest deadline returned by `wl_kernel_ready` with
-adapter readiness and a latched wake before waiting. See the [owner-loop tutorial](https://github.com/starwey604/wirelink/blob/main/docs/tutorial-integration.md).
+## Admission, stepping, and shutdown
 
-## Admit, complete and close
+The underlying kernel provides **four outbound call slots, three reply slots, and one ordinary message snapshot**, driven by a single owner executing `init`, `send`, `call`, `cancel`, `step`, `close`, and `quiescent`.
 
-The kernel has four outbound calls, four reply snapshots and one ordinary TX
-snapshot. Typed `_start` snapshots a request before success returns; failure
-creates no call or later callback. Supply owner ticks for `now` and a relative
-timeout in `1..INT32_MAX`; queueing counts toward timeout. Physical TX leases
-outlive logical completion when necessary and still require source-consumed and
-physical-drained/error notifications.
-
-Handlers are short synchronous business functions: fill an owned response and
-return zero for success or signed nonzero business status. Terminal callbacks
-borrow response views until return; copy with `*_value_from_view` to retain them.
-Each admitted call has one terminal outcome and then an invalid handle. Callbacks
-may submit/cancel, but cannot recursively step/close. Local cancel/timeout cannot
-undo remote execution. Applications own retry/idempotency and [long jobs](https://github.com/starwey604/wirelink/blob/main/docs/tutorial-jobs.md).
-
-Close the kernel, stop/join real I/O, deliver final completions, and step until
-`wl_kernel_quiescent` before freeing storage. The [kernel API](https://github.com/starwey604/wirelink/blob/main/docs/kernel-api.md)
-defines error and lifetime details; [development checks](https://github.com/starwey604/wirelink/blob/main/docs/development.md)
-show build and test commands.
+- **Simple call vs. `_ex`**: `<node>_call_<rpc>(self, &req, done)` passes the node pointer to `done` and arms the node's `timeout_ms` on the **next owner `step(now)`**. `<node>_call_<rpc>_ex(self, &req, now, timeout, done, user, out)` times from explicit `now` with custom `timeout`, `user` pointer, and optional cancellation handle.
+- **Handlers and callbacks**: Service handlers populate the response and return `0` or a nonzero `int32_t` business rejection status. Terminal callbacks borrow response views until return; bounded response structs can be copied by value. Local cancellation or timeout cannot roll back remote execution.
+- **Close sequence**: Stop RX producers first, call `<node>_close(&node)` (and stop/drain external hardware leases), then step until `<node>_quiescent(&node)` is nonzero before reusing or freeing storage. See [porting adapters](https://github.com/starwey604/wirelink/blob/main/docs/porting-adapters.md).
