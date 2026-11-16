@@ -29,9 +29,9 @@ def metadata(root, wirelink, run_id):
     if pair_path.is_file():
         compiler = json.loads(pair_path.read_text())['wlc']
         assert compiler['source_sha'] == source_sha, 'Wirelink does not pin this compiler source'
-        assert compiler['version'] == version and compiler['codegen_contract'] == '0.13'
+        assert compiler['version'] == version and compiler['codegen_contract'] == '0.14'
     return dict(format='wlc-release-v1', version=version, wlc_sha=source_sha,
-                wirelink_sha=git_sha(wirelink), codegen_contract='0.13', binding_api=3,
+                wirelink_sha=git_sha(wirelink), codegen_contract='0.14', binding_api=3,
                 rust_toolchain='1.96.1', source_run_id=str(run_id))
 
 
@@ -49,8 +49,8 @@ def pack(args):
         "Verify the downloaded archive against the release's SHA256SUMS before extraction.\n"
         "Put wlc (wlc.exe on Windows) on PATH, or set Wirelink's\n"
         "WIRELINK_WLC_EXECUTABLE to its absolute path. Run `wlc --version` and\n"
-        f"`wlc codegen-contract`; expect version {info['version']} and contract 0.13.\n\n"
-        "Endpoint profiles use version 2; SDK binding API is 3. wlc-build.json\n"
+        f"`wlc codegen-contract`; expect version {info['version']} and contract 0.14.\n\n"
+        "Single-file schemas declare RPCs and nodes; SDK binding API is 3. wlc-build.json\n"
         "records the exact compiler/core source pair and target.\n\n"
         "Usage: https://github.com/starwey604/wlc/blob/main/README.md\n"
         "Kernel API: https://github.com/starwey604/wirelink/blob/main/docs/kernel-api.md\n",
@@ -84,18 +84,15 @@ def smoke(args):
     assert all(info[key] == value for key, value in expected.items()), 'archive provenance mismatch'
     binary = (unpacked / ('wlc.exe' if info['asset'].startswith('wlc-windows') else 'wlc')).resolve()
     assert subprocess.check_output([binary, '--version'], text=True).strip() == f'wlc {info["version"]}'
-    assert subprocess.check_output([binary, 'codegen-contract'], text=True).strip() == '0.13'
+    assert subprocess.check_output([binary, 'codegen-contract'], text=True).strip() == '0.14'
     generated = args.work / 'generated'
-    run(binary, 'compile-kernel', ROOT / 'tests/fixtures/release_smoke.wl', '--profile',
-        ROOT / 'tests/fixtures/release_smoke.bind.wl', '--out-dir', generated)
-    manifest = json.loads((generated / 'release_smoke_kernel_manifest.json').read_text())
-    assert manifest['compiler']['codegen_contract'] == dict(major=0, minor=13)
-    for suffix in ('.h', '.c', '_values.h', '_kernel.h', '_kernel.c', '_kernel_codecs.h',
-                   '_kernel_deployment.json'):
+    run(binary, 'compile', ROOT / 'tests/fixtures/release_smoke.wl', '--out-dir', generated)
+    manifest = json.loads((generated / 'release_smoke_manifest.json').read_text())
+    assert manifest['compiler']['codegen_contract'] == dict(major=0, minor=14)
+    for suffix in ('.h', '.c', '_manifest.json'):
         assert (generated / f'release_smoke{suffix}').is_file(), suffix
     sdk = args.work / 'sdk'
-    run(binary, 'sdk', ROOT / 'tests/fixtures/sdk/device.wl', '--profile',
-        ROOT / 'tests/fixtures/sdk/device.bind.wl', '--name', 'device', '--package-version',
+    run(binary, 'sdk', ROOT / 'tests/fixtures/sdk/device.wl', '--name', 'device', '--package-version',
         info['version'], '--out-dir', sdk)
     sdk_manifest = json.loads((sdk / 'wlc-sdk-info.json').read_text())
     assert sdk_manifest['binding_api'] == 3

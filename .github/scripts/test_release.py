@@ -19,7 +19,7 @@ class IntegrityTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         (self.root / 'asset.zip').write_bytes(b'archive')
-        common.write_json(self.root / 'release.json', {'version': '0.13.0'})
+        common.write_json(self.root / 'release.json', {'version': '0.14.0'})
         common.write_checksums(self.root)
 
     def test_release_integrity_covers_every_asset_and_metadata(self):
@@ -52,18 +52,18 @@ class IntegrityTests(unittest.TestCase):
     def test_tag_creation_requires_promotion_and_existing_tag_must_match(self):
         with patch.object(common, 'api', return_value=None) as api:
             with self.assertRaises(ValueError):
-                common.ensure_tag('owner/repo', 'v0.13.0', 'a' * 40)
-            common.ensure_tag('owner/repo', 'v0.13.0', 'a' * 40, create=True)
+                common.ensure_tag('owner/repo', 'v0.14.0', 'a' * 40)
+            common.ensure_tag('owner/repo', 'v0.14.0', 'a' * 40, create=True)
             self.assertEqual(api.call_count, 3)
         with patch.object(common, 'api', return_value={'object': {'type': 'commit', 'sha': 'b' * 40}}):
             with self.assertRaises(ValueError):
-                common.ensure_tag('owner/repo', 'v0.13.0', 'a' * 40)
+                common.ensure_tag('owner/repo', 'v0.14.0', 'a' * 40)
 
     def test_existing_different_release_is_never_overwritten(self):
         with patch.object(common, 'ensure_tag'), patch.object(common, 'api', return_value={'assets': [], 'draft': False, 'prerelease': False}), \
              patch.object(common, 'run') as run:
             with self.assertRaisesRegex(ValueError, 'inventory'):
-                common.publish('owner/repo', 'v0.13.0', self.root, 'a' * 40)
+                common.publish('owner/repo', 'v0.14.0', self.root, 'a' * 40)
             run.assert_not_called()
 
     def test_identical_existing_release_is_read_only(self):
@@ -74,7 +74,7 @@ class IntegrityTests(unittest.TestCase):
         with patch.object(common, 'ensure_tag'), patch.object(common, 'api', return_value={
                 'assets': assets, 'draft': False, 'prerelease': False}), \
              patch.object(common, 'run', side_effect=download) as run:
-            common.publish('owner/repo', 'v0.13.0', self.root, 'a' * 40)
+            common.publish('owner/repo', 'v0.14.0', self.root, 'a' * 40)
             self.assertEqual(run.call_count, 1)
             self.assertEqual(run.call_args.args[:3], ('gh', 'release', 'download'))
 
@@ -84,8 +84,8 @@ class IntegrityTests(unittest.TestCase):
         (source / 'CHANGELOG.md').write_text('release notes')
         binary = source / 'binary'
         binary.write_bytes(b'compiler')
-        info = dict(format='wlc-release-v1', version='0.13.0', wlc_sha='a' * 40,
-                    wirelink_sha='b' * 40, codegen_contract='0.13', binding_api=3,
+        info = dict(format='wlc-release-v1', version='0.14.0', wlc_sha='a' * 40,
+                    wirelink_sha='b' * 40, codegen_contract='0.14', binding_api=3,
                     rust_toolchain='1.96.1', source_run_id='123')
         artifacts = self.root / 'packages'
         bundle = self.root / 'bundle'
