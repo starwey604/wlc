@@ -1,11 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 use std::{fs, path::PathBuf, process::Command};
-use wlc::{
-    analyze_kernel_profile, analyze_schema, generate_kernel_c, parse_binding_profile, parse_schema,
-};
+use wlc::{analyze_schema, generate_c_for_nodes, generate_node_c, parse_schema};
 #[test]
 fn compact_managed_wire_preserves_frozen_public_and_private_domains() {
-    let schema = analyze_schema(&parse_schema(r#"
+    let ast = parse_schema(r#"
 version 1;
 message Child @id(1) { optional fixed32 scalar @id(1) [default = 4294967295]; required packed fixed32 array[2] @id(2); }
 message Request @id(2) { required fixed32 first @id(1); required fixed32 second @id(2); required fixed32 third @id(3); }
@@ -13,19 +11,22 @@ message Response @id(3) { optional fixed32 reply @id(1); optional Child nested @
 message WlcFoo @id(4) { required fixed32 wlc_foo_encode @id(1); }
 message RequestExtra @id(5) { optional fixed32 request_extra_encode @id(1); optional fixed32 wlc_clear @id(2); }
 message Telemetry @id(6) { required string<32> label @id(1); }
-"#).unwrap()).unwrap();
-
-    let profile=analyze_kernel_profile(&parse_binding_profile("profile version 2; endpoint {envelope=native_packet;} rpc Execute {request=Request;response=Response;} rpc Names {request=WlcFoo;response=RequestExtra;} direct Telemetry {delivery=unreliable;}").unwrap(),&schema).unwrap();
-    let files = generate_kernel_c(&schema, &profile, "wire").unwrap().files;
+rpc Execute(Request) -> Response;
+rpc Names(WlcFoo) -> RequestExtra;
+node wire { call Execute; call Names; recv Telemetry; }
+"#).unwrap();
+    let schema = analyze_schema(&ast).unwrap();
+    let nodes = wlc::node::analyze_nodes(&ast, &schema).unwrap();
+    let files = generate_node_c(&schema, &nodes, "wire").unwrap().files;
     assert!(files["wire.h"].contains("REQUEST_MAX_ENCODED_SIZE UINT64_C(15)"));
-    assert!(files["wire_kernel.h"].contains("WIRE_KERNEL_REQUEST_FRAME_MAX 27U"));
+    assert!(files["wire.h"].contains("WIRE_REQUEST_FRAME_MAX 27U"));
     assert!(!files.contains_key("wire_kernel_codecs.h"));
     assert!(!files.contains_key("wire_values.h"));
     assert!(!files["wire.c"].contains("fingerprint"));
     let dir = tempfile::tempdir().unwrap();
-    for (name, contents) in files {
-        fs::write(dir.path().join(name), contents).unwrap();
-    }
+    let codec = generate_c_for_nodes(&schema, &nodes, "wire", false).unwrap();
+    fs::write(dir.path().join("wire.h"), codec.header).unwrap();
+    fs::write(dir.path().join("wire.c"), codec.source).unwrap();
     fs::write(
         dir.path().join("test.c"),
         include_str!("fixtures/managed_rpc_wire.c"),

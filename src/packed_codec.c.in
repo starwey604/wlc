@@ -9,20 +9,14 @@
   if (value == NULL) {
     return SIZE_MAX;
   }
-  if (!value->has_@FIELD@) {
-    return @ABSENT_SIZE@;
-  }
-  return @WIRE_BYTES@U;
+@OPTIONAL_MEASURE@  return @WIRE_BYTES@U;
 }
 
 @STORAGE@wl_codec_status_t @NAME@_encode(const @TYPE@_t *value, uint8_t *out, size_t out_capacity, size_t *out_length) {
   if (value == NULL) {
     return WL_CODEC_ERR_INVALID_VALUE;
   }
-  if (!value->has_@FIELD@) {
-    @ABSENT_ENCODE@
-  }
-  if (out_length == NULL || out == NULL) {
+@OPTIONAL_ENCODE@  if (out_length == NULL || out == NULL) {
     return WL_CODEC_ERR_INVALID_VALUE;
   }
   if (out_capacity < @WIRE_BYTES@U) {
@@ -51,8 +45,7 @@
     static const uint8_t prefix[@PREFIX_BYTES@] = {@PREFIX_INIT@};
     if (memcmp(input, prefix, sizeof(prefix)) == 0) {
       const uint8_t *cursor = input + sizeof(prefix);
-      out->has_@FIELD@ = true;
-      for (size_t i = 0U; i < @COUNT@U; ++i) {
+@OPTIONAL_PRESENCE@      for (size_t i = 0U; i < @COUNT@U; ++i) {
         @UINT_TYPE@ bits = @GET_LE@(cursor);
         memcpy(&out->@FIELD@[i], &bits, sizeof(bits));
         cursor += @ELEM_BYTES@U;

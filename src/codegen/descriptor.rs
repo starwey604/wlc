@@ -266,10 +266,13 @@ fn format_field_entry(
         key.wire
     };
     let (scalar_size, is_signed) = scalar_metrics(&field.ty);
-    let presence_offset = if field.cardinality == Cardinality::Repeated {
-        "0U".to_owned()
-    } else {
+    let presence_offset = if matches!(
+        field.cardinality,
+        Cardinality::Optional | Cardinality::Packed(_)
+    ) {
         format!("(uint16_t)offsetof({ty}_t, has_{ident})")
+    } else {
+        "0U".to_owned()
     };
     let value_offset = format!("(uint16_t)offsetof({ty}_t, {ident})");
     let (count_offset, capacity_offset, element_stride, max_length) = match field.cardinality {

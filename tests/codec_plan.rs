@@ -120,9 +120,9 @@ int main(void) {
 fn fixed_array_specialization_matches_generic_codec_and_failure_state() {
     let source = compile(
         r#"version 1;
-message Packed @id(1) { packed float32 values[30] @id(1); }
+message Packed @id(1) { optional packed float32 values[30] @id(1); }
 message Wide @id(2) { required packed float64 values[64] @id(65535); }
-message Fixed @id(3) { packed fixed32 values[128] @id(21); }
+message Fixed @id(3) { optional packed fixed32 values[128] @id(21); }
 message One @id(4) { required packed fixed64 values[1] @id(16); }
 "#,
         include_str!("fixtures/codec_plan.c"),
@@ -157,7 +157,7 @@ fn cursor_matches_frozen_linear_decoder_including_failure_state() {
         "message Empty @id(40) {}\n\
          message Child @id(41) { required uint32 x @id(1); optional uint32 y @id(16); }\n\
          message Mixed @id(42) { required Child child @id(1); repeated uint32 samples @id(2);\n\
-         repeated Child children @id(3); packed float32 values[3] @id(16);\n\
+         repeated Child children @id(3); optional packed float32 values[3] @id(16);\n\
          optional string<16> text @id(2048); optional uint64 last @id(65535); }\n\
          message ReferenceSigned @id(43) { optional int32 x @id(1); optional int64 y @id(2); }",
     );
@@ -181,7 +181,7 @@ fn precomputed_keys_match_canonical_varints_at_length_boundaries() {
         "fixed64",
         "string<8>",
         "fixed32",
-        "packed float32",
+        "optional packed float32",
     ]
     .iter()
     .enumerate()
@@ -337,7 +337,7 @@ fn schema_type_subsets_preserve_wire_bytes_validation_and_fingerprints() {
         (
             "Child",
             "MESSAGE",
-            "value.v.has_x = true; value.v.x = 129;",
+            "value.v.x = 129;",
             "10, 3, 8, 129, 1",
             "message Child @id(2) { required uint16 x @id(1); }",
         ),
@@ -360,7 +360,7 @@ int main(void) {{
   /* All legal unknown wire types must remain supported, regardless of schema. */
   const uint8_t unknown[] = {{16, 129, 1, 25, 0,0,0,0,0,0,0,1, 34, 2, 255,0, 45, 0,0,0,1}};
   sample_t value, decoded, canary;
-  sample_clear(&value); value.has_v = true; {init}
+  sample_clear(&value); {init}
   uint8_t encoded[64], input[128], reencoded[64]; size_t n = 0, m = 0;
   assert(sample_encode(&value, encoded, sizeof(encoded), &n) == WL_CODEC_OK);
   assert(n == sizeof(expected) && memcmp(encoded, expected, n) == 0);
@@ -444,7 +444,6 @@ int main(void) {{
   const uint8_t expected[] = {{{bytes}}};
   sample_t value, canary;
   assert(sample_decode(expected, sizeof(expected), &value) == WL_CODEC_OK);
-  assert(value.has_v);
   uint8_t encoded[64]; size_t n = 0;
   assert(sample_encode(&value, encoded, sizeof(encoded), &n) == WL_CODEC_OK);
   assert(n == sizeof(expected) && memcmp(encoded, expected, n) == 0);
@@ -483,7 +482,6 @@ int main(void) {
     signed_value_t value = {0}, decoded = {0};
     uint8_t bytes[64];
     size_t length = 0;
-    value.has_a = value.has_b = value.has_code = true;
     value.a = narrow[i]; value.b = wide[i]; value.code = narrow[i];
     assert(signed_value_encode(&value, bytes, sizeof(bytes), &length) == WL_CODEC_OK);
     if (i == 0) assert(length == sizeof(minimum) && memcmp(bytes, minimum, length) == 0);
@@ -510,8 +508,7 @@ int main(void) {
     small_t value = {0}, decoded = {0}, canary;
     uint8_t direct[128], reencoded[128];
     size_t length = 0, reencoded_length = 0;
-    value.has_flag = value.has_a = value.has_b = value.has_c = true;
-    value.has_d = value.has_e = value.has_mode = true;
+    value.has_b = value.has_d = value.has_mode = true;
     value.flag = i % 2 != 0; value.a = (int8_t)values[i]; value.b = (int16_t)values[i];
     value.c = (int32_t)values[i]; value.d = values[i];
     value.e = (uint64_t)values[i]; value.mode = (int32_t)values[i];
@@ -547,4 +544,39 @@ int main(void) {
     assert!(source.contains("wlc_scalar_shape_0_decode"));
     assert!(!source.contains("small_desc"));
     assert!(!source.contains("return WL_CODEC_OK;\n  return WL_CODEC_ERR_INVALID_VALUE;"));
+}
+
+#[test]
+fn required_bitmap_covers_256_sparse_fields_without_presence_members() {
+    let mut schema = "version 1; message Wide @id(1) {".to_owned();
+    for i in (0..256).rev() {
+        schema.push_str(&format!("uint8 f{i} @id({});", 1 + i * 256));
+    }
+    schema.push('}');
+    compile(
+        &schema,
+        r#"#include <assert.h>
+#include "plan.c"
+_Static_assert(sizeof(wide_t) == 256U, "required fields carry values only");
+int main(void) {
+  wide_t input = {0}, out, before;
+  uint8_t wire[WIDE_MAX_ENCODED_SIZE + 2U]; size_t n;
+  input.f0 = 42U; input.f255 = 255U;
+  assert(wide_encode(&input, wire, sizeof(wire), &n) == WL_CODEC_OK);
+  assert(wide_decode(wire, n, &out) == WL_CODEC_OK);
+  assert(out.f0 == 42U && out.f255 == 255U);
+  memset(&out, 0xA5, sizeof(out)); before = out;
+  /* Last field is a three-byte key and a two-byte uint8 value. */
+  assert(wide_decode(wire, n - 5U, &out) == WL_CODEC_ERR_MISSING_REQUIRED_FIELD);
+  assert(memcmp(&out, &before, sizeof(out)) == 0);
+  wire[n] = 8U; wire[n + 1U] = 42U;
+  assert(wide_decode(wire, n + 2U, &out) == WL_CODEC_ERR_DUPLICATE_FIELD);
+  assert(memcmp(&out, &before, sizeof(out)) == 0);
+  return 0;
+}
+"#,
+    );
+    schema.pop();
+    schema.push_str("uint8 overflow @id(65535); }");
+    assert!(analyze_schema(&parse_schema(&schema).unwrap()).is_err());
 }

@@ -84,7 +84,6 @@ static int test_valid_and_borrowed(void) {
   bounded_clear(&value);
   if (value.has_greeting || value.greeting.length != 3U ||
       memcmp(value.greeting.data, "\xE7\x94\xB5", 3U) != 0) return 1;
-  value.has_name = true;
   value.name.length = 4U;
   memcpy(value.name.data, "four", 4U);
   value.has_raw = true;
@@ -101,7 +100,7 @@ static int test_valid_and_borrowed(void) {
   decoded.labels = decoded_labels;
   decoded.labels_capacity = 2U;
   if (bounded_decode(golden, sizeof(golden), &decoded) != WL_CODEC_OK ||
-      !decoded.has_name || decoded.name.length != 4U ||
+      decoded.name.length != 4U ||
       memcmp(decoded.name.data, "four", 4U) != 0 ||
       decoded.name.data[4] != '\0' ||
       !decoded.has_raw || decoded.raw.length != 3U ||
@@ -119,7 +118,6 @@ static int test_encode_limits(void) {
   uint8_t encoded[32];
   size_t length = 77U;
 
-  value.has_name = true;
   value.name.length = 5U;
   if (bounded_encoded_size(&value) != SIZE_MAX ||
       bounded_encode(&value, encoded, sizeof(encoded), &length) !=
@@ -182,7 +180,6 @@ static int test_static_maxima(void) {
   nested_t nested = {0};
   size_t length = 0U;
 
-  fixed.has_name = true;
   fixed.name.length = 3U;
   memcpy(fixed.name.data, "max", 3U);
   fixed.has_blob = true;
@@ -190,7 +187,6 @@ static int test_static_maxima(void) {
   if (fixed_encode(&fixed, fixed_encoded, sizeof(fixed_encoded), &length) !=
           WL_CODEC_OK ||
       length != FIXED_MAX_ENCODED_SIZE) return 1;
-  nested.has_fixed = true;
   nested.fixed = fixed;
   nested.has_note = true;
   nested.note.length = 255U;

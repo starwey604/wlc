@@ -41,7 +41,7 @@ Use a different SDK name for each independently distributed schema package.
 
 ## SDK maintainers
 
-Build/install the matching Wirelink 0.13.0 checkout with
+Build/install the matching Wirelink 0.14.0 checkout with
 `WIRELINK_BUILD_CPP_BINDINGS=ON`, `WIRELINK_BUILD_PLATFORM=ON`,
 `WIRELINK_BUILD_EXAMPLES=OFF`, `BUILD_SHARED_LIBS=OFF` and
 `CMAKE_POSITION_INDEPENDENT_CODE=ON`. Provide standalone Asio headers through
@@ -67,8 +67,8 @@ hand-maintained `tests/CMakeLists.txt` when present.
 `wirelink-sdk-build-v2` and kernel contract `1`. This is build metadata, not a
 memory-placement or linker-grouping control.
 
-CMake requires Wirelink 0.13.0 and verifies WLC version/codegen contract 0.13
-from the included kernel manifest against the installed package metadata. A local
+CMake requires Wirelink 0.14.0 and verifies WLC version/codegen contract 0.14
+from the included node manifest against the installed package metadata. A local
 Linux wheel still needs a supported manylinux build/repair before broad release.
 No package is published by generation or building. License notices for bundled
 native dependencies are included; retain them when distributing wheels.
@@ -96,7 +96,7 @@ calls with ClosedError; explicit cancellation completes with CancelledError.
 Neither cancellation nor timeout rolls back remote execution. There is no
 automatic retry or replay suppression: applications own idempotency and retries.
 Long work can return a job ID and expose a separate status-query RPC. This SDK
-accepts RPC-only profiles; ordinary status messages use a separate application
+accepts RPC-client-only nodes; ordinary status messages use a separate application
 endpoint. C++ timeouts are milliseconds in `1..INT32_MAX`; Python timeouts are
 positive seconds, rounded up to milliseconds, at most `2147483.647` seconds.
 They include owner-command queue time. Owner callbacks must not wait, join or
@@ -116,7 +116,7 @@ The installed C++ package requires the matching native Wirelink development pack
   C++ uses an enum class with `int32_t` storage.
 - Public types use PascalCase; fields/services use snake_case. Language keywords
   and `self`/`timeout`/`session` gain a trailing underscore. Collisions, unsupported
-  profiles and unbounded messages fail generation. Required Python fields precede
+  nodes and unbounded messages fail generation. Required Python fields precede
   optional fields in positional constructors; prefer keywords for evolving schemas.
 - Python failures retain outcome/status/OS details.
   Parameter validation raises TypeError/ValueError; native RPC errors have distinct

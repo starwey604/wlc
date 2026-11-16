@@ -2,14 +2,14 @@
   "format": "wirelink-codegen-manifest-v1",
   "compiler": {
     "name": "wlc",
-    "version": "0.13.0",
-    "codegen_contract": {"major": 0, "minor": 13}
+    "version": "0.14.0",
+    "codegen_contract": {"major": 0, "minor": 14}
   },
   "module": "business",
   "identity": {
     "algorithm": "fnv1a64-v1",
     "schema": "0x25262b229432ee0b",
-    "binding_profile": "0x49e6fbcb4bbf8a4f"
+    "node": "0x247fc9a5ed27bc2a"
   },
   "codec_formats": {
     "EMPTY_CODEC_FORMAT": "schema-v1"
@@ -18,11 +18,8 @@
   ],
   "artifact_digest_algorithm": "fnv1a64-domain-bytes-v1",
   "artifacts": [
-    {"path": "business.c", "size": 1016, "digest": "0x22984d3105f719cc"},
-    {"path": "business.h", "size": 757, "digest": "0x7659209f765d5675"},
-    {"path": "business_kernel.c", "size": 2122, "digest": "0xcb47e3e7e79ebd33"},
-    {"path": "business_kernel.h", "size": 1164, "digest": "0xb48994b333dc1f14"},
-    {"path": "business_kernel_deployment.json", "size": 419, "digest": "0x228559034668d138"},
-    {"path": "business_kernel_manifest.json", "size": 891, "digest": "0xbbc608497b91cd5f"}
+    {"path": "business.c", "size": 3718, "digest": "0x57f8d8905fd373ee"},
+    {"path": "business.h", "size": 2237, "digest": "0xc16862df83ea21a9"},
+    {"path": "business_manifest.json", "size": 894, "digest": "0x061466ba31827b21"}
   ]
 }

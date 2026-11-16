@@ -8,7 +8,7 @@ message Settings @id(3) {
   optional Mode mode @id(3) [default = 1];
   required bytes<8> token @id(4);
   required packed float32 gains[3] @id(5);
-  packed fixed64 counters[2] @id(6);
+  optional packed fixed64 counters[2] @id(6);
   optional int64 floor @id(7) [default = -9223372036854775808];
   optional uint64 ceiling @id(8) [default = 18446744073709551615];
   optional string<8> class @id(9);
@@ -42,7 +42,7 @@ message Numbers @id(7) {
   required fixed64 f64 @id(10);
   required float32 single @id(11);
   required float64 double @id(12);
-  packed float64 doubles[2] @id(13);
+  optional packed float64 doubles[2] @id(13);
   required packed fixed32 words[2] @id(14);
   optional int64 offset @id(15) [default = -7];
   optional int32 minimum @id(16) [default = -2147483648];
@@ -53,3 +53,12 @@ message Numbers @id(7) {
 // Public response names must not collide with local C++ operation machinery.
 message CallRequest @id(100) {}
 message Call @id(101) {}
+
+rpc GetInfo(InfoRequest) -> InfoResponse;
+rpc Configure(ConfigureRequest) -> ConfigureResponse;
+rpc EchoCall(CallRequest) -> Call;
+node host {
+  call GetInfo;
+  call Configure;
+  call EchoCall;
+}

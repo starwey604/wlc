@@ -94,7 +94,7 @@ pub(super) fn emit(plan: &Plan<'_>, files: &mut BTreeMap<String, String>) {
         py.push_str("        )\n");
     }
     py.push_str(include_str!("templates/client.py.in"));
-    for rpc in &plan.profile.rpc_services {
+    for rpc in &plan.node.calls {
         let method = identifier(&rpc.name);
         let req = type_name(&rpc.request_name);
         let resp = type_name(&rpc.response_name);
@@ -121,7 +121,7 @@ pub(super) fn emit(plan: &Plan<'_>, files: &mut BTreeMap<String, String>) {
         writeln!(py, "        ), timeout=timeout)\n\n    def {method}_request(self, request: {req}, *, timeout: float = 1.0) -> {resp}:\n        if not isinstance(request, {req}):\n            raise TypeError(\"request must be {req}\")\n        value, error = self._client.{method}(request._to_native(), _runtime.timeout_ms(timeout))\n        if error is not None:\n            _runtime._raise(error)\n        assert value is not None\n        return {resp}._from_native(value)").unwrap();
     }
     py.push_str(include_str!("templates/async_client.py.in"));
-    for rpc in &plan.profile.rpc_services {
+    for rpc in &plan.node.calls {
         let method = identifier(&rpc.name);
         let req = type_name(&rpc.request_name);
         let resp = type_name(&rpc.response_name);
@@ -204,8 +204,8 @@ pub(super) fn emit(plan: &Plan<'_>, files: &mut BTreeMap<String, String>) {
     native.push_str("  module.def(\"closed_error\", [] { return wirelink::Error::local(WL_ERR_NOT_INITIALIZED); });\n  module.def(\"queue_full_error\", [] { return wirelink::Error::local(WL_ERR_QUEUE_FULL); });\n  nb::class_<wlc_python_signal_handle>(module, \"CompletionSignal\")\n      .def(nb::init<>())\n      .def(\"wait\", &wlc_python_signal_handle::wait, nb::call_guard<nb::gil_scoped_release>())\n      .def(\"stop\", &wlc_python_signal_handle::stop);\n");
     for message in &plan.messages {
         if !plan
-            .profile
-            .rpc_services
+            .node
+            .calls
             .iter()
             .any(|rpc| rpc.response_id == message.id)
         {
@@ -216,13 +216,13 @@ pub(super) fn emit(plan: &Plan<'_>, files: &mut BTreeMap<String, String>) {
     }
 
     writeln!(native, "\n  nb::class_<{name}::Client>(module, \"Client\")\n      .def(\"close\", &{name}::Client::close, nb::call_guard<nb::gil_scoped_release>())\n      .def_prop_ro(\"is_open\", &{name}::Client::is_open)\n      .def_prop_ro(\"local_port\", &{name}::Client::local_port)").unwrap();
-    for rpc in &plan.profile.rpc_services {
+    for rpc in &plan.node.calls {
         let method = identifier(&rpc.name);
         let req = type_name(&rpc.request_name);
         let resp = type_name(&rpc.response_name);
         writeln!(native, "      .def(\"{method}\", []({name}::Client& client, nb::tuple request, std::int64_t timeout_ms) {{\n        auto owned = read_{req}(request);\n        auto result = [&] {{\n          nb::gil_scoped_release release;\n          return client.{method}(owned, std::chrono::milliseconds(timeout_ms));\n        }}();\n        if (!result) return nb::make_tuple(nb::none(), wirelink::Error(result.error()));\n        return nb::make_tuple(write_{resp}(result.value()), nb::none());\n      }})").unwrap();
     }
-    for rpc in &plan.profile.rpc_services {
+    for rpc in &plan.node.calls {
         let method = identifier(&rpc.name);
         let req = type_name(&rpc.request_name);
         writeln!(native, "      .def(\"{method}_async\", []({name}::Client& client, nb::tuple request, std::int64_t timeout_ms) {{\n        auto owned = read_{req}(request);\n        auto result = [&] {{\n          nb::gil_scoped_release release;\n          return client.{method}_async(owned, std::chrono::milliseconds(timeout_ms));\n        }}();\n        if (!result) return nb::make_tuple(nb::none(), wirelink::Error(result.error()));\n        return nb::make_tuple(std::move(result).value(), nb::none());\n      }})").unwrap();
@@ -230,17 +230,17 @@ pub(super) fn emit(plan: &Plan<'_>, files: &mut BTreeMap<String, String>) {
     writeln!(native, "      ;\n  module.def(\"connect\", [](const std::string& peer_address, std::uint16_t peer_port,\n                           const std::string& bind_address, std::uint16_t bind_port) {{\n    auto result = [&] {{\n      nb::gil_scoped_release release;\n      return {name}::Client::connect({{peer_address, peer_port, bind_address, bind_port}});\n    }}();\n    if (!result) return nb::make_tuple(nb::none(), wirelink::Error(result.error()));\n    return nb::make_tuple(std::move(result).value(), nb::none());\n  }});\n}}").unwrap();
     files.insert("src/python.cpp".into(), native);
     let mut stub = include_str!("templates/native.pyi.in").to_owned();
-    for rpc in &plan.profile.rpc_services {
+    for rpc in &plan.node.calls {
         writeln!(stub, "    def {}(self, request: tuple[Any, ...], timeout_ms: int) -> tuple[tuple[Any, ...] | None, Error | None]: ...", identifier(&rpc.name)).unwrap();
     }
-    for rpc in &plan.profile.rpc_services {
+    for rpc in &plan.node.calls {
         writeln!(stub, "    def {}_async(self, request: tuple[Any, ...], timeout_ms: int) -> tuple[Operation{} | None, Error | None]: ...", identifier(&rpc.name), type_name(&rpc.response_name)).unwrap();
     }
     stub.push_str("\ndef closed_error() -> Error: ...\ndef queue_full_error() -> Error: ...\n\nclass CompletionSignal:\n    def __init__(self) -> None: ...\n    def wait(self) -> bool: ...\n    def stop(self) -> None: ...\n");
     for message in &plan.messages {
         if plan
-            .profile
-            .rpc_services
+            .node
+            .calls
             .iter()
             .any(|rpc| rpc.response_id == message.id)
         {

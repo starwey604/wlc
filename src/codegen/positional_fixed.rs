@@ -99,11 +99,6 @@ pub(super) fn source(
             "static size_t {name}_encoded_size(const void *value) {{\n  if (value == NULL) return SIZE_MAX;\n  {name}_t v;\n  memcpy(&v, value, sizeof(v));"
         )
         .unwrap();
-        for (i, field) in plan.message.fields.iter().enumerate() {
-            if field.cardinality == Cardinality::Required {
-                writeln!(out, "  if (!v.h{i}) return SIZE_MAX;").unwrap();
-            }
-        }
         if all_required_fixed {
             writeln!(out, "  return {max_size}U;\n}}\n").unwrap();
         } else {
@@ -115,15 +110,6 @@ pub(super) fn source(
             "static wl_codec_status_t {name}_encode(const void *value, uint8_t *out, size_t capacity, size_t *length) {{\n  if (value == NULL) return WL_CODEC_ERR_INVALID_VALUE;\n  {name}_t v;\n  memcpy(&v, value, sizeof(v));"
         )
         .unwrap();
-        for (i, field) in plan.message.fields.iter().enumerate() {
-            if field.cardinality == Cardinality::Required {
-                writeln!(
-                    out,
-                    "  if (!v.h{i}) return WL_CODEC_ERR_MISSING_REQUIRED_FIELD;"
-                )
-                .unwrap();
-            }
-        }
         if all_required_fixed {
             if max_size > 0 {
                 writeln!(
@@ -211,7 +197,10 @@ pub(super) fn source(
             let inner = "    ";
             let _ = indent;
             emit_scalar_read(&mut out, field, &format!("temp.v{i}"), inner, true);
-            writeln!(out, "{inner}temp.h{i} = true;\n  }}").unwrap();
+            if is_opt {
+                writeln!(out, "{inner}temp.h{i} = true;").unwrap();
+            }
+            writeln!(out, "  }}").unwrap();
         }
         writeln!(
             out,

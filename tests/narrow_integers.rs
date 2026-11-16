@@ -93,17 +93,13 @@ int main(void) {
   narrow_t decoded = {0};
 
   narrow_clear(&value);
-  if (value.has_unsigned_8 || value.has_unsigned_16 || value.has_signed_8 ||
-      value.has_signed_16 || value.has_default_unsigned_8 ||
+  if (value.unsigned_8 != 0U || value.unsigned_16 != 0U || value.signed_8 != 0 ||
+      value.signed_16 != 0 || value.has_default_unsigned_8 ||
       value.has_default_signed_8 || value.default_unsigned_8 != UINT8_MAX ||
       value.default_signed_8 != INT8_MIN) return 1;
-  value.has_unsigned_8 = true;
   value.unsigned_8 = UINT8_MAX;
-  value.has_unsigned_16 = true;
   value.unsigned_16 = UINT16_MAX;
-  value.has_signed_8 = true;
   value.signed_8 = INT8_MIN;
-  value.has_signed_16 = true;
   value.signed_16 = INT16_MIN;
   value.has_default_unsigned_8 = true;
   value.has_default_signed_8 = true;
@@ -112,10 +108,10 @@ int main(void) {
       length != sizeof(golden) || memcmp(encoded, golden, sizeof(golden)) != 0)
     return 3;
   if (narrow_decode(golden, sizeof(golden), &decoded) != WL_CODEC_OK ||
-      !decoded.has_unsigned_8 || decoded.unsigned_8 != UINT8_MAX ||
-      !decoded.has_unsigned_16 || decoded.unsigned_16 != UINT16_MAX ||
-      !decoded.has_signed_8 || decoded.signed_8 != INT8_MIN ||
-      !decoded.has_signed_16 || decoded.signed_16 != INT16_MIN ||
+      decoded.unsigned_8 != UINT8_MAX ||
+      decoded.unsigned_16 != UINT16_MAX ||
+      decoded.signed_8 != INT8_MIN ||
+      decoded.signed_16 != INT16_MIN ||
       !decoded.has_default_unsigned_8 ||
       decoded.default_unsigned_8 != UINT8_MAX ||
       !decoded.has_default_signed_8 || decoded.default_signed_8 != INT8_MIN)

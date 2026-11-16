@@ -116,11 +116,11 @@ fn generated_c_preserves_dense_numeric_golden_bits_and_validates_packed_lengths(
             message Dense = 1 {
               optional float32 scalar32 = 1;
               optional float64 scalar64 = 2;
-              packed float32 values32[4] = 3;
-              packed float64 values64[4] = 4;
-              packed fixed32 words32[2] = 5;
-              packed fixed64 words64[2] = 6;
-              packed float32 control[30] = 7;
+              optional packed float32 values32[4] = 3;
+              optional packed float64 values64[4] = 4;
+              optional packed fixed32 words32[2] = 5;
+              optional packed fixed64 words64[2] = 6;
+              optional packed float32 control[30] = 7;
               repeated float32 samples = 8;
             }
             message Envelope = 2 { optional Dense child = 1; }"#,

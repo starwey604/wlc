@@ -5,10 +5,10 @@ use std::collections::BTreeSet;
 use heck::{ToSnakeCase, ToUpperCamelCase};
 
 use crate::{
-    BindingProfileModel, SemanticModel,
+    SemanticModel,
     ast::Cardinality,
     codegen::{c_identifier, plan::CModel},
-    endpoint_layout::EndpointEnvelope,
+    node::{Framing, Node},
     semantic::{EnumSymbol, FieldSymbol, MessageSymbol, ResolvedType, Symbol},
 };
 
@@ -18,7 +18,8 @@ pub(super) struct Plan<'a> {
     pub options: &'a SdkOptions,
     pub messages: Vec<&'a MessageSymbol>,
     pub enums: Vec<&'a EnumSymbol>,
-    pub profile: &'a BindingProfileModel,
+    pub node: &'a Node,
+    pub maximum_datagram_size: usize,
     pub package: String,
     pub cmake_package: String,
     pub cmake_version: String,
@@ -42,10 +43,9 @@ fn insert(
 impl<'a> Plan<'a> {
     pub fn new(
         schema: &'a SemanticModel,
-        profile: &'a BindingProfileModel,
+        node: &'a Node,
         options: &'a SdkOptions,
     ) -> Result<Self, SdkCodegenError> {
-        crate::KernelProfile::from_bindings(profile.clone()).map_err(|e| error(e.to_string()))?;
         let name = &options.name;
         if name.is_empty()
             || !name.as_bytes()[0].is_ascii_lowercase()
@@ -81,26 +81,16 @@ impl<'a> Plan<'a> {
                 "package version must be MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH.devN",
             ));
         }
-        if !profile.has_rpc_client() || profile.rpc_services.iter().any(|rpc| !rpc.is_managed()) {
+        if !node.has_rpc_client() {
+            return Err(error("SDK generation requires a node with RPC call routes"));
+        }
+        if !node.send_routes.is_empty() || !node.recv_routes.is_empty() || !node.serves.is_empty() {
             return Err(error(
-                "SDK generation requires managed RPC services and a client-capable endpoint",
+                "SDK generation supports RPC-client-only nodes; select a separate host node for ordinary messages or service handlers",
             ));
         }
-        if !profile.send_routes.is_empty()
-            || !profile.direct_routes.is_empty()
-            || !profile.retained_routes.is_empty()
-        {
-            return Err(error(
-                "SDK generation currently supports RPC-only profiles; use a separate host profile for ordinary message routes",
-            ));
-        }
-        if !matches!(
-            profile.endpoint_layout().envelope,
-            EndpointEnvelope::NativePacket
-        ) {
-            return Err(error(
-                "UDP SDK generation requires explicit envelope=native_packet deployment",
-            ));
+        if node.framing != Framing::Native {
+            return Err(error("UDP SDK generation requires framing = native"));
         }
         let c = CModel::new(schema, name).map_err(|e| error(e.to_string()))?;
         let rpc_plan =
@@ -216,7 +206,9 @@ impl<'a> Plan<'a> {
             ]
             .map(str::to_owned),
         );
-        for rpc in &profile.rpc_services {
+        // PacketUdpAdapter has one admission bound for both directions.
+        let mut maximum_datagram_size = 16_usize;
+        for rpc in &node.calls {
             let method = identifier(&rpc.name);
             let c_method = c_identifier(&rpc.name);
             for symbol in [
@@ -247,13 +239,16 @@ impl<'a> Plan<'a> {
                         rpc.name
                     )));
                 }
+                maximum_datagram_size =
+                    maximum_datagram_size.max((rpc_maxima[&id].unwrap() + 12) as usize);
             }
         }
         Ok(Self {
             options,
             messages: c.messages,
             enums,
-            profile,
+            node,
+            maximum_datagram_size,
             package: format!("{name}_sdk"),
             cmake_package: format!("{}Sdk", name.to_upper_camel_case()),
             cmake_version: version.to_owned(),

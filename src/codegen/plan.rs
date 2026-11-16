@@ -268,8 +268,8 @@ mod tests {
             ("float64", 8),
         ] {
             for count in [1, 30, 128, 65535] {
-                for required in [false, true] {
-                    let modifier = if required { "required " } else { "" };
+                for (modifier, required) in [("optional ", false), ("required ", true), ("", true)]
+                {
                     let source = format!(
                         "version 1; message Sample @id(1) {{ {modifier}packed {ty} values[{count}] @id(65535); }}"
                     );
@@ -297,7 +297,7 @@ mod tests {
             "version 1;
             message Empty @id(1) {}
             message Scalar @id(2) { optional fixed32 value @id(1); }
-            message Mixed @id(3) { packed float32 values[30] @id(1); optional uint32 seq @id(2); }
+            message Mixed @id(3) { optional packed float32 values[30] @id(1); optional uint32 seq @id(2); }
             message Repeated @id(4) { repeated fixed32 values @id(1); }",
         );
         for message in CModel::new(&schema, "sample").unwrap().messages {

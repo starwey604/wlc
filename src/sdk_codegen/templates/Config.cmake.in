@@ -1,5 +1,5 @@
 @@PACKAGE_INIT@@
 include(CMakeFindDependencyMacro)
-find_dependency(Wirelink 0.13.0 EXACT CONFIG COMPONENTS cpp_host)
+find_dependency(Wirelink 0.14.0 EXACT CONFIG COMPONENTS cpp_host)
 include("${CMAKE_CURRENT_LIST_DIR}/@CMAKE_PACKAGE@Targets.cmake")
 check_required_components(@CMAKE_PACKAGE@)

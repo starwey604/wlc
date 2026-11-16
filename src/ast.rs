@@ -21,6 +21,8 @@ pub struct Schema {
     /// Globally reserved message or enum IDs.
     pub reserved_ids: Vec<Spanned<u16>>,
     pub declarations: Vec<Declaration>,
+    pub rpcs: Vec<RpcDeclaration>,
+    pub nodes: Vec<NodeDeclaration>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -173,4 +175,35 @@ impl std::fmt::Display for IntegerLiteral {
             write!(formatter, "{}", self.magnitude)
         }
     }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RpcDeclaration {
+    pub name: Spanned<String>,
+    pub request: Spanned<String>,
+    pub response: Spanned<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RouteKind {
+    Send,
+    Recv,
+    Serve,
+    Call,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NodeRoute {
+    pub kind: RouteKind,
+    pub name: Spanned<String>,
+    pub signature: Option<(Spanned<String>, Spanned<String>)>,
+    pub handler: Option<Spanned<String>>,
+    pub codec: Option<Spanned<String>>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NodeDeclaration {
+    pub name: Spanned<String>,
+    pub settings: Vec<(Spanned<String>, Spanned<String>)>,
+    pub routes: Vec<NodeRoute>,
 }

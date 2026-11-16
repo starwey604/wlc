@@ -50,12 +50,12 @@ message Leaf = 2 {
   optional float32 float_32 = 8;
   optional float64 float_64 = 9;
   optional Mode mode = 10;
-  packed fixed32 packed_32[3] = 16;
-  packed float64 packed_64[16] = 2048;
+  optional packed fixed32 packed_32[3] = 16;
+  optional packed float64 packed_64[16] = 2048;
 }
 message Outer = 3 {
   optional Leaf child = 1;
-  packed float32 axes[30] = 16;
+  optional packed float32 axes[30] = 16;
   optional uint32 tail = 65535;
 }
 message Empty = 4 {}
@@ -300,24 +300,24 @@ message ArmStatus = 24577 {
   optional ArmMode mode = 1;
   optional fixed32 sequence = 2;
   optional fixed64 timestamp_us = 3;
-  packed float32 joint_position[6] = 4;
-  packed float32 joint_velocity[6] = 5;
-  packed float32 joint_torque[6] = 6;
-  packed float32 base_gravity[3] = 7;
+  optional packed float32 joint_position[6] = 4;
+  optional packed float32 joint_velocity[6] = 5;
+  optional packed float32 joint_torque[6] = 6;
+  optional packed float32 base_gravity[3] = 7;
   optional float32 gripper_position = 8;
   optional float32 gripper_velocity = 9;
   optional float32 gripper_torque = 10;
-  packed float32 end_effector_transform[16] = 11;
-  packed float32 external_wrench[6] = 12;
+  optional packed float32 end_effector_transform[16] = 11;
+  optional packed float32 external_wrench[6] = 12;
   optional fixed32 error_flags = 13;
   optional fixed64 last_sdk_timestamp_us = 14;
 }
 message JointMitCommand = 25345 {
-  packed float32 position[6] = 1;
-  packed float32 velocity[6] = 2;
-  packed float32 torque[6] = 3;
-  packed float32 kp[6] = 4;
-  packed float32 kd[6] = 5;
+  optional packed float32 position[6] = 1;
+  optional packed float32 velocity[6] = 2;
+  optional packed float32 torque[6] = 3;
+  optional packed float32 kp[6] = 4;
+  optional packed float32 kd[6] = 5;
   optional fixed32 dt_us = 6;
   optional fixed32 sequence = 7;
   optional bool gravity_compensation = 8;
@@ -436,7 +436,7 @@ proptest! {
             scalar_number + 1
         };
         let source = format!(
-            "version 1; message Leaf = 1 {{ optional uint64 scalar = {scalar_number}; packed fixed64 values[{packed_count}] = {packed_number}; }} message Outer = 2 {{ optional Leaf child = {child_number}; }}"
+            "version 1; message Leaf = 1 {{ optional uint64 scalar = {scalar_number}; optional packed fixed64 values[{packed_count}] = {packed_number}; }} message Outer = 2 {{ optional Leaf child = {child_number}; }}"
         );
         let model = analyze_schema(&parse_schema(&source).unwrap()).unwrap();
         let generated = generate_c(&model, "property").unwrap();

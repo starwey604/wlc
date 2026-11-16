@@ -11,7 +11,7 @@ pub(super) fn emit(plan: &Plan<'_>, files: &mut BTreeMap<String, String>) {
     let name = &plan.options.name;
     // Keep system/Wirelink dependencies global, then isolate schema C typedefs
     // (e.g. Mode -> mode_t) from system typedefs in the C++ bridge.
-    files.insert("src/native.hpp".into(), format!("/* SPDX-License-Identifier: Apache-2.0 */\n#pragma once\n#include <cfloat>\n#include <cstddef>\n#include <cstdint>\n#include <wirelink/codec.h>\n// Only passive values cross this namespace. Endpoint callbacks stay in C.\nnamespace {name}::wlc_native {{\n#include \"{name}.h\"\n}}\n"));
+    files.insert("src/native.hpp".into(), format!("/* SPDX-License-Identifier: Apache-2.0 */\n#pragma once\n#include <cfloat>\n#include <cstddef>\n#include <cstdint>\n#include <wirelink/codec.h>\n#include <wirelink/kernel.h>\n// Only passive values cross this namespace. Endpoint callbacks stay in C.\nnamespace {name}::wlc_native {{\n#include \"{name}.h\"\n}}\n"));
     let native = files.get_mut("src/native.hpp").unwrap();
     native.push_str("// C enum macros must not rewrite scoped C++ enum member names.\n");
     for enumeration in &plan.enums {
@@ -68,7 +68,7 @@ pub(super) fn emit(plan: &Plan<'_>, files: &mut BTreeMap<String, String>) {
     files.insert(format!("include/{name}/types.hpp"), types);
 
     let mut methods = String::new();
-    for rpc in &plan.profile.rpc_services {
+    for rpc in &plan.node.calls {
         writeln!(methods, "  wirelink::Result<{}> {}(const {}& request,\n      std::chrono::milliseconds timeout = std::chrono::seconds(1));",
             type_name(&rpc.response_name), identifier(&rpc.name), type_name(&rpc.request_name)).unwrap();
         writeln!(methods, "  wirelink::Result<wirelink::Operation<{}>> {}_async(const {}& request,\n      std::chrono::milliseconds timeout = std::chrono::seconds(1));",
@@ -91,16 +91,15 @@ pub(super) fn emit(plan: &Plan<'_>, files: &mut BTreeMap<String, String>) {
             } else {
                 format!("input.{f}")
             };
-            let presence = if optional(field) {
-                format!("input.{f}.has_value()")
+            if optional(field) {
+                writeln!(
+                    values,
+                    "  output.has_{cf} = input.{f}.has_value();\n  if (output.has_{cf}) {{"
+                )
+                .unwrap();
             } else {
-                "true".to_owned()
-            };
-            writeln!(
-                values,
-                "  output.has_{cf} = {presence};\n  if (output.has_{cf}) {{"
-            )
-            .unwrap();
+                values.push_str("  {\n");
+            }
             if count(field).is_some() {
                 if matches!(field.ty, ResolvedType::Float32 | ResolvedType::Float64) {
                     writeln!(
@@ -149,7 +148,11 @@ pub(super) fn emit(plan: &Plan<'_>, files: &mut BTreeMap<String, String>) {
         for field in &message.fields {
             let f = identifier(&field.name);
             let cf = c_identifier(&field.name);
-            writeln!(values, "  if (input.has_{cf}) {{").unwrap();
+            if optional(field) {
+                writeln!(values, "  if (input.has_{cf}) {{").unwrap();
+            } else {
+                values.push_str("  {\n");
+            }
             let dest = if optional(field) {
                 writeln!(values, "    output.{f}.emplace();").unwrap();
                 format!("(*output.{f})")
@@ -222,23 +225,27 @@ typedef struct {{
 }} {name}_sdk_call_t;
 "#
     );
+    let maximum_rx_frame = plan.maximum_datagram_size;
+    // UDP reserves one byte past the accepted datagram limit to detect
+    // truncation, rather than accepting the prefix of an oversized datagram.
+    let rx_unit_size = maximum_rx_frame + 1;
     let mut bridge_source = format!(
         r#"/* SPDX-License-Identifier: Apache-2.0 */
 /* C owns atomic port storage and all kernel callback types. */
 #include "endpoint.h"
-#include "{name}_kernel.h"
+#include "{name}.h"
 #include <string.h>
 typedef struct {{
-  {name}_kernel_t endpoint;
+  {name}_node_t endpoint;
   wl_packet_port_t port;
-  uint8_t rx[2][2053];
+  uint8_t rx[WL_PACKET_RX_SLOTS][{rx_unit_size}];
 }} {name}_sdk_owner_t;
 size_t {name}_sdk_endpoint_size(void) {{ return sizeof({name}_sdk_owner_t); }}
 size_t {name}_sdk_endpoint_alignment(void) {{ return _Alignof({name}_sdk_owner_t); }}
 wl_err_t {name}_sdk_endpoint_prepare(void* storage, wl_host_endpoint_t* descriptor) {{
   {name}_sdk_owner_t* owner = storage;
   memset(owner, 0, sizeof(*owner));
-  *descriptor = (wl_host_endpoint_t){{owner, &owner->endpoint.core, &owner->port, 2052}};
+  *descriptor = (wl_host_endpoint_t){{owner, &owner->endpoint.core, &owner->port, {maximum_rx_frame}}};
   return WL_OK;
 }}
 wl_err_t {name}_sdk_endpoint_initialize(void* storage, uint32_t instance,
@@ -249,12 +256,11 @@ wl_err_t {name}_sdk_endpoint_initialize(void* storage, uint32_t instance,
     .submit = sink, .notify = notify, .user = user}};
   const wl_err_t error = wl_packet_init(&owner->port, &config);
   if (error != WL_OK) return error;
-  const {name}_kernel_handlers_t handlers = {{0}};
-  return {name}_kernel_init(&owner->endpoint, &owner->port, &handlers, NULL, NULL);
+  return {name}_init(&owner->endpoint, &owner->port);
 }}
 "#
     );
-    for rpc in &plan.profile.rpc_services {
+    for rpc in &plan.node.calls {
         let method = c_identifier(&rpc.name);
         let resp = c_type_name(&rpc.response_name);
         writeln!(bridge_header, "wl_err_t {name}_sdk_{method}_submit({name}_sdk_call_t*, uint32_t, uint32_t, wl_host_rpc_notify_fn, void*, wl_kernel_call_handle_t*);").unwrap();
@@ -273,7 +279,7 @@ wl_err_t {name}_sdk_{method}_submit({name}_sdk_call_t* state, uint32_t now, uint
   {name}_sdk_owner_t* owner = state->endpoint;
   state->notify = notify;
   state->notify_context = context;
-  return {name}_kernel_{method}_start(&owner->endpoint, state->request, now, timeout,
+  return {name}_call_{method}_ex(&owner->endpoint, state->request, now, timeout,
       {name}_sdk_{method}_done, state, call);
 }}
 "#).unwrap();
@@ -312,7 +318,7 @@ wirelink::Result<Client> Client::connect(const wirelink::UdpOptions& options) {{
 }}
 "#
     );
-    for rpc in &plan.profile.rpc_services {
+    for rpc in &plan.node.calls {
         let method = identifier(&rpc.name);
         let c_method = c_identifier(&rpc.name);
         let req = type_name(&rpc.request_name);

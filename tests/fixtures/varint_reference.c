@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-/* Frozen original-A reader and tagged Chunk consumers, before early return. */
+/* Frozen original-A reader and tagged Chunk consumers, before early return.
+ * Field-presence bookkeeping follows the 0.14 value-only required layout. */
 static wl_codec_status_t reference_getv(const uint8_t *in, size_t length, size_t *at,
                                   uint64_t *out) {
   size_t start = *at, n = 0U;
@@ -81,6 +82,8 @@ static inline wl_codec_status_t reference_decode(const wl_codec_desc_t *d, const
                                     size_t n, void *out) {
   if (d == NULL || out == NULL || (n != 0U && in == NULL))
     return WL_CODEC_ERR_INVALID_VALUE;
+  if (d->field_count > WL_CODEC_MAX_FIELDS) return WL_CODEC_ERR_INVALID_VALUE;
+  bool seen[WL_CODEC_MAX_FIELDS] = {false};
   wl_codec_clear(d, out);
   // A hint only: missing, unknown or reordered fields still use exact lookup.
   // Each recursive decode owns its cursor; empty schemas avoid NULL arithmetic.
@@ -107,13 +110,15 @@ static inline wl_codec_status_t reference_decode(const wl_codec_desc_t *d, const
     uint8_t *base = out;
     void *p = base + f->offset;
     bool is_single = f->cardinality == WL_CODEC_CARD_OPTIONAL || f->cardinality == WL_CODEC_CARD_REQUIRED;
-    if (is_single && *(bool *)(base + f->presence_offset)) return WL_CODEC_ERR_DUPLICATE_FIELD;
+    if (is_single && seen[f - d->fields]) return WL_CODEC_ERR_DUPLICATE_FIELD;
     if ((s = reference_read_value(f, in, n, &at, p)) != WL_CODEC_OK) return s;
-    if (is_single) *(bool *)(base + f->presence_offset) = true;
+    if (is_single) seen[f - d->fields] = true;
+    if (f->cardinality == WL_CODEC_CARD_OPTIONAL)
+      *(bool *)(base + f->presence_offset) = true;
   }
   for (size_t i = 0U; i < d->field_count; ++i) {
     const wl_codec_field_t *f = &d->fields[i];
-    if (f->cardinality == WL_CODEC_CARD_REQUIRED && !*(const bool *)((uint8_t *)out + f->presence_offset))
+    if (f->cardinality == WL_CODEC_CARD_REQUIRED && !seen[i])
       return WL_CODEC_ERR_MISSING_REQUIRED_FIELD;
   }
   return WL_CODEC_OK;

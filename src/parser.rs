@@ -5,8 +5,8 @@ use thiserror::Error;
 
 use crate::{
     ast::{
-        Cardinality, Declaration, Enum, EnumValue, Field, IntegerLiteral, Literal, Message, Schema,
-        Span, Spanned,
+        Cardinality, Declaration, Enum, EnumValue, Field, IntegerLiteral, Literal, Message,
+        NodeDeclaration, NodeRoute, RouteKind, RpcDeclaration, Schema, Span, Spanned,
     },
     lexer::{LexError, Token, TokenKind, tokenize},
 };
@@ -57,17 +57,43 @@ impl Parser {
 
     fn parse_schema(&mut self) -> Result<Schema, ParseError> {
         let version_span = self.current().span;
-        self.expect_keyword(TokenKind::Version, "`version`")?;
-        let version = self.positive_u32("schema version")?;
-        self.expect_symbol(TokenKind::Semicolon, "`;` after version")?;
+        let version = if matches!(self.current().kind, TokenKind::Version) {
+            self.advance();
+            let version = self.positive_u32("schema version")?;
+            self.expect_symbol(TokenKind::Semicolon, "`;` after version")?;
+            version
+        } else {
+            Spanned {
+                value: 1,
+                span: version_span,
+            }
+        };
 
         let mut declarations = Vec::new();
+        let mut rpcs = Vec::new();
+        let mut nodes = Vec::new();
         let mut imports = Vec::new();
         let mut names = HashSet::new();
         let mut ids = HashSet::new();
         let mut reserved_ids = Vec::new();
         let mut reserved_id_values = HashSet::new();
         while !matches!(self.current().kind, TokenKind::End) {
+            if self.word("rpc") {
+                self.advance();
+                let name = self.identifier("RPC name")?;
+                let (request, response) = self.rpc_signature()?;
+                self.expect_symbol(TokenKind::Semicolon, "`;` after RPC")?;
+                rpcs.push(RpcDeclaration {
+                    name,
+                    request,
+                    response,
+                });
+                continue;
+            }
+            if self.word("node") {
+                nodes.push(self.parse_node()?);
+                continue;
+            }
             if matches!(self.current().kind, TokenKind::Import) {
                 let start = self.current().span;
                 self.position += 1;
@@ -153,6 +179,102 @@ impl Parser {
             imports,
             reserved_ids,
             declarations,
+            rpcs,
+            nodes,
+        })
+    }
+
+    fn word(&self, word: &str) -> bool {
+        matches!(&self.current().kind, TokenKind::Identifier(value) if value == word)
+    }
+
+    fn rpc_signature(&mut self) -> Result<(Spanned<String>, Spanned<String>), ParseError> {
+        self.expect_symbol(TokenKind::LeftParen, "`(` before RPC request")?;
+        let request = self.identifier("RPC request message")?;
+        self.expect_symbol(TokenKind::RightParen, "`)` after RPC request")?;
+        self.expect_symbol(TokenKind::Arrow, "`->` before RPC response")?;
+        let response = self.identifier("RPC response message")?;
+        Ok((request, response))
+    }
+
+    fn parse_node(&mut self) -> Result<NodeDeclaration, ParseError> {
+        self.advance();
+        let name = self.identifier("node name")?;
+        self.expect_symbol(TokenKind::LeftBrace, "`{` before node body")?;
+        let mut settings = Vec::new();
+        let mut routes = Vec::new();
+        while !matches!(self.current().kind, TokenKind::RightBrace) {
+            let key = self.identifier("node setting or route")?;
+            let kind = match key.value.as_str() {
+                "send" => Some(RouteKind::Send),
+                "recv" => Some(RouteKind::Recv),
+                "serve" => Some(RouteKind::Serve),
+                "call" => Some(RouteKind::Call),
+                _ => None,
+            };
+            if let Some(kind) = kind {
+                let name = self.identifier("route message or RPC name")?;
+                let signature = if matches!(self.current().kind, TokenKind::LeftParen) {
+                    if matches!(kind, RouteKind::Send | RouteKind::Recv) {
+                        return Err(self
+                            .error_current("only RPC routes accept a request/response signature"));
+                    }
+                    Some(self.rpc_signature()?)
+                } else {
+                    None
+                };
+                let handler = if matches!(self.current().kind, TokenKind::Equal) {
+                    if kind == RouteKind::Send {
+                        return Err(self.error_current("send routes do not accept handlers"));
+                    }
+                    self.advance();
+                    Some(self.identifier("C handler identifier")?)
+                } else {
+                    None
+                };
+                let codec = if matches!(self.current().kind, TokenKind::At) {
+                    self.advance();
+                    let attr = self.identifier("codec attribute")?;
+                    if attr.value != "codec" {
+                        return Err(self.error(attr.span, "expected @codec"));
+                    }
+                    if matches!(kind, RouteKind::Serve | RouteKind::Call) {
+                        return Err(self.error(attr.span, "RPC always uses schema_v1"));
+                    }
+                    self.expect_symbol(TokenKind::LeftParen, "`(` after @codec")?;
+                    let value = self.identifier("codec name")?;
+                    self.expect_symbol(TokenKind::RightParen, "`)` after codec")?;
+                    Some(value)
+                } else {
+                    None
+                };
+                routes.push(NodeRoute {
+                    kind,
+                    name,
+                    signature,
+                    handler,
+                    codec,
+                });
+            } else {
+                self.expect_symbol(TokenKind::Equal, "`=` after node setting")?;
+                let value = if key.value == "timeout_ms" {
+                    let value = self.positive_u32("timeout_ms")?;
+                    Spanned {
+                        value: value.value.to_string(),
+                        span: value.span,
+                    }
+                } else {
+                    self.identifier("node setting value")?
+                };
+                settings.push((key, value));
+            }
+            self.expect_symbol(TokenKind::Semicolon, "`;` after node member")?;
+        }
+        self.advance();
+        Ok(NodeDeclaration {
+            name,
+            settings,
+            routes,
         })
     }
 
@@ -228,7 +350,12 @@ impl Parser {
         let cardinality = match self.current().kind {
             TokenKind::Optional => {
                 self.advance();
-                Cardinality::Optional
+                if matches!(self.current().kind, TokenKind::Packed) {
+                    self.advance();
+                    Cardinality::Packed(0)
+                } else {
+                    Cardinality::Optional
+                }
             }
             TokenKind::Required => {
                 self.advance();
@@ -249,13 +376,9 @@ impl Parser {
             TokenKind::Packed => {
                 self.advance();
                 // The count follows the field name, after its type has been parsed.
-                Cardinality::Packed(0)
+                Cardinality::RequiredPacked(0)
             }
-            _ => {
-                return Err(self.error_current(
-                    "field must start with `optional`, `required`, `repeated`, or `packed`",
-                ));
-            }
+            _ => Cardinality::Required,
         };
         let ty = self.identifier("field type")?;
         let max_length = if matches!(self.current().kind, TokenKind::Less) {

@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use std::{fs, path::PathBuf, process::Command};
-use wlc::{
-    analyze_binding_profile, analyze_schema, generate_c_for_profile, parse_binding_profile,
-    parse_schema,
-};
+use wlc::{analyze_schema, parse_schema};
+use wlc::{codegen::generate_c_for_nodes, node::analyze_nodes};
 const SCHEMA: &str = "version 1;
 enum Mode @id(20) { ZERO = 0; ONE = 1; }
 message Request @id(1) { required fixed32 a @id(1); required fixed32 b @id(2); optional fixed32 c @id(3) [default=19]; }
@@ -12,7 +10,7 @@ message Values @id(3) {
  required bool flag @id(1); required uint8 u8 @id(2); required uint16 u16 @id(3); required uint32 u32 @id(4); required uint64 u64 @id(5);
  required int8 i8 @id(6); required int16 i16 @id(7); required int32 i32 @id(8); required int64 i64 @id(9); required Mode mode @id(10);
  required fixed32 f32 @id(11); required fixed64 f64 @id(12); required float32 x @id(13); required float64 y @id(14);
- required packed fixed32 words[2] @id(15); packed float64 floats[2] @id(16); required packed fixed64 longs[2] @id(17);
+ required packed fixed32 words[2] @id(15); optional packed float64 floats[2] @id(16); required packed fixed64 longs[2] @id(17);
 }
 message Bits @id(4) { optional bool a @id(1); optional bool b @id(2); optional bool c @id(3); optional bool d @id(4); optional bool e @id(5); optional bool f @id(6); optional bool g @id(7); optional bool h @id(8); optional bool i @id(9); }
 message Empty @id(5) {}
@@ -26,21 +24,21 @@ message Sample @id(6) { required packed float32 samples[2] @id(1); required fixe
 
 #[test]
 fn positional_public_vectors_preserve_the_full_legal_value_domain() {
-    let schema = analyze_schema(&parse_schema(SCHEMA).unwrap()).unwrap();
-    let mut text = String::from("profile version 2; endpoint { envelope=native_packet; }");
+    let mut text = format!("{SCHEMA} node test {{");
     for name in [
         "Request", "Values", "Bits", "Empty", "Small", "Narrow", "Wide", "OpenEnum", "Sample",
     ] {
         text.push_str(&format!(
-            "send {name} {{ delivery=unreliable; codec=positional_v1; }} direct {name} {{ delivery=unreliable; codec=positional_v1; }}"
+            "send {name} @codec(positional_v1); recv {name} @codec(positional_v1);"
         ));
     }
-    text.push_str("rpc FloatProbe { request=RpcFloat; response=RpcFloatReply; }");
-    let profile = analyze_binding_profile(&parse_binding_profile(&text).unwrap(), &schema).unwrap();
-    let kernel = wlc::KernelProfile::from_bindings(profile.clone()).unwrap();
-    let c = wlc::generate_kernel_c(&schema, &kernel, "demo").unwrap();
+    text.push_str("call FloatProbe(RpcFloat) -> RpcFloatReply; }");
+    let ast = parse_schema(&text).unwrap();
+    let schema = analyze_schema(&ast).unwrap();
+    let nodes = analyze_nodes(&ast, &schema).unwrap();
+    let c = generate_c_for_nodes(&schema, &nodes, "demo", false).unwrap();
     let dir = tempfile::tempdir().unwrap();
-    for (name, contents) in c.files {
+    for (name, contents) in [("demo.h", c.header), ("demo.c", c.source)] {
         fs::write(dir.path().join(name), contents).unwrap();
     }
     fs::write(
@@ -81,21 +79,17 @@ fn positional_public_vectors_preserve_the_full_legal_value_domain() {
             .success()
     );
 
-    // Verify route direction pruning in compile-kernel.
-    let send_only = analyze_binding_profile(
-        &parse_binding_profile(
-            "profile version 2; endpoint { envelope=native_packet; } send Request { delivery=unreliable; codec=positional_v1; }",
-        )
-        .unwrap(),
-        &schema,
-    )
+    // A selected send-only node emits no receive or unrelated codec functions.
+    let ast = parse_schema(&format!(
+        "{SCHEMA} node sender {{ send Request @codec(positional_v1); }}"
+    ))
     .unwrap();
-    let pruned_kernel = wlc::KernelProfile::from_bindings(send_only).unwrap();
-    let pruned = wlc::generate_kernel_c(&schema, &pruned_kernel, "pruned").unwrap();
-    assert!(pruned.files["pruned.h"].contains("request_encode("));
-    assert!(!pruned.files["pruned.h"].contains("request_decode("));
-    assert!(!pruned.files["pruned.h"].contains("values_encode("));
-    assert!(!pruned.files["pruned.h"].contains("values_decode("));
+    let send_only = analyze_nodes(&ast, &schema).unwrap();
+    let pruned = generate_c_for_nodes(&schema, &send_only, "pruned", true).unwrap();
+    assert!(pruned.header.contains("request_encode("));
+    assert!(!pruned.header.contains("request_decode("));
+    assert!(!pruned.header.contains("values_encode("));
+    assert!(!pruned.header.contains("values_decode("));
     let old = wlc::generate_c(&schema, "demo").unwrap();
     fs::write(dir.path().join("demo.c"), old.source).unwrap();
     let out = Command::new("cc")
@@ -109,7 +103,7 @@ fn positional_public_vectors_preserve_the_full_legal_value_domain() {
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("Codec source/header profile mismatch"));
     assert_eq!(
-        generate_c_for_profile(&schema, &profile, "demo").unwrap(),
-        generate_c_for_profile(&schema, &profile, "demo").unwrap()
+        generate_c_for_nodes(&schema, &nodes, "demo", false).unwrap(),
+        generate_c_for_nodes(&schema, &nodes, "demo", false).unwrap()
     );
 }

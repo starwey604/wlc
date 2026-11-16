@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use std::{fs, path::PathBuf, process::Command};
-use wlc::{
-    analyze_binding_profile, analyze_schema, generate_c_for_profile, parse_binding_profile,
-    parse_schema,
-};
+use wlc::{analyze_schema, parse_schema};
+use wlc::{codegen::generate_c_for_nodes, node::analyze_nodes};
 #[test]
 fn positional_routes_preserve_shared_tagged_dependencies() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -12,24 +10,23 @@ fn positional_routes_preserve_shared_tagged_dependencies() {
         .to_owned();
     for (child, parent) in [(1, 2), (2, 1)] {
         for packed in [false, true] {
-            for route in ["send", "direct"] {
-                for parent_route in ["", "send Parent { delivery=unreliable; }"] {
+            for route in ["send", "recv"] {
+                for parent_route in ["", "send Parent;"] {
                     let extra = if packed {
                         "required packed fixed32 words[2] @id(2);"
                     } else {
                         ""
                     };
-                    let schema=analyze_schema(&parse_schema(&format!("version 1; message Child @id({child}) {{ required fixed32 value @id(1); {extra} }} message Parent @id({parent}) {{ required Child child @id(1); }} message Grandparent @id(3) {{ required Parent parent @id(1); }}")).unwrap()).unwrap();
-                    let text = format!(
-                        "profile version 2; {route} Child {{ delivery=unreliable; codec=positional_v1; }} {parent_route}"
+                    let source = format!(
+                        "version 1; message Child @id({child}) {{ required fixed32 value @id(1); {extra} }} message Parent @id({parent}) {{ required Child child @id(1); }} message Grandparent @id(3) {{ required Parent parent @id(1); }} node test {{ {route} Child @codec(positional_v1); {parent_route} }}"
                     );
-                    let profile =
-                        analyze_binding_profile(&parse_binding_profile(&text).unwrap(), &schema)
-                            .unwrap();
+                    let ast = parse_schema(&source).unwrap();
+                    let schema = analyze_schema(&ast).unwrap();
+                    let nodes = analyze_nodes(&ast, &schema).unwrap();
                     let dir = tempfile::tempdir().unwrap();
                     for positional in [false, true] {
                         let c = if positional {
-                            generate_c_for_profile(&schema, &profile, "mixed").unwrap()
+                            generate_c_for_nodes(&schema, &nodes, "mixed", false).unwrap()
                         } else {
                             wlc::generate_c(&schema, "mixed").unwrap()
                         };
@@ -85,26 +82,16 @@ fn positional_routes_preserve_shared_tagged_dependencies() {
 }
 #[test]
 fn an_unbounded_parent_does_not_emit_unused_owned_dependencies() {
-    let schema = analyze_schema(
-        &parse_schema(
-            "version 1;
+    let ast = parse_schema(
+        "version 1;
 message Child @id(1) { required fixed32 value @id(1); }
-message Parent @id(2) { required Child child @id(1); repeated uint32 extra @id(2); }",
-        )
-        .unwrap(),
+message Parent @id(2) { required Child child @id(1); repeated uint32 extra @id(2); }
+node test { send Child @codec(positional_v1); }",
     )
     .unwrap();
-    let profile = analyze_binding_profile(
-        &parse_binding_profile(
-            "profile version 2;
-send Child { delivery=unreliable; codec=positional_v1; }
-send Parent { delivery=unreliable; }",
-        )
-        .unwrap(),
-        &schema,
-    )
-    .unwrap();
-    let c = generate_c_for_profile(&schema, &profile, "mixed").unwrap();
+    let schema = analyze_schema(&ast).unwrap();
+    let nodes = analyze_nodes(&ast, &schema).unwrap();
+    let c = generate_c_for_nodes(&schema, &nodes, "mixed", false).unwrap();
     let dir = tempfile::tempdir().unwrap();
     for (name, text) in [("mixed.h", c.header), ("mixed.c", c.source)] {
         fs::write(dir.path().join(name), text).unwrap();

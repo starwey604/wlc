@@ -6,8 +6,9 @@ use miette::Diagnostic;
 use thiserror::Error;
 
 use crate::{
-    BindingProfileModel, KernelProfile, ManifestArtifact, SemanticModel, binding_profile_identity,
-    generate_codegen_manifest,
+    ManifestArtifact, SemanticModel, generate_codegen_manifest,
+    node::{Handlers, IoMode, Node},
+    node_identity,
 };
 
 mod cpp;
@@ -40,15 +41,21 @@ pub struct SdkCodegenError(pub String);
 /// Validate the whole project before emitting anything. Reuses the C wire implementation.
 pub fn generate_sdk(
     schema: &SemanticModel,
-    profile: &BindingProfileModel,
+    node: &Node,
     options: &SdkOptions,
 ) -> Result<GeneratedSdk, SdkCodegenError> {
-    let plan = plan::Plan::new(schema, profile, options)?;
+    let plan = plan::Plan::new(schema, node, options)?;
     let name = &options.name;
-    let kernel = KernelProfile::from_bindings(profile.clone())
-        .map_err(|e| SdkCodegenError(e.to_string()))?;
+    let mut client = node.clone();
+    client.name = name.clone();
+    client.io = IoMode::External;
+    client.handlers = Handlers::Static;
+    // The host bridge supplies a per-call completion through the explicit API.
+    for call in &mut client.calls {
+        call.handler = None;
+    }
     let artifacts =
-        crate::kernel_codegen::generate_kernel_c_with_pruning(schema, &kernel, name, false)
+        crate::node_codegen::generate_node_c_with_pruning(schema, &[client], name, false)
             .map_err(|e| SdkCodegenError(e.to_string()))?
             .files;
     let mut files = artifacts
@@ -59,14 +66,14 @@ pub fn generate_sdk(
     python::emit(&plan, &mut files);
     package::emit(&plan, &mut files);
     files.insert("wlc-sdk-name.txt".into(), format!("{name}\n"));
-    let manifest = manifest(schema, profile, name, &files);
+    let manifest = manifest(schema, node, name, &files);
     files.insert("wlc-sdk-manifest.json".into(), manifest);
     Ok(GeneratedSdk { files })
 }
 
 fn manifest(
     schema: &SemanticModel,
-    profile: &BindingProfileModel,
+    node: &Node,
     name: &str,
     files: &BTreeMap<String, String>,
 ) -> String {
@@ -77,10 +84,5 @@ fn manifest(
             contents: contents.as_bytes(),
         })
         .collect::<Vec<_>>();
-    generate_codegen_manifest(
-        name,
-        schema,
-        Some(binding_profile_identity(profile)),
-        &artifacts,
-    )
+    generate_codegen_manifest(name, schema, Some(node_identity(node)), &artifacts)
 }

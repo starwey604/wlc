@@ -64,7 +64,7 @@ fn compile_writes_named_c_artifacts() {
     assert!(!source.contains("wl_send_reliable"));
     assert!(manifest.contains("\"format\": \"wirelink-codegen-manifest-v1\""));
     assert!(manifest.contains("\"module\": \"motor_api\""));
-    assert!(manifest.contains("\"binding_profile\": null"));
+    assert!(manifest.contains("\"node\": null"));
     assert!(manifest.contains("\"path\": \"motor_api.h\""));
 }
 
@@ -228,23 +228,16 @@ fn release_smoke_fixture_uses_the_current_kernel_contract() {
     let directory = tempdir().unwrap();
     Command::cargo_bin("wlc")
         .unwrap()
-        .arg("compile-kernel")
+        .arg("compile")
         .arg(root.join("tests/fixtures/release_smoke.wl"))
-        .arg("--profile")
-        .arg(root.join("tests/fixtures/release_smoke.bind.wl"))
         .arg("--out-dir")
         .arg(directory.path())
         .assert()
         .success();
     let manifest: String =
-        fs::read_to_string(directory.path().join("release_smoke_kernel_manifest.json")).unwrap();
-    assert!(manifest.contains("\"minor\": 13"));
-    for name in [
-        "release_smoke.h",
-        "release_smoke.c",
-        "release_smoke_kernel.h",
-        "release_smoke_kernel.c",
-    ] {
+        fs::read_to_string(directory.path().join("release_smoke_manifest.json")).unwrap();
+    assert!(manifest.contains("\"minor\": 14"));
+    for name in ["release_smoke.h", "release_smoke.c"] {
         assert!(directory.path().join(name).is_file(), "missing {name}");
     }
 }

@@ -6,7 +6,7 @@ static uint32_t next_random(void) {
 }
 static void check(const wl_codec_desc_t *d, void *a, void *b, size_t size,
                   const uint8_t *wire, size_t n) {
-  uint8_t scratch[4096];
+  _Alignas(max_align_t) uint8_t scratch[4096];
   assert(size <= sizeof(scratch));
   memset(a, 0xA5, size); memset(b, 0xA5, size);
   int ar = wl_codec_decode(d, wire, n, a, scratch);

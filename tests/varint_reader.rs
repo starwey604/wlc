@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 use std::{fs, path::PathBuf, process::Command};
-use wlc::{
-    analyze_binding_profile, analyze_schema, generate_c, generate_c_for_profile,
-    parse_binding_profile, parse_schema,
-};
+use wlc::{analyze_schema, generate_c, parse_schema};
+use wlc::{codegen::generate_c_for_nodes, node::analyze_nodes};
 
 #[test]
 fn readers_preserve_canonical_errors_cursor_and_partial_decode_state() {
@@ -18,15 +16,12 @@ fn readers_preserve_canonical_errors_cursor_and_partial_decode_state() {
             if mode == "schema_v1" {
                 generate_c(&model, "candidate").unwrap()
             } else {
-                let profile = analyze_binding_profile(
-                    &parse_binding_profile(
-                        "profile version 2; direct Scalar { delivery=unreliable; codec=positional_v1; }",
-                    )
-                    .unwrap(),
-                    &model,
-                )
+                let ast = parse_schema(&format!(
+                    "{schema} node test {{ recv Scalar @codec(positional_v1); }}"
+                ))
                 .unwrap();
-                generate_c_for_profile(&model, &profile, "candidate").unwrap()
+                let nodes = analyze_nodes(&ast, &model).unwrap();
+                generate_c_for_nodes(&model, &nodes, "candidate", false).unwrap()
             }
         };
         let generated = generate();

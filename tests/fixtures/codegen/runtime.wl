@@ -1,5 +1,5 @@
 version 1;
-message Telemetry @id(1) { packed float32 values[30] @id(1); }
+message Telemetry @id(1) { optional packed float32 values[30] @id(1); }
 message Event @id(2) { required uint32 code @id(1); }
 message Request @id(3) { required string<32> label @id(1); optional bytes<128> data @id(2); }
 message Response @id(4) { optional string<64> result @id(1); }

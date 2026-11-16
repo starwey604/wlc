@@ -147,7 +147,7 @@ pub(crate) fn upper_snake(name: &str) -> String {
     c_identifier(name).to_shouty_snake_case()
 }
 
-pub(super) fn is_c_keyword(name: &str) -> bool {
+pub(crate) fn is_c_keyword(name: &str) -> bool {
     matches!(
         name,
         /* C11 keywords, stdbool macros, and C++20 keywords. Generated public

@@ -14,3 +14,6 @@ message ControlResult = 3 {
   required uint32 operation_id = 1;
   required Result result = 2;
 }
+
+rpc ApplyControl(Control) -> ControlResult;
+node release_smoke { io = external; handlers = dynamic; call ApplyControl; serve ApplyControl; }

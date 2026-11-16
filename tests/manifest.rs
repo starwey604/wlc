@@ -42,7 +42,7 @@ fn manifest_is_order_independent_and_records_exact_provenance() {
         "\"schema\": \"0x{:016x}\"",
         schema_identity(&schema)
     )));
-    assert!(first.contains("\"binding_profile\": \"0xfedcba9876543210\""));
+    assert!(first.contains("\"node\": \"0xfedcba9876543210\""));
     assert!(first.contains(&format!(
         "\"artifact_digest_algorithm\": \"{ARTIFACT_DIGEST_ALGORITHM}\""
     )));
@@ -73,7 +73,7 @@ fn manifest_escapes_json_and_distinguishes_artifact_bytes() {
 
     assert!(first.contains("\"module\": \"quote\\\"line\\n\""));
     assert!(first.contains("\"path\": \"a\\\\b\\t.c\""));
-    assert!(first.contains("\"binding_profile\": null"));
+    assert!(first.contains("\"node\": null"));
     assert_ne!(first, changed);
 }
 

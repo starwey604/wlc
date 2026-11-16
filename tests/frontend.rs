@@ -43,7 +43,7 @@ fn parses_all_frontend_constructs() {
 #[test]
 fn parses_float_scalars_and_fixed_packed_arrays() {
     let schema = parse_schema(
-        "version 1; message Control = 1 { optional float32 position = 1; optional float64 time = 2; packed float32 joints[6] = 3; packed fixed64 ticks[2] = 4; }",
+        "version 1; message Control = 1 { optional float32 position = 1; optional float64 time = 2; optional packed float32 joints[6] = 3; optional packed fixed64 ticks[2] = 4; }",
     )
     .expect("dense numeric schema");
     let Declaration::Message(message) = &schema.declarations[0] else {
@@ -235,8 +235,8 @@ fn rejects_required_repeated_and_required_defaults() {
 #[test]
 fn packed_arrays_require_a_valid_count_and_fixed_width_numeric_type() {
     for source in [
-        "version 1; message Bad = 1 { packed float32 values[0] = 1; }",
-        "version 1; message Bad = 1 { packed float32 values[65536] = 1; }",
+        "version 1; message Bad = 1 { optional packed float32 values[0] = 1; }",
+        "version 1; message Bad = 1 { optional packed float32 values[65536] = 1; }",
     ] {
         let error = parse_schema(source).unwrap_err();
         assert!(error.message.contains("packed element count"));
@@ -514,12 +514,13 @@ fn compatibility_requires_a_strictly_new_revision() {
 #[test]
 fn compatibility_treats_packed_kind_and_count_as_wire_identity() {
     let previous = analyze_schema(
-        &parse_schema("version 1; message Control = 1 { packed float32 joints[6] = 1; }").unwrap(),
+        &parse_schema("version 1; message Control = 1 { optional packed float32 joints[6] = 1; }")
+            .unwrap(),
     )
     .unwrap();
     let same_shape = analyze_schema(
         &parse_schema(
-            "version 2; message Control = 1 { packed float32 joints[6] = 1; optional float64 time = 2; }",
+            "version 2; message Control = 1 { optional packed float32 joints[6] = 1; optional float64 time = 2; }",
         )
         .unwrap(),
     )
@@ -527,8 +528,8 @@ fn compatibility_treats_packed_kind_and_count_as_wire_identity() {
     check_compatibility(&previous, &same_shape).expect("adding an optional field is compatible");
 
     for source in [
-        "version 2; message Control = 1 { packed float32 joints[7] = 1; }",
-        "version 2; message Control = 1 { packed fixed32 joints[6] = 1; }",
+        "version 2; message Control = 1 { optional packed float32 joints[7] = 1; }",
+        "version 2; message Control = 1 { optional packed fixed32 joints[6] = 1; }",
         "version 2; message Control = 1 { repeated float32 joints = 1; }",
     ] {
         let current = analyze_schema(&parse_schema(source).unwrap()).unwrap();
@@ -640,7 +641,7 @@ fn compatibility_rejects_required_field_addition_removal_and_cardinality_changes
 
     for source in [
         "version 2; message Control = 1 { optional uint32 sequence = 1; required packed float32 joints[6] = 2; optional bool enabled = 3; }",
-        "version 2; message Control = 1 { required uint32 sequence = 1; packed float32 joints[6] = 2; optional bool enabled = 3; }",
+        "version 2; message Control = 1 { required uint32 sequence = 1; optional packed float32 joints[6] = 2; optional bool enabled = 3; }",
         "version 2; message Control = 1 { required uint32 sequence = 1; required packed float32 joints[6] = 2; required bool enabled = 3; }",
     ] {
         let current = analyze_schema(&parse_schema(source).unwrap()).unwrap();
@@ -734,7 +735,7 @@ fn generator_normalizes_acronyms_and_c_keywords() {
 fn generator_emits_ieee_scalars_and_inline_packed_arrays() {
     let model = analyze_schema(
         &parse_schema(
-            "version 1; message Control = 1 { optional float32 position = 1; optional float64 time = 2; packed float32 joints[6] = 3; packed fixed64 ticks[2] = 4; }",
+            "version 1; message Control = 1 { optional float32 position = 1; optional float64 time = 2; optional packed float32 joints[6] = 3; optional packed fixed64 ticks[2] = 4; }",
         )
         .unwrap(),
     )

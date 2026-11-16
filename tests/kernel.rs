@@ -1,154 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 use std::{fs, path::PathBuf, process::Command};
 use tempfile::tempdir;
-use wlc::{
-    analyze_kernel_profile, analyze_schema, generate_kernel_c, parse_binding_profile, parse_schema,
-};
+use wlc::{analyze_schema, generate_node_c, parse_schema};
 
 const SCHEMA: &str = "version 1; message Request @id(2) { required int32 input @id(1); required string<31> name @id(2); } message Response @id(3) { required bytes<32> data @id(1); } message Tick @id(4) {}";
-const PROFILE: &str = "profile version 2; endpoint { envelope = native_packet; } rpc Execute { request = Request; response = Response; } send Tick { delivery = unreliable; } direct Tick { delivery = unreliable; }";
+const NODE: &str = "rpc Execute(Request) -> Response; node demo { call Execute; serve Execute; send Tick; recv Tick; }";
 
-#[test]
-fn removed_contracts_are_errors_on_every_public_frontend() {
-    let schema = analyze_schema(&parse_schema(SCHEMA).unwrap()).unwrap();
-    for (profile, diagnostic) in [
-        (PROFILE.replace("version 2", "version 1"), "version 2"),
-        (
-            PROFILE.replace(
-                "response = Response;",
-                "response = Response; guarantee = replay;",
-            ),
-            "guarantee/replay",
-        ),
-        (
-            PROFILE.replace(
-                "response = Response;",
-                "response = Response; guarantee = correlate;",
-            ),
-            "guarantee/replay",
-        ),
-        (
-            PROFILE.replace(
-                "response = Response;",
-                "response = Response; request_operation_id = input;",
-            ),
-            "mapped",
-        ),
-        (
-            PROFILE.replace(
-                "response = Response;",
-                "response = Response; request_delivery = reliable;",
-            ),
-            "reliable",
-        ),
-        (
-            PROFILE.replace("delivery = unreliable", "delivery = reliable"),
-            "reliable",
-        ),
-        (PROFILE.replace("send Tick", "fifo Tick"), "LATEST/FIFO"),
-        (
-            PROFILE.replace("native_packet;", "native_packet; rpc_role = server;"),
-            "both RPC roles",
-        ),
-    ] {
-        let parsed = parse_binding_profile(&profile).unwrap();
-        let error = analyze_kernel_profile(&parsed, &schema)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains(diagnostic), "{error}");
-    }
-    assert!(
-        parse_binding_profile(&PROFILE.replace(
-            "response = Response;",
-            "response = Response; deferred = true;"
-        ))
-        .is_err()
-    );
-    let legacy = parse_binding_profile(&PROFILE.replace("version 2", "version 1")).unwrap();
-    assert!(wlc::analyze_binding_profile(&legacy, &schema).is_err());
-    assert!(
-        wlc::analyze_binding_profile(&parse_binding_profile(PROFILE).unwrap(), &schema).is_ok()
-    );
+fn generate(source: &str) -> wlc::GeneratedNodeC {
+    let ast = parse_schema(source).unwrap();
+    let schema = analyze_schema(&ast).unwrap();
+    let nodes = wlc::node::analyze_nodes(&ast, &schema).unwrap();
+    generate_node_c(&schema, &nodes, "demo").unwrap()
 }
 
-#[test]
-fn deterministic_composition_and_no_legacy_execution_artifacts() {
-    let schema = analyze_schema(&parse_schema(SCHEMA).unwrap()).unwrap();
-    let rpc = analyze_kernel_profile(
-        &parse_binding_profile(
-            "profile version 2; rpc Execute { request = Request; response = Response; }",
-        )
-        .unwrap(),
-        &schema,
-    )
-    .unwrap();
-    let direct = analyze_kernel_profile(&parse_binding_profile("profile version 2; endpoint { envelope = native_packet; } send Tick { delivery = unreliable; } direct Tick { delivery = unreliable; }").unwrap(), &schema).unwrap();
-    let a = wlc::compose_kernel_profiles(&[rpc.clone(), direct.clone()]).unwrap();
-    let b = wlc::compose_kernel_profiles(&[direct, rpc]).unwrap();
-    let a = generate_kernel_c(&schema, &a, "demo").unwrap();
-    assert_eq!(a, generate_kernel_c(&schema, &b, "demo").unwrap());
-    assert!(a.files["demo_kernel.h"].contains("KERNEL_PROFILE_VERSION 2U"));
-    for forbidden in [
-        "wl_ctx_t",
-        "wl_rpc_server_",
-        "wl_rpc_client_",
-        "wl_pump_",
-        "fingerprint",
-        "_runtime.h",
-        "reply_token",
-    ] {
-        assert!(
-            !a.files["demo_kernel.c"].contains(forbidden)
-                && !a.files["demo_kernel.h"].contains(forbidden),
-            "{forbidden}"
-        );
-    }
-    assert!(a.files["demo_kernel.h"].contains("extern \"C\" {"));
-    assert_eq!(a.files.len(), 6);
-}
-
-#[test]
-fn kernel_cli_generates_versioned_artifacts_and_rejects_reliable() {
-    let directory = tempdir().unwrap();
-    let schema = directory.path().join("demo.wl");
-    let profile = directory.path().join("demo.bind.wl");
-    let output = directory.path().join("out");
-    fs::write(&schema, SCHEMA).unwrap();
-    fs::write(&profile, PROFILE).unwrap();
-    let run = || {
-        assert_cmd::Command::cargo_bin("wlc")
-            .unwrap()
-            .arg("compile")
-            .arg(&schema)
-            .arg("--profile")
-            .arg(&profile)
-            .arg("--out-dir")
-            .arg(&output)
-            .output()
-            .unwrap()
-    };
-    let success = run();
-    assert!(
-        success.status.success(),
-        "{}",
-        String::from_utf8_lossy(&success.stderr)
-    );
-    let original = fs::read(output.join("demo_kernel.c")).unwrap();
-    assert!(output.join("demo_kernel_deployment.json").is_file());
-    assert!(!output.join("demo_runtime.c").exists());
-    fs::write(
-        &profile,
-        PROFILE.replace("delivery = unreliable", "delivery = reliable"),
-    )
-    .unwrap();
-    let failed = run();
-    assert!(!failed.status.success());
-    assert!(String::from_utf8_lossy(&failed.stderr).contains("reliable"));
-    assert_eq!(original, fs::read(output.join("demo_kernel.c")).unwrap());
-}
-
-#[test]
-fn different_schema_compiles_warning_clean_and_runs_without_old_core() {
+fn compile_and_run(generated: wlc::GeneratedNodeC, program: &str, connector: Option<&str>) {
     let root = std::env::var_os("WIRELINK_SOURCE_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
@@ -157,41 +22,11 @@ fn different_schema_compiles_warning_clean_and_runs_without_old_core() {
                 .unwrap()
                 .into()
         });
-    let schema = analyze_schema(&parse_schema(SCHEMA).unwrap()).unwrap();
-    let profile =
-        analyze_kernel_profile(&parse_binding_profile(PROFILE).unwrap(), &schema).unwrap();
-    let generated = generate_kernel_c(&schema, &profile, "demo").unwrap();
     let directory = tempdir().unwrap();
     for (name, content) in generated.files {
         fs::write(directory.path().join(name), content).unwrap();
     }
-    fs::write(directory.path().join("test.c"), r#"
-#include "demo_kernel.h"
-#include <stdlib.h>
-static unsigned callbacks;
-static wl_packet_submit_t sink(void *u, const uint8_t *p, size_t n, wl_packet_token_t t) {
-  (void)u; (void)p; (void)n; (void)t; return WL_PACKET_SENT;
-}
-static void done(void *u, wl_kernel_result_t r, const response_t *v) {
-  (void)u; if (r.outcome != WL_KERNEL_TIMED_OUT || v != NULL) abort(); ++callbacks;
-}
-int main(void) {
-  static demo_kernel_t endpoint; static wl_packet_port_t port; static uint8_t rx[2][2048];
-  wl_packet_config_t c = {.instance=99, .rx_storage=&rx[0][0], .rx_unit_size=2048,
-    .rx_storage_size=sizeof(rx), .submit=sink};
-  demo_kernel_handlers_t handlers = {0};
-  if (wl_packet_init(&port,&c) || demo_kernel_init(&endpoint,&port,&handlers,NULL,NULL)) abort();
-  request_t req = {.has_input=true,.input=INT32_MIN,.has_name=true,.name={.length=3,.data={'a',0,'b'}}};
-  wl_kernel_call_handle_t handle;
-  if (demo_kernel_execute_start(&endpoint,&req,0,1,done,NULL,&handle)) abort();
-  tick_t tick = {0};
-  if (demo_kernel_send_tick(&endpoint,&tick)) abort();
-  if (demo_kernel_step(&endpoint,0) || demo_kernel_step(&endpoint,1) || callbacks != 1) abort();
-  if (wl_kernel_close(&endpoint.core) || demo_kernel_step(&endpoint,1) || !wl_kernel_quiescent(&endpoint.core)) abort();
-  return 0;
-}
-"#).unwrap();
-    let prototype = root.to_path_buf();
+    fs::write(directory.path().join("test.c"), program).unwrap();
     let mut cc = Command::new(std::env::var("CC").unwrap_or_else(|_| "cc".into()));
     cc.args([
         "-std=c11",
@@ -207,16 +42,23 @@ int main(void) {
     cc.arg("-I")
         .arg(root.join("include"))
         .arg("-I")
-        .arg(prototype.join("include"))
-        .arg("-I")
         .arg(directory.path());
-    for file in ["demo.c", "demo_kernel.c", "test.c"] {
+    for file in ["demo.c", "test.c"] {
         cc.arg(directory.path().join(file));
     }
     for file in ["codec.c", "kernel.c", "packet_port.c"] {
-        cc.arg(prototype.join("src").join(file));
+        cc.arg(root.join("src").join(file));
+    }
+    if let Some(connector) = connector {
+        cc.arg(root.join("src/packet_stream.c"));
+        cc.arg(root.join("src").join(format!("{connector}_stream.c")));
+        if connector == "cobs_crc16" {
+            cc.arg(root.join("src/cobs.c")).arg(root.join("src/crc.c"));
+        }
     }
     let binary = directory.path().join("test");
+    // Deliberately no function/data sections or linker garbage collection:
+    // selected-node programs must not depend on unused handler elimination.
     let output = cc.arg("-o").arg(&binary).output().unwrap();
     assert!(
         output.status.success(),
@@ -232,151 +74,299 @@ int main(void) {
 }
 
 #[test]
-fn selected_stream_connectors_run_the_same_rpc_kernel() {
-    let root = std::env::var_os("WIRELINK_SOURCE_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .unwrap()
-                .into()
-        });
-    let schema = analyze_schema(&parse_schema(SCHEMA).unwrap()).unwrap();
-    for (envelope, connector, integrity) in [
-        ("cobs_stream", "cobs_crc16", "crc16"),
-        ("bus_length16", "length16_none", "none"),
+fn removed_contracts_are_errors_on_the_single_frontend() {
+    for removed in [
+        "profile version 1;",
+        "profile version 2;",
+        "endpoint { envelope=native_packet; }",
+        "node demo { guarantee = replay; }",
+        "node demo { guarantee = correlate; }",
+        "node demo { request_operation_id = input; }",
+        "node demo { request_delivery = reliable; }",
+        "node demo { send Tick { delivery = reliable; } }",
+        "node demo { fifo Tick; }",
+        "node demo { latest Tick; }",
+        "node demo { direct Tick; }",
+        "node demo { rpc_role = server; }",
+        "node demo { deferred = true; }",
     ] {
-        let profile = analyze_kernel_profile(
-            &parse_binding_profile(&PROFILE.replace("native_packet", envelope)).unwrap(),
-            &schema,
-        )
-        .unwrap();
-        let generated = generate_kernel_c(&schema, &profile, "demo").unwrap();
-        let manifest = &generated.files["demo_kernel_deployment.json"];
-        assert!(manifest.contains(&format!("\"envelope\": \"{envelope}\"")));
-        assert!(manifest.contains(&format!("\"integrity\": \"{integrity}\"")));
-        let transport = &generated.files["demo_kernel_transport.c"];
-        assert!(transport.contains(&format!("wl_packet_stream_{connector}_submit")));
-        assert!(!transport.contains("wl_frame_encode"));
-        assert!(!transport.contains(if connector == "cobs_crc16" {
-            "length16_none"
-        } else {
-            "cobs_crc16"
-        }));
-        let directory = tempdir().unwrap();
-        for (name, content) in generated.files {
-            fs::write(directory.path().join(name), content).unwrap();
-        }
-        fs::write(directory.path().join("test.c"), r#"
-#include "demo_kernel.h"
-#include "demo_kernel_transport.h"
-#include <stdlib.h>
-#include <string.h>
-static demo_kernel_t endpoint;
-static wl_packet_port_t port;
-static wl_packet_stream_t stream;
-static unsigned completed, effects;
-static wl_packet_submit_t sink(void *user, const uint8_t *data, size_t length, wl_packet_token_t token) {
-  (void)user; (void)token;
-  size_t consumed = 0;
-  if (demo_kernel_transport_feed(&stream, data, length, &consumed) || consumed != length) abort();
-  return WL_PACKET_SENT;
+        let source = format!("{SCHEMA} {removed}");
+        let rejected = match parse_schema(&source) {
+            Err(_) => true,
+            Ok(ast) => wlc::node::analyze_nodes(&ast, &analyze_schema(&ast).unwrap()).is_err(),
+        };
+        assert!(rejected, "accepted removed syntax: {removed}");
+    }
+    generate(&format!("{SCHEMA} {NODE}"));
 }
-static int32_t execute(void *user, const request_t *request, response_t *response) {
-  (void)user;
-  if (request->input != INT32_MIN || request->name.length != 3 ||
-      memcmp(request->name.data, "a\0b", 3)) abort();
-  ++effects;
-  response->has_data = true; response->data.length = 32;
+
+#[test]
+fn deterministic_composition_and_no_legacy_execution_artifacts() {
+    let a = generate(&format!("{SCHEMA} {NODE}"));
+    let b = generate(&format!(
+        "{SCHEMA} node demo {{ recv Tick; serve Execute; send Tick; call Execute; }} rpc Execute(Request) -> Response;"
+    ));
+    assert_eq!(a, b);
+    for forbidden in [
+        "wl_ctx_t",
+        "wl_rpc_server_",
+        "wl_rpc_client_",
+        "wl_pump_",
+        "fingerprint",
+        "_runtime.h",
+        "reply_token",
+        "_kernel.h",
+    ] {
+        assert!(
+            !a.files["demo.c"].contains(forbidden) && !a.files["demo.h"].contains(forbidden),
+            "{forbidden}"
+        );
+    }
+    assert!(a.files["demo.h"].contains("extern \"C\" {"));
+    assert_eq!(a.files.len(), 3);
+    assert!(a.files["demo_manifest.json"].contains("\"nodes\""));
+}
+
+#[test]
+fn node_cli_generates_versioned_artifacts_and_rejects_reliable() {
+    let directory = tempdir().unwrap();
+    let schema = directory.path().join("demo.wl");
+    let output = directory.path().join("out");
+    fs::write(&schema, format!("{SCHEMA} {NODE}")).unwrap();
+    let run = || {
+        Command::new(env!("CARGO_BIN_EXE_wlc"))
+            .arg("compile")
+            .arg(&schema)
+            .arg("--out-dir")
+            .arg(&output)
+            .output()
+            .unwrap()
+    };
+    let success = run();
+    assert!(
+        success.status.success(),
+        "{}",
+        String::from_utf8_lossy(&success.stderr)
+    );
+    let original = fs::read(output.join("demo.c")).unwrap();
+    assert!(output.join("demo_manifest.json").is_file());
+    assert!(!output.join("demo_runtime.c").exists());
+    fs::write(
+        &schema,
+        format!(
+            "{SCHEMA} {}",
+            NODE.replace("send Tick;", "send Tick { delivery = reliable; }")
+        ),
+    )
+    .unwrap();
+    assert!(!run().status.success());
+    assert_eq!(original, fs::read(output.join("demo.c")).unwrap());
+}
+
+#[test]
+fn dynamic_external_node_compiles_and_times_out_without_old_core() {
+    let generated = generate(&format!(
+        "{SCHEMA} {}",
+        NODE.replace(
+            "node demo {",
+            "node demo { io = external; handlers = dynamic;"
+        )
+    ));
+    compile_and_run(
+        generated,
+        r#"
+#include "demo.h"
+#include <assert.h>
+static unsigned callbacks;
+static wl_packet_submit_t sink(void *u, const uint8_t *p, size_t n, wl_packet_token_t t) {
+  (void)u; (void)p; (void)n; (void)t; return WL_PACKET_SENT;
+}
+static void done(void *u, wl_kernel_result_t r, const response_t *v) {
+  assert(u == &callbacks && r.outcome == WL_KERNEL_TIMED_OUT && v == NULL); ++callbacks;
+}
+int main(void) {
+  static demo_node_t endpoint; static wl_packet_port_t port; static uint8_t rx[2][128];
+  wl_packet_config_t c = {.instance=99, .rx_storage=&rx[0][0], .rx_unit_size=sizeof(rx[0]),
+    .rx_storage_size=sizeof(rx), .submit=sink};
+  demo_handlers_t handlers = {0};
+  assert(wl_packet_init(&port,&c) == WL_OK);
+  assert(demo_init(&endpoint,&port,&handlers,NULL) == WL_OK);
+  request_t req = {.input=INT32_MIN,.name={.length=3,.data={'a',0,'b'}}};
+  assert(demo_call_execute_ex(&endpoint,&req,100000U,1U,done,&callbacks,NULL) == WL_OK);
+  tick_t tick = {0};
+  assert(demo_send_tick(&endpoint,&tick) == WL_OK);
+  assert(demo_step(&endpoint,100000U) == WL_OK && callbacks == 0U);
+  assert(demo_step(&endpoint,100001U) == WL_OK && callbacks == 1U);
+  assert(demo_close(&endpoint) == WL_OK && demo_step(&endpoint,100001U) == WL_OK);
+  assert(demo_quiescent(&endpoint));
+  return 0;
+}
+"#,
+        None,
+    );
+}
+
+#[test]
+fn selected_stream_connectors_run_static_rpc_and_abort_half_frames() {
+    for (framing, connector) in [("cobs_crc16", "cobs_crc16"), ("length16", "length16_none")] {
+        let generated = generate(&format!(
+            "{SCHEMA} {}",
+            NODE.replace("node demo {", &format!("node demo {{ framing = {framing};"))
+        ));
+        assert!(
+            generated.files["demo_manifest.json"].contains(&format!("\"framing\":\"{framing}\""))
+        );
+        assert!(
+            generated.files["demo.c"].contains(&format!("wl_packet_stream_{connector}_submit"))
+        );
+        assert!(!generated.files["demo.c"].contains("wl_frame_encode"));
+        assert!(
+            !generated.files["demo.c"].contains(if connector == "cobs_crc16" {
+                "length16_none"
+            } else {
+                "cobs_crc16"
+            })
+        );
+        compile_and_run(
+            generated,
+            r#"
+#include "demo.h"
+#include <assert.h>
+#include <string.h>
+static unsigned completed, effects;
+static uint8_t saved[256]; static size_t saved_length;
+wl_err_t demo_tx_write(demo_node_t *self, const uint8_t *data, size_t length) {
+  size_t consumed = 0;
+  assert(length <= sizeof(saved)); memcpy(saved, data, length); saved_length=length;
+  wl_err_t error = demo_rx_feed(self,data,length,&consumed);
+  assert(error == WL_OK && consumed == length);
+  return WL_OK;
+}
+void demo_on_tick(demo_node_t *self, const tick_t *tick) { (void)self; (void)tick; }
+int32_t demo_on_execute(demo_node_t *self, const request_t *request, response_t *response) {
+  (void)self;
+  assert(request->input == INT32_MIN && request->name.length == 3 && !memcmp(request->name.data,"a\0b",3));
+  ++effects; response->data.length = 32;
   for (unsigned i = 0; i < 32; ++i) response->data.data[i] = (uint8_t)i;
   return 0;
 }
-static void done(void *user, wl_kernel_result_t result, const response_t *response) {
-  (void)user;
-  if (result.outcome != WL_KERNEL_SUCCESS || !response || response->data.length != 32) abort();
-  for (unsigned i = 0; i < 32; ++i) if (response->data.data[i] != (uint8_t)i) abort();
+static void done(demo_node_t *self, wl_kernel_result_t result, const response_t *response) {
+  (void)self;
+  assert(result.outcome == WL_KERNEL_SUCCESS && response && response->data.length == 32);
+  for (unsigned i=0; i<32; ++i) assert(response->data.data[i] == (uint8_t)i);
   ++completed;
 }
 int main(void) {
-  static uint8_t rx[2][256], wire[256];
-  if (demo_kernel_transport_init(&stream, &port, 8877, (wl_span_t){&rx[0][0], sizeof(rx)},
-      256, (wl_span_t){wire,sizeof(wire)}, sink, NULL, NULL)) abort();
-  demo_kernel_handlers_t handlers = {.on_rpc_execute = execute};
-  if (demo_kernel_init(&endpoint, &port, &handlers, NULL, NULL)) abort();
-  request_t request = {.has_input=true, .input=INT32_MIN, .has_name=true,
-      .name={.length=3, .data={'a',0,'b'}}};
-  wl_kernel_call_handle_t call;
-  if (demo_kernel_execute_start(&endpoint, &request, 0, 100, done, NULL, &call)) abort();
-  memset(&request, 0, sizeof(request));
-  for (unsigned i = 0; i < 10 && !completed; ++i) if (demo_kernel_step(&endpoint, 0)) abort();
-  if (completed != 1 || effects != 1 || wl_kernel_close(&endpoint.core) ||
-      demo_kernel_step(&endpoint, 0) || !wl_kernel_quiescent(&endpoint.core)) abort();
+  static demo_node_t endpoint;
+  assert(demo_init(&endpoint) == WL_OK);
+  request_t request = {.input=INT32_MIN,.name={.length=3,.data={'a',0,'b'}}};
+  assert(demo_call_execute(&endpoint,&request,done) == WL_OK);
+  memset(&request,0,sizeof(request));
+  for (unsigned i=0; i<10 && !completed; ++i) assert(demo_step(&endpoint,100000U) == WL_OK);
+  assert(completed == 1 && effects == 1);
+  size_t consumed=0;
+  assert(demo_rx_feed(&endpoint,saved,saved_length/2,&consumed) == WL_OK && consumed==saved_length/2);
+  assert(demo_close(&endpoint) == WL_OK && demo_step(&endpoint,100001U) == WL_OK);
+  assert(demo_quiescent(&endpoint));
   return 0;
 }
-"#).unwrap();
-        let prototype = root.to_path_buf();
-        let mut cc = Command::new(std::env::var("CC").unwrap_or_else(|_| "cc".into()));
-        cc.args([
-            "-std=c11",
-            "-Os",
-            "-Wall",
-            "-Wextra",
-            "-Wpedantic",
-            "-Werror",
-        ]);
-        if std::env::var_os("WLC_TEST_SANITIZE").is_some() {
-            cc.args(["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]);
-        }
-        for include in [
-            root.join("include"),
-            prototype.join("include"),
-            directory.path().into(),
-        ] {
-            cc.arg("-I").arg(include);
-        }
-        for file in [
-            "demo.c",
-            "demo_kernel.c",
-            "demo_kernel_transport.c",
-            "test.c",
-        ] {
-            cc.arg(directory.path().join(file));
-        }
-        for file in ["codec.c", "kernel.c", "packet_port.c", "packet_stream.c"] {
-            cc.arg(prototype.join("src").join(file));
-        }
-        cc.arg(prototype.join("src").join(format!("{connector}_stream.c")));
-        if connector == "cobs_crc16" {
-            cc.arg(root.join("src/cobs.c")).arg(root.join("src/crc.c"));
-        }
-        let binary = directory.path().join("test");
-        let output = cc.arg("-o").arg(&binary).output().unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
+"#,
+            Some(connector),
         );
-        assert!(Command::new(binary).status().unwrap().success());
     }
+}
+
+#[test]
+fn pure_receive_stream_and_tx_ready_backpressure_recovery() {
+    for (framing, connector) in [
+        ("native", None),
+        ("cobs_crc16", Some("cobs_crc16")),
+        ("length16", Some("length16_none")),
+    ] {
+        let generated = generate(&format!(
+            "message Tick @id(4) {{ uint32 value @id(1); uint32 self @id(2); }} node pub {{ framing={framing}; send Tick; }} node sub {{ framing={framing}; recv Tick; }}"
+        ));
+        assert!(!generated.files["demo.h"].contains("sub_tx_write"));
+        assert!(generated.files["demo.h"].contains("PUB_REQUEST_FRAME_MAX 0U"));
+        assert!(generated.files["demo.h"].contains("SUB_REPLY_FRAME_MAX 0U"));
+        let receive = if connector.is_some() {
+            "size_t consumed=0; wl_err_t error=sub_rx_feed(&subscriber,data,length,&consumed); assert(consumed==length); return error;"
+        } else {
+            "return sub_rx_packet(&subscriber,data,length);"
+        };
+        compile_and_run(
+            generated,
+            &format!(
+                r#"
+#include "demo.h"
+#include <assert.h>
+static sub_node_t subscriber;
+static unsigned attempts, deliveries;
+wl_err_t pub_tx_write(pub_node_t *self, const uint8_t *data, size_t length) {{
+  (void)self; if (++attempts==1U) return WL_ERR_WOULD_BLOCK;
+  {receive}
+}}
+void sub_on_tick(sub_node_t *self, const tick_t *tick) {{
+  assert(self==&subscriber && tick->value==42U && tick->self==7U); ++deliveries;
+}}
+int main(void) {{
+  pub_node_t publisher;
+  assert(pub_init(&publisher)==WL_OK && sub_init(&subscriber)==WL_OK);
+  assert(pub_send_tick_val(&publisher,42U,7U)==WL_OK);
+  assert(pub_step(&publisher,0U)==WL_OK && attempts==1U);
+  assert(pub_step(&publisher,1U)==WL_OK && attempts==1U);
+  pub_tx_ready(&publisher);
+  assert(pub_step(&publisher,2U)==WL_OK && attempts==2U);
+  assert(sub_step(&subscriber,2U)==WL_OK && deliveries==1U);
+  assert(pub_close(&publisher)==WL_OK && sub_close(&subscriber)==WL_OK);
+  assert(pub_step(&publisher,3U)==WL_OK && sub_step(&subscriber,3U)==WL_OK);
+  assert(pub_quiescent(&publisher) && sub_quiescent(&subscriber));
+  return 0;
+}}
+"#
+            ),
+            connector,
+        );
+    }
+}
+
+#[test]
+fn selected_client_links_without_server_handlers_under_default_link_options() {
+    let ast = parse_schema(&format!("{SCHEMA} rpc Execute(Request)->Response; node server {{ serve Execute; }} node client {{ call Execute; }}")).unwrap();
+    let schema = analyze_schema(&ast).unwrap();
+    let nodes = wlc::node::analyze_nodes(&ast, &schema).unwrap();
+    let selected = wlc::node::select_nodes(&nodes, Some("client"), false).unwrap();
+    let generated = generate_node_c(&schema, &selected, "demo").unwrap();
+    assert!(!generated.files["demo.h"].contains("server_on_execute"));
+    assert!(!generated.files["demo.h"].contains("request_decode("));
+    assert!(!generated.files["demo.h"].contains("response_encode("));
+    compile_and_run(
+        generated,
+        r#"
+#include "demo.h"
+#include <assert.h>
+wl_err_t client_tx_write(client_node_t *self,const uint8_t *data,size_t length) {
+  (void)self; (void)data; (void)length; return WL_OK;
+}
+int main(void) { client_node_t client; assert(client_init(&client)==WL_OK);
+  assert(client_close(&client)==WL_OK && client_step(&client,0U)==WL_OK && client_quiescent(&client)); return 0; }
+"#,
+        None,
+    );
 }
 
 #[test]
 fn default_frontend_rejects_legacy_outputs_and_reports_current_plan() {
     let dir = tempdir().unwrap();
     let schema = dir.path().join("demo.wl");
-    let profile = dir.path().join("demo.bind.wl");
     let output = dir.path().join("out");
     fs::create_dir(&output).unwrap();
-    fs::write(&schema, SCHEMA).unwrap();
-    fs::write(&profile, PROFILE).unwrap();
+    fs::write(&schema, format!("{SCHEMA} {NODE}")).unwrap();
     fs::write(output.join("demo_runtime.c"), "preserve user bytes").unwrap();
     let run = |command: &str| {
-        assert_cmd::Command::cargo_bin("wlc")
-            .unwrap()
+        Command::new(env!("CARGO_BIN_EXE_wlc"))
             .arg(command)
             .arg(&schema)
-            .arg("--profile")
-            .arg(&profile)
             .arg("--out-dir")
             .arg(&output)
             .output()
@@ -389,16 +379,13 @@ fn default_frontend_rejects_legacy_outputs_and_reports_current_plan() {
         fs::read_to_string(output.join("demo_runtime.c")).unwrap(),
         "preserve user bytes"
     );
-    assert!(!output.join("demo_kernel.c").exists());
-    let failed = run("compile-runtime");
-    assert!(!failed.status.success());
-    assert!(String::from_utf8_lossy(&failed.stderr).contains("compile-runtime was removed"));
-    let result = assert_cmd::Command::cargo_bin("wlc")
-        .unwrap()
+    assert!(!output.join("demo.c").exists());
+    for command in ["compile-runtime", "compile-kernel"] {
+        assert!(!run(command).status.success());
+    }
+    let result = Command::new(env!("CARGO_BIN_EXE_wlc"))
         .arg("plan")
         .arg(&schema)
-        .arg("--profile")
-        .arg(&profile)
         .output()
         .unwrap();
     assert!(
@@ -407,7 +394,7 @@ fn default_frontend_rejects_legacy_outputs_and_reports_current_plan() {
         String::from_utf8_lossy(&result.stderr)
     );
     let text = String::from_utf8(result.stdout).unwrap();
-    assert!(text.contains("wirelink-binding-plan-v2") && text.contains("\"call_slots\": 4"));
+    assert!(text.contains("wirelink-node-plan-v1") && text.contains("\"request_frame_capacity\""));
     assert!(!text.contains("replay_methods") && !text.contains("pending_response_methods"));
 }
 
@@ -415,9 +402,8 @@ fn default_frontend_rejects_legacy_outputs_and_reports_current_plan() {
 fn cli_and_build_tools_share_c_module_name_normalization() {
     let dir = tempdir().unwrap();
     let schema = dir.path().join("switch.wl");
-    fs::write(&schema, "version 1; message Empty @id(1) {}").unwrap();
-    let name = assert_cmd::Command::cargo_bin("wlc")
-        .unwrap()
+    fs::write(&schema, "message Empty @id(1) {}").unwrap();
+    let name = Command::new(env!("CARGO_BIN_EXE_wlc"))
         .arg("module-name")
         .arg(&schema)
         .output()
@@ -425,14 +411,16 @@ fn cli_and_build_tools_share_c_module_name_normalization() {
     assert!(name.status.success());
     assert_eq!(name.stdout, b"switch_\n");
     let out = dir.path().join("out");
-    assert_cmd::Command::cargo_bin("wlc")
-        .unwrap()
-        .arg("compile")
-        .arg(&schema)
-        .arg("--out-dir")
-        .arg(&out)
-        .assert()
-        .success();
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_wlc"))
+            .arg("compile")
+            .arg(&schema)
+            .arg("--out-dir")
+            .arg(&out)
+            .status()
+            .unwrap()
+            .success()
+    );
     assert!(out.join("switch_.c").exists() && out.join("switch_.h").exists());
     assert!(
         fs::read_to_string(out.join("switch_.c"))

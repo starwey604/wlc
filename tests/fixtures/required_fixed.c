@@ -20,11 +20,9 @@ static uint32_t random32(void) {
       size_t length = SIZE_MAX - 7U; \
       wl_codec_status_t a = name##_encode(&(value), (nulls & 1U) ? NULL : actual + 1, cap, \
                                            (nulls & 2U) ? NULL : &length); \
-      wl_codec_status_t expect = size == SIZE_MAX \
-          ? WL_CODEC_ERR_MISSING_REQUIRED_FIELD \
-          : (((nulls & 1U) || (nulls & 2U)) \
+      wl_codec_status_t expect = ((nulls & 1U) || (nulls & 2U)) \
                  ? WL_CODEC_ERR_INVALID_VALUE \
-                 : (cap < size ? WL_CODEC_ERR_CAPACITY : WL_CODEC_OK)); \
+                 : (cap < size ? WL_CODEC_ERR_CAPACITY : WL_CODEC_OK); \
       assert(a == expect); \
       if (a != WL_CODEC_OK) { \
         for (size_t i = 0; i < sizeof(actual); ++i) assert(actual[i] == 0xa5); \
@@ -52,17 +50,23 @@ static void null_values(void) {
 int main(void) {
   null_values();
   const uint8_t golden[] = {13,4,3,2,1,21,0,0,0,0,29,0xff,0xff,0xff,0xff,37,0xa5,0,0,0};
-  sample_t sample = {.has_sequence=true, .sequence=UINT32_C(0x01020304), .has_tick=true,
-    .tick=0, .has_value=true, .value=UINT32_MAX, .has_flags=true, .flags=0xa5};
+  sample_t sample = {.sequence=UINT32_C(0x01020304), .tick=0, .value=UINT32_MAX, .flags=0xa5};
   uint8_t encoded[20]; size_t length = 0;
   assert(sample_encode(&sample, encoded, sizeof(encoded), &length) == WL_CODEC_OK);
   assert(length == sizeof(golden) && memcmp(encoded, golden, sizeof(golden)) == 0);
+  ENCODE_CHECK(sample, sample);
   for (unsigned mask = 0; mask < 16; ++mask) {
-    sample.has_sequence = (mask & 1U) != 0; sample.has_tick = (mask & 2U) != 0;
-    sample.has_value = (mask & 4U) != 0; sample.has_flags = (mask & 8U) != 0;
-    assert(sample_encoded_size(&sample) == (mask == 15 ? 20 : SIZE_MAX));
-    ENCODE_CHECK(sample, sample);
-    if (mask != 15) assert(sample_encode(&sample, NULL, 0, NULL) == WL_CODEC_ERR_MISSING_REQUIRED_FIELD);
+    uint8_t selected[sizeof(golden)]; size_t selected_length = 0;
+    for (unsigned field = 0; field < 4; ++field) {
+      if ((mask & (1U << field)) != 0U) {
+        memcpy(selected + selected_length, golden + field * 5U, 5U);
+        selected_length += 5U;
+      }
+    }
+    sample_t decoded = sample;
+    assert(sample_decode(selected, selected_length, &decoded) ==
+           (mask == 15 ? WL_CODEC_OK : WL_CODEC_ERR_MISSING_REQUIRED_FIELD));
+    if (mask != 15) assert(memcmp(&decoded, &sample, sizeof(sample)) == 0);
   }
   for (unsigned r = 0; r < 128; ++r) {
     wide_t wide = {0}; twin_t twin = {0};
@@ -74,16 +78,10 @@ int main(void) {
     memcpy(&wide.c, &f32, sizeof(f32)); memcpy(&wide.d, &f64, sizeof(f64));
     twin.first = wide.a; twin.second = wide.b;
     memcpy(&twin.third, &f32, sizeof(f32)); memcpy(&twin.fourth, &f64, sizeof(f64));
-    for (unsigned mask = 0; mask < 16; ++mask) {
-      wide.has_a = twin.has_first = (mask & 1U) != 0;
-      wide.has_b = twin.has_second = (mask & 2U) != 0;
-      wide.has_c = twin.has_third = (mask & 4U) != 0;
-      wide.has_d = twin.has_fourth = (mask & 8U) != 0;
-      ENCODE_CHECK(wide, wide); ENCODE_CHECK(twin, twin);
-    }
+    ENCODE_CHECK(wide, wide); ENCODE_CHECK(twin, twin);
   }
-  optional_t optional = {.has_a=true,.a=1,.has_b=false}; ENCODE_CHECK(optional, optional);
+  optional_t optional = {.a=1,.has_b=false}; ENCODE_CHECK(optional, optional);
   optional.has_b=true; optional.b=UINT32_MAX; ENCODE_CHECK(optional, optional);
-  variable_t variable = {.has_a=true,.a=UINT32_MAX,.has_b=true,.b=1}; ENCODE_CHECK(variable, variable);
+  variable_t variable = {.a=UINT32_MAX,.b=1}; ENCODE_CHECK(variable, variable);
   return 0;
 }

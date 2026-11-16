@@ -81,7 +81,9 @@ fn visit(
     let mut ranges = Vec::new();
     // Parsing already validated `version N;`; blanks preserve diagnostic lines.
     let tokens = tokenize(&source).expect("parsed schema tokenizes");
-    ranges.push(0..tokens[2].span.offset + tokens[2].span.length);
+    if matches!(tokens[0].kind, crate::lexer::TokenKind::Version) {
+        ranges.push(0..tokens[2].span.offset + tokens[2].span.length);
+    }
     for import in &schema.imports {
         visit(
             &path

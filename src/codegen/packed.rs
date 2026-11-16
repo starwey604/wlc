@@ -33,11 +33,22 @@ pub(super) fn source(
     } else {
         "wl_codec_get_le64"
     };
-    let absent_size = if recipe.required { "SIZE_MAX" } else { "0U" };
-    let absent_encode = if recipe.required {
-        "return WL_CODEC_ERR_MISSING_REQUIRED_FIELD;"
+    let optional_measure = if recipe.required {
+        String::new()
     } else {
-        "{\n      if (out_length == NULL) {\n        return WL_CODEC_ERR_INVALID_VALUE;\n      }\n      *out_length = 0U;\n      return WL_CODEC_OK;\n    }"
+        format!("  if (!value->has_{ident}) return 0U;\n")
+    };
+    let optional_encode = if recipe.required {
+        String::new()
+    } else {
+        format!(
+            "  if (!value->has_{ident}) {{\n    if (out_length == NULL) return WL_CODEC_ERR_INVALID_VALUE;\n    *out_length = 0U;\n    return WL_CODEC_OK;\n  }}\n"
+        )
+    };
+    let optional_presence = if recipe.required {
+        String::new()
+    } else {
+        format!("      out->has_{ident} = true;\n")
     };
 
     let mut template = include_str!("../packed_codec.c.in").to_owned();
@@ -64,8 +75,9 @@ pub(super) fn source(
         ("@NAME@", &name),
         ("@TYPE@", &ty),
         ("@FIELD@", &ident),
-        ("@ABSENT_SIZE@", absent_size),
-        ("@ABSENT_ENCODE@", absent_encode),
+        ("@OPTIONAL_MEASURE@", &optional_measure),
+        ("@OPTIONAL_ENCODE@", &optional_encode),
+        ("@OPTIONAL_PRESENCE@", &optional_presence),
         ("@PREFIX_BYTES@", &prefix_len),
         ("@PREFIX_INIT@", &prefix),
         ("@COUNT@", &count),

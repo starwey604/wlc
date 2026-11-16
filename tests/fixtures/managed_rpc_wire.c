@@ -27,14 +27,14 @@ static void headers(void) {
 }
 static void payloads(void) {
   const uint32_t values[] = {0U, 1U, 63U, 64U, 127U, 128U, 16383U, 16384U, UINT32_MAX};
-  request_t request = {.has_first = true, .has_second = true, .has_third = true}, decoded;
+  request_t request = {0}, decoded;
   uint8_t public_wire[32]; size_t public_length;
   for (size_t i = 0; i < sizeof(values) / sizeof(values[0]); ++i) {
     request.first = values[i]; request.second = ~values[i]; request.third = values[i] ^ UINT32_C(0xA5A5A5A5);
     assert(request_encode(&request, public_wire, sizeof(public_wire), &public_length) == WL_CODEC_OK);
     assert(public_wire[0] == 13U && public_length == 15U);
     assert(request_decode(public_wire, public_length, &decoded) == WL_CODEC_OK);
-    assert(decoded.has_first && decoded.has_second && decoded.has_third && decoded.first == request.first && decoded.second == request.second && decoded.third == request.third);
+    assert(decoded.first == request.first && decoded.second == request.second && decoded.third == request.third);
     public_wire[public_length] = 0x20U; public_wire[public_length + 1U] = 0x96U; public_wire[public_length + 2U] = 0x01U;
     assert(request_decode(public_wire, public_length + 3U, &decoded) == WL_CODEC_OK);
     assert(decoded.first == request.first && decoded.second == request.second && decoded.third == request.third);
@@ -43,19 +43,19 @@ static void payloads(void) {
   assert(request_decode(wire_type_bad, sizeof(wire_type_bad), &decoded) == WL_CODEC_ERR_WIRE_TYPE);
   uint8_t encoded[32]; size_t length;
   response_t response = {.has_reply = true, .reply = UINT32_MAX, .has_nested = true}, got;
-  response.nested.has_scalar = response.nested.has_array = true;
+  response.nested.has_scalar = true;
   response.nested.scalar = UINT32_MAX;
   response.nested.array[0] = 0U; response.nested.array[1] = UINT32_MAX;
   assert(response_encode(&response, encoded, sizeof(encoded), &length) == WL_CODEC_OK);
   assert(response_decode(encoded, length, &got) == WL_CODEC_OK);
-  assert(got.has_nested && got.nested.has_scalar && got.nested.scalar == UINT32_MAX && got.nested.has_array && got.nested.array[1] == UINT32_MAX);
+  assert(got.has_nested && got.nested.has_scalar && got.nested.scalar == UINT32_MAX && got.nested.array[1] == UINT32_MAX);
 }
 static void names(void) {
   uint8_t encoded[16]; size_t length;
-  wlc_foo_t one = {.has_wlc_foo_encode = true, .wlc_foo_encode = UINT32_MAX}, decoded;
+  wlc_foo_t one = {.wlc_foo_encode = UINT32_MAX}, decoded;
   assert(wlc_foo_encode(&one, encoded, sizeof(encoded), &length) == WL_CODEC_OK);
   assert(wlc_foo_decode(encoded, length, &decoded) == WL_CODEC_OK);
-  assert(decoded.has_wlc_foo_encode && decoded.wlc_foo_encode == UINT32_MAX);
+  assert(decoded.wlc_foo_encode == UINT32_MAX);
   request_extra_t two = {.has_request_extra_encode = true, .request_extra_encode = UINT32_MAX,
       .has_wlc_clear = true, .wlc_clear = 19U}, got;
   assert(request_extra_encode(&two, encoded, sizeof(encoded), &length) == WL_CODEC_OK);

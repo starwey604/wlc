@@ -2,9 +2,10 @@
 //! Compact, reviewed artifact snapshots. Not a wire-format compatibility test.
 use std::{fs, path::PathBuf};
 use wlc::{
-    ManifestArtifact, analyze_schema, binding_profile_identity, generate_c,
-    generate_codegen_manifest, parse_binding_profile, parse_schema,
+    ManifestArtifact, analyze_schema, generate_c, generate_codegen_manifest, node_identity,
+    parse_schema,
 };
+use wlc::{node::analyze_nodes, node_codegen::generate_node_c_with_pruning};
 
 fn codec_matrix() -> String {
     let mut schema = "version 1;\n".to_owned();
@@ -30,30 +31,29 @@ fn generated_artifacts_match_reviewed_snapshots() {
         (
             "empty",
             "version 1; message Empty @id(1) {}".into(),
-            Some(
-                "profile version 2; endpoint { envelope=native_packet; } send Empty { delivery=unreliable; }",
-            ),
+            Some("node empty { send Empty; }"),
         ),
         (
             "managed",
             include_str!("fixtures/codegen/runtime.wl").into(),
             Some(
-                "profile version 2; endpoint { envelope=native_packet; } rpc Apply { request=Request; response=Response; } rpc Query { request=QueryRequest; response=QueryResponse; } send Telemetry { delivery=unreliable; } direct Event { delivery=unreliable; }",
+                "rpc Apply(Request) -> Response; rpc Query(QueryRequest) -> QueryResponse; node business { call Apply; serve Apply; call Query; serve Query; send Telemetry; recv Event; }",
             ),
         ),
     ];
     let golden = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codegen");
-    for (case, source, profile_source) in cases {
-        let schema = analyze_schema(&parse_schema(&source).unwrap()).unwrap();
-        let (artifacts, identity) = if let Some(source) = profile_source {
-            let p = wlc::analyze_kernel_profile(&parse_binding_profile(source).unwrap(), &schema)
-                .unwrap();
-            let files = wlc::generate_kernel_c(&schema, &p, "business")
+    for (case, source, node_source) in cases {
+        let source = format!("{source}\n{}", node_source.unwrap_or(""));
+        let ast = parse_schema(&source).unwrap();
+        let schema = analyze_schema(&ast).unwrap();
+        let (artifacts, identity) = if node_source.is_some() {
+            let nodes = analyze_nodes(&ast, &schema).unwrap();
+            let files = generate_node_c_with_pruning(&schema, &nodes, "business", true)
                 .unwrap()
                 .files;
             (
                 files.into_iter().collect::<Vec<_>>(),
-                Some(binding_profile_identity(p.bindings())),
+                Some(node_identity(&nodes[0])),
             )
         } else {
             let c = generate_c(&schema, "business").unwrap();

@@ -182,6 +182,13 @@ pub fn analyze_schema(schema: &Schema) -> Result<SemanticModel, SemanticErrors> 
     for declaration in &schema.declarations {
         match declaration {
             Declaration::Message(message) => {
+                if message.fields.len() > 256 {
+                    errors.push(SemanticError::new(
+                        message.name.span,
+                        "a message supports at most 256 fields",
+                    ));
+                }
+
                 let mut fields = Vec::new();
                 for field in &message.fields {
                     let Some(ty) = resolve_type(&field.ty.value, &declarations_by_name) else {

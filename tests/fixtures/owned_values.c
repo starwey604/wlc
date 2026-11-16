@@ -34,10 +34,25 @@ int main(void) {
   {
     scalars_t scalar; uint8_t encoded[SCALARS_MAX_ENCODED_SIZE]; size_t length;
     scalars_clear(&scalar);
-    scalar.has_value = scalar.has_wide = scalar.has_real = true;
+    scalar.has_wide = scalar.has_real = true;
     scalar.value = UINT32_MAX; scalar.wide = UINT64_MAX; scalar.real = -0.0;
     CHECK(scalars_encode(&scalar, encoded, sizeof(encoded), &length) == WL_CODEC_OK);
     CHECK(mutate_scalars(encoded, length) == 0);
+  }
+
+  {
+    device_info_t info; device_info_clear(&info);
+    CHECK(device_info_set_name(&info, "sensor"));
+    CHECK(info.name.length == 6U && strcmp(info.name.data, "sensor") == 0);
+    CHECK(!device_info_set_greeting(&info, "four"));
+    CHECK(!info.has_greeting && info.greeting.length == 3U);
+    CHECK(device_info_set_greeting(&info, "hi"));
+    CHECK(info.has_greeting && info.greeting.length == 2U);
+    const uint8_t data[] = {1U, 2U, 3U, 4U, 5U};
+    CHECK(!device_info_set_serial(&info, data, sizeof(data)));
+    CHECK(!info.has_serial && info.serial.length == 0U);
+    CHECK(device_info_set_serial(&info, data, 4U));
+    CHECK(info.has_serial && info.serial.length == 4U && info.serial.data[3] == 4U);
   }
 
   uint8_t wire[SNAPSHOT_MAX_ENCODED_SIZE], again[sizeof(wire)];
@@ -45,12 +60,11 @@ int main(void) {
   size_t size = 0U, other_size = 0U;
   static const char embedded[] = {'A', '\0', (char)0xC3, (char)0xA9};
   snapshot_clear(&value);
-  CHECK(!value.has_device && !value.device.has_greeting);
+  CHECK(!value.device.has_greeting);
   CHECK(value.device.greeting.length == 3U && value.device.greeting.data[3] == '\0');
   CHECK(memcmp(value.device.greeting.data, "\xE7\x94\xB5", 3U) == 0);
   CHECK(value.device.state == STOPPED && !value.device.has_state);
-  value.has_device = value.has_samples = true;
-  value.device.has_name = value.device.has_serial = true;
+  value.device.has_serial = true;
   memcpy(value.device.name.data, embedded, sizeof(embedded));
   value.device.name.length = sizeof(embedded);
   value.device.serial.length = 4U;
@@ -98,7 +112,6 @@ int main(void) {
     static large_t large, copy;
     uint8_t big_wire[LARGE_MAX_ENCODED_SIZE];
     large_clear(&large);
-    large.has_payload = true;
     large.payload.length = sizeof(large.payload.data);
     for (size_t i = 0U; i < large.payload.length; ++i) large.payload.data[i] = (uint8_t)i;
     CHECK(large_encode(&large, big_wire, sizeof(big_wire), &size) == WL_CODEC_OK);

@@ -7,10 +7,7 @@
 
 use crate::{
     ast::Cardinality,
-    codec_plan::CodecProfile,
-    profile_semantic::{
-        BindingProfileModel, DeliveryPolicy, RetainedRouteKind, RpcGuarantee, RpcStatusDomain,
-    },
+    node::Node,
     semantic::{FieldDefault, ResolvedType, SemanticModel, Symbol},
 };
 
@@ -71,111 +68,35 @@ pub fn schema_identity(model: &SemanticModel) -> u64 {
     hash.finish()
 }
 
-/// Return an exact identity for a resolved application binding profile.
-///
-/// The profile identity covers resolved names, IDs, field numbers, service
-/// roles, and delivery policy. It intentionally does not include the complete
-/// schema; report it together with [`schema_identity`] when identifying a
-/// generated application contract.
-pub fn binding_profile_identity(model: &BindingProfileModel) -> u64 {
-    let mut hash = StableHash::new(b"wlc.binding-profile.identity.v1");
-    hash.u32(model.version);
-    hash.len(model.retained_routes.len());
-    for route in &model.retained_routes {
-        hash.u8(match route.kind {
-            RetainedRouteKind::Latest => 1,
-            RetainedRouteKind::Fifo => 2,
-        });
-        hash.string(&route.message_name);
-        hash.u16(route.message_id);
-        hash_delivery(&mut hash, route.delivery);
-        hash_codec_override(&mut hash, route.codec, CodecProfile::SchemaV1);
-    }
-    hash.len(model.rpc_services.len());
-    for service in &model.rpc_services {
-        hash.string(&service.name);
-        hash.string(&service.request_name);
-        hash.u16(service.request_id);
-        hash.string(&service.response_name);
-        hash.u16(service.response_id);
-        if service.is_managed() {
-            hash.string("runtime-owned-rpc-header");
-            hash.u8(4);
-            hash.u16(13);
-            hash.string("tagged-fixed32-as-varuint32");
-        } else {
-            let request = service.request_operation_id.as_ref().unwrap();
-            let response = service.response_operation_id.as_ref().unwrap();
-            let status = service.response_status.as_ref().unwrap();
-            hash.string(&request.name);
-            hash.u16(request.number);
-            hash.string(&response.name);
-            hash.u16(response.number);
-            hash.string(&status.name);
-            hash.u16(status.number);
-            match service.status_domain.as_ref().unwrap() {
-                RpcStatusDomain::Int32 => hash.u8(1),
-                RpcStatusDomain::Enum { name, id } => {
-                    hash.u8(2);
-                    hash.string(name);
-                    hash.u16(*id);
-                }
-            }
-        }
-        hash_delivery(&mut hash, service.request_delivery);
-        hash_delivery(&mut hash, service.response_delivery);
-        hash_codec_override(&mut hash, service.codec, CodecProfile::SchemaV1);
-        if service.guarantee == RpcGuarantee::Correlate {
-            hash.string("rpc-guarantee-v1");
-            hash.string("correlate");
-        }
-    }
-    // Preserve the exact identity of existing profiles without send bindings.
-    if !model.send_routes.is_empty() {
-        hash.string("outbound-routes-v1");
-        hash.len(model.send_routes.len());
-        for route in &model.send_routes {
+/// Exact normalized local node identity; report alongside schema_identity.
+pub fn node_identity(model: &Node) -> u64 {
+    let mut hash = StableHash::new(b"wlc.node.identity.v1");
+    hash.string(&model.name);
+    hash.string(model.framing.name());
+    hash.string(model.io.name());
+    hash.string(model.handlers.name());
+    hash.u32(model.timeout_ms);
+    for routes in [&model.send_routes, &model.recv_routes] {
+        hash.len(routes.len());
+        for route in routes {
             hash.string(&route.message_name);
             hash.u16(route.message_id);
-            hash_delivery(&mut hash, route.delivery);
-            hash_codec_override(&mut hash, route.codec, CodecProfile::SchemaV1);
+            hash.string(route.codec.name());
+            hash.string(route.handler.as_deref().unwrap_or(""));
         }
     }
-    let layout = model.endpoint_layout();
-    if !model.direct_routes.is_empty() {
-        hash.string("direct-routes-v1");
-        hash.len(model.direct_routes.len());
-        for route in &model.direct_routes {
-            hash.string(&route.message_name);
-            hash.u16(route.message_id);
-            hash_delivery(&mut hash, route.delivery);
-            hash_codec_override(&mut hash, route.codec, CodecProfile::SchemaV1);
+    for routes in [&model.calls, &model.serves] {
+        hash.len(routes.len());
+        for rpc in routes {
+            hash.string(&rpc.name);
+            hash.string(&rpc.request_name);
+            hash.u16(rpc.request_id);
+            hash.string(&rpc.response_name);
+            hash.u16(rpc.response_id);
+            hash.string(rpc.handler.as_deref().unwrap_or(""));
         }
-    }
-    if layout != crate::endpoint_layout::EndpointLayout::default() {
-        use crate::endpoint_layout::{EndpointEnvelope, EndpointRpcRole};
-        hash.string("endpoint-layout-v1");
-        hash.u8(match layout.envelope {
-            EndpointEnvelope::Any => 0,
-            EndpointEnvelope::NativePacket => 1,
-            EndpointEnvelope::CobsStream => 2,
-            EndpointEnvelope::BusLength16 => 3,
-        });
-        hash.u8(match layout.rpc_role {
-            EndpointRpcRole::Both => 0,
-            EndpointRpcRole::Client => 1,
-            EndpointRpcRole::Server => 2,
-        });
     }
     hash.finish()
-}
-
-// Explicit defaults normalize to the established tagged/replay identity.
-fn hash_codec_override(hash: &mut StableHash, codec: CodecProfile, default: CodecProfile) {
-    if codec != default {
-        hash.string("route-codec-v1");
-        hash.string(codec.name());
-    }
 }
 
 fn hash_cardinality(hash: &mut StableHash, cardinality: Cardinality) {
@@ -297,13 +218,6 @@ fn hash_default(hash: &mut StableHash, default: Option<&FieldDefault>) {
             hash.u32(u32::from(*value));
         }
     }
-}
-
-fn hash_delivery(hash: &mut StableHash, delivery: DeliveryPolicy) {
-    hash.u8(match delivery {
-        DeliveryPolicy::Unreliable => 1,
-        DeliveryPolicy::Reliable => 2,
-    });
 }
 
 struct StableHash(u64);

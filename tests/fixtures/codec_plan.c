@@ -6,6 +6,10 @@ static uint32_t next_random(void) {
   random_state ^= random_state << 13; random_state ^= random_state >> 17;
   random_state ^= random_state << 5; return random_state;
 }
+#define PRESENT_0(v) ((v).has_values)
+#define PRESENT_1(v) (1)
+#define SET_PRESENT_0(v, x) ((v).has_values = (x))
+#define SET_PRESENT_1(v, x) ((void)(v), (void)(x))
 #define TEST(name, is_required) do { \
   name##_t input, a, b, canary; \
   uint8_t wire[2048], actual[2048], mutated[2048]; \
@@ -13,8 +17,8 @@ static uint32_t next_random(void) {
   name##_clear(NULL); \
   memset(&a, 0xA5, sizeof(a)); \
   name##_clear(&a); \
-  assert(!a.has_values); \
-  name##_clear(&input); input.has_values = true; \
+  assert((is_required) || !PRESENT_##is_required(a)); \
+  name##_clear(&input); SET_PRESENT_##is_required(input, true); \
   for (size_t i = 0; i < sizeof(input.values); ++i) ((uint8_t *)input.values)[i] = (uint8_t)next_random(); \
   assert(name##_encode(&input, wire, sizeof(wire), &length) == WL_CODEC_OK); \
   assert(name##_encoded_size(&input) == length); \
@@ -32,9 +36,9 @@ static uint32_t next_random(void) {
     memset(&a, 0xA5, sizeof(a)); canary = a; \
     int ar = name##_decode(wire, n, &a); \
     if (n == length) { \
-      assert(ar == WL_CODEC_OK && a.has_values && memcmp(a.values, input.values, sizeof(a.values)) == 0); \
+      assert(ar == WL_CODEC_OK && PRESENT_##is_required(a) && memcmp(a.values, input.values, sizeof(a.values)) == 0); \
     } else if (n == 0 && !(is_required)) { \
-      assert(ar == WL_CODEC_OK && !a.has_values); \
+      assert(ar == WL_CODEC_OK && !PRESENT_##is_required(a)); \
     } else { \
       assert(ar != WL_CODEC_OK && memcmp(&a, &canary, sizeof(a)) == 0); \
     } \
@@ -52,18 +56,18 @@ static uint32_t next_random(void) {
     int ar = name##_decode(mutated, n, &a); \
     if (ar != WL_CODEC_OK) { \
       assert(memcmp(&a, &canary, sizeof(a)) == 0); \
-    } else if (a.has_values) { \
+    } else if (PRESENT_##is_required(a)) { \
       size_t bl = 0; \
       assert(name##_encode(&a, actual, sizeof(actual), &bl) == WL_CODEC_OK); \
       assert(name##_decode(actual, bl, &b) == WL_CODEC_OK); \
       assert(memcmp(a.values, b.values, sizeof(a.values)) == 0); \
     } \
   } \
-  input.has_values = false; \
+  SET_PRESENT_##is_required(input, false); \
   size_t an = 9999; \
   int absent_status = name##_encode(&input, actual, sizeof(actual), &an); \
   if (is_required) { \
-    assert(absent_status == WL_CODEC_ERR_MISSING_REQUIRED_FIELD); \
+    assert(absent_status == WL_CODEC_OK && an == length); \
   } else { \
     assert(absent_status == WL_CODEC_OK && an == 0U); \
   } \

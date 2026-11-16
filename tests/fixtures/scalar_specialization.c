@@ -58,7 +58,7 @@ static void test_wire(void) {
   uint8_t bytes[256];
   fixed_t fdec;
   assert(fixed_decode(fixed, sizeof(fixed), &fdec) == WL_CODEC_OK);
-  assert(fdec.has_a && fdec.a == UINT32_C(0x80000001));
+  assert(fdec.a == UINT32_C(0x80000001));
   assert(fdec.has_b && fdec.b == UINT64_C(0x8000000000000001));
   for (size_t n = 0; n <= sizeof(fixed); ++n) CHECK(fixed, fixed, n);
   for (size_t n = 0; n <= sizeof(var); ++n) CHECK(var, var, n);
@@ -117,11 +117,9 @@ static void test_wire(void) {
 int main(void) {
   assert(sizeof(var_t) == sizeof(var_twin_t));
   assert(offsetof(var_t, a) == offsetof(var_twin_t, id));
-  assert(offsetof(var_t, has_a) == offsetof(var_twin_t, has_id));
   assert(offsetof(var_t, b) == offsetof(var_twin_t, limit));
   assert(offsetof(var_t, has_b) == offsetof(var_twin_t, has_limit));
   assert(offsetof(var_t, c) == offsetof(var_twin_t, left));
-  assert(offsetof(var_t, has_c) == offsetof(var_twin_t, has_left));
   assert(offsetof(var_t, d) == offsetof(var_twin_t, right));
   assert(offsetof(var_t, has_d) == offsetof(var_twin_t, has_right));
   const uint8_t member_names[] = {13, 0x78, 0x56, 0x34, 0x12, 21, 1, 0, 0, 0};

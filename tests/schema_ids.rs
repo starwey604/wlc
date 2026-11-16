@@ -20,7 +20,7 @@ message Telemetry @id(10) {
   reserved 10;
   optional State state @id(1) [default = 0];
   optional Child child @id(2);
-  packed float32 joints[6] @id(3);
+  optional packed float32 joints[6] @id(3);
   required packed fixed32 ticks[2] @id(4);
   required int32 temperature_centi_c @id(5);
 }
@@ -46,7 +46,7 @@ message Telemetry = 10 {
   reserved 10;
   optional State state = 1 [default = 0];
   optional Child child = 2;
-  packed float32 joints[6] = 3;
+  optional packed float32 joints[6] = 3;
   required packed fixed32 ticks[2] = 4;
   required int32 temperature_centi_c = 5;
 }
@@ -251,8 +251,8 @@ fn annotations_preserve_duplicate_and_reserved_id_checks() {
 
 #[test]
 fn annotations_do_not_relax_default_value_rules() {
-    for cardinality in ["required", "repeated", "packed"] {
-        let name = if cardinality == "packed" {
+    for cardinality in ["required", "repeated", "packed", "optional packed"] {
+        let name = if cardinality.ends_with("packed") {
             "values[2]"
         } else {
             "value"
@@ -263,7 +263,14 @@ fn annotations_do_not_relax_default_value_rules() {
         let error = parse_schema(&source).unwrap_err();
         assert_eq!(
             error.message,
-            format!("{cardinality} fields cannot declare a default value")
+            format!(
+                "{} fields cannot declare a default value",
+                match cardinality {
+                    "packed" => "required",
+                    "optional packed" => "packed",
+                    other => other,
+                }
+            )
         );
     }
 }

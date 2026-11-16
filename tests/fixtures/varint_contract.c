@@ -133,8 +133,8 @@ static void decoder(const uint8_t *input, size_t length) {
   wl_codec_status_t sv = stream_chunk_decode(input, length, &v);
   assert(sa == sv);
   if (sa == WL_CODEC_OK) {
-    assert(a.has_sequence == v.has_sequence && a.sequence == v.sequence &&
-           a.has_data == v.has_data && a.data.length == v.data.length &&
+    assert(a.sequence == v.sequence &&
+           a.data.length == v.data.length &&
            (a.data.length == 0U || memcmp(a.data.data, v.data.data, a.data.length) == 0));
   } else {
     assert(memcmp(&v, &before, sizeof(v)) == 0);

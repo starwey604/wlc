@@ -28,30 +28,29 @@ int main(void) {
   memcpy(expected_grandparent + 2U, expected_parent, sizeof(expected_parent));
   const uint8_t *expected_child = POSITIONAL ? positional_child : tagged_child;
   const size_t child_length = POSITIONAL ? sizeof(positional_child) : sizeof(tagged_child);
-  child_t child = {.has_value = true, .value = UINT32_C(0x12345678)};
+  child_t child = {.value = UINT32_C(0x12345678)};
 #if PACKED
-  child.has_words = true;
   child.words[0] = 1U; child.words[1] = UINT32_MAX;
 #endif
-  parent_t parent = {.has_child = true, .child = child}, decoded;
-  grandparent_t grandparent = {.has_parent = true, .parent = parent}, grand_decoded;
+  parent_t parent = {.child = child}, decoded;
+  grandparent_t grandparent = {.parent = parent}, grand_decoded;
   uint8_t bytes[64]; size_t length;
   assert(child_encoded_size(&child) == child_length);
   assert(child_encode(&child, bytes, sizeof(bytes), &length) == WL_CODEC_OK);
   assert(length == child_length && memcmp(bytes, expected_child, length) == 0);
   child_t child_decoded;
   assert(child_decode(expected_child, child_length, &child_decoded) == WL_CODEC_OK);
-  assert(child_decoded.has_value && child_decoded.value == child.value);
+  assert(child_decoded.value == child.value);
 #if PACKED
-  assert(child_decoded.has_words && child_decoded.words[0] == 1U && child_decoded.words[1] == UINT32_MAX);
+  assert(child_decoded.words[0] == 1U && child_decoded.words[1] == UINT32_MAX);
 #endif
   assert(parent_encoded_size(&parent) == sizeof(expected_parent));
   assert(parent_encode(&parent, bytes, sizeof(bytes), &length) == WL_CODEC_OK);
   assert(length == sizeof(expected_parent) && memcmp(bytes, expected_parent, length) == 0);
   assert(parent_decode(expected_parent, sizeof(expected_parent), &decoded) == WL_CODEC_OK);
-  assert(decoded.has_child && decoded.child.has_value && decoded.child.value == child.value);
+  assert(decoded.child.value == child.value);
 #if PACKED
-  assert(decoded.child.has_words && decoded.child.words[0] == 1U && decoded.child.words[1] == UINT32_MAX);
+  assert(decoded.child.words[0] == 1U && decoded.child.words[1] == UINT32_MAX);
 #endif
   assert(grandparent_encode(&grandparent, bytes, sizeof(bytes), &length) == WL_CODEC_OK);
   assert(length == sizeof(expected_grandparent) && memcmp(bytes, expected_grandparent, length) == 0);

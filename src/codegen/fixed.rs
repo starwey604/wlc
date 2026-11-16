@@ -69,7 +69,9 @@ pub(super) fn shape_struct_def(plan: &MessagePlan<'_>, name: &str) -> String {
         writeln!(out, "  uint8_t _empty;").unwrap();
     } else {
         for (i, field) in plan.message.fields.iter().enumerate() {
-            writeln!(out, "  bool h{i};").unwrap();
+            if field.cardinality == Cardinality::Optional {
+                writeln!(out, "  bool h{i};").unwrap();
+            }
             writeln!(out, "  {} v{i};", c_type(&field.ty)).unwrap();
         }
     }
@@ -256,11 +258,6 @@ fn schema_v1_shape_source(
             "static size_t {name}_encoded_size(const void *value) {{\n  if (value == NULL) return SIZE_MAX;\n  {name}_t v;\n  memcpy(&v, value, sizeof(v));"
         )
         .unwrap();
-        for (i, field) in plan.message.fields.iter().enumerate() {
-            if field.cardinality == Cardinality::Required {
-                writeln!(out, "  if (!v.h{i}) return SIZE_MAX;").unwrap();
-            }
-        }
         if all_required_fixed {
             writeln!(out, "  return {max_size}U;\n}}\n").unwrap();
         } else {
@@ -272,15 +269,6 @@ fn schema_v1_shape_source(
             "static wl_codec_status_t {name}_encode(const void *value, uint8_t *out, size_t capacity, size_t *length) {{\n  if (value == NULL) return WL_CODEC_ERR_INVALID_VALUE;\n  {name}_t v;\n  memcpy(&v, value, sizeof(v));"
         )
         .unwrap();
-        for (i, field) in plan.message.fields.iter().enumerate() {
-            if field.cardinality == Cardinality::Required {
-                writeln!(
-                    out,
-                    "  if (!v.h{i}) return WL_CODEC_ERR_MISSING_REQUIRED_FIELD;"
-                )
-                .unwrap();
-            }
-        }
         if all_required_fixed {
             if max_size > 0 {
                 writeln!(
@@ -329,33 +317,43 @@ fn schema_v1_shape_source(
     if directions.decode {
         writeln!(
             out,
-            "static wl_codec_status_t {name}_decode(const uint8_t *input, size_t length, void *out) {{\n  if (out == NULL || (length != 0U && input == NULL)) return WL_CODEC_ERR_INVALID_VALUE;\n  {name}_t temp;\n  {name}_clear(&temp);\n  const uint8_t *cursor = input;\n  const uint8_t *end = length != 0U ? input + length : input;\n  while (cursor < end) {{\n    uint64_t wide_key = 0U;\n    wl_codec_status_t status = wl_codec_getv(&cursor, end, &wide_key);\n    if (status != WL_CODEC_OK) return status;\n    const uint64_t number = wide_key >> 3U;\n    const uint8_t wire = (uint8_t)(wide_key & 7U);\n    if (number == 0U || number > UINT16_MAX || (wire != 0U && wire != 1U && wire != 2U && wire != 5U))\n      return WL_CODEC_ERR_MALFORMED;\n    switch ((uint16_t)number) {{"
+            "static wl_codec_status_t {name}_decode(const uint8_t *input, size_t length, void *out) {{\n  if (out == NULL || (length != 0U && input == NULL)) return WL_CODEC_ERR_INVALID_VALUE;\n  {name}_t temp;\n  {name}_clear(&temp);\n  uint8_t seen = 0U;\n  const uint8_t *cursor = input;\n  const uint8_t *end = length != 0U ? input + length : input;\n  while (cursor < end) {{\n    uint64_t wide_key = 0U;\n    wl_codec_status_t status = wl_codec_getv(&cursor, end, &wide_key);\n    if (status != WL_CODEC_OK) return status;\n    const uint64_t number = wide_key >> 3U;\n    const uint8_t wire = (uint8_t)(wide_key & 7U);\n    if (number == 0U || number > UINT16_MAX || (wire != 0U && wire != 1U && wire != 2U && wire != 5U))\n      return WL_CODEC_ERR_MALFORMED;\n    switch ((uint16_t)number) {{"
         )
         .unwrap();
         for (i, field) in plan.message.fields.iter().enumerate() {
             let wire = plan.keys[i].wire;
+            let bit = 1_u8 << i;
             writeln!(
                 out,
-                "      case {}U: {{\n        if (wire != {wire}U) return WL_CODEC_ERR_WIRE_TYPE;\n        if (temp.h{i}) return WL_CODEC_ERR_DUPLICATE_FIELD;",
+                "      case {}U: {{\n        if (wire != {wire}U) return WL_CODEC_ERR_WIRE_TYPE;\n        if ((seen & {bit}U) != 0U) return WL_CODEC_ERR_DUPLICATE_FIELD;",
                 field.number
             )
             .unwrap();
             emit_scalar_read(&mut out, field, &format!("temp.v{i}"), "        ", false);
-            writeln!(out, "        temp.h{i} = true;\n        break;\n      }}").unwrap();
+            if field.cardinality == Cardinality::Optional {
+                writeln!(out, "        temp.h{i} = true;").unwrap();
+            }
+            writeln!(out, "        seen |= {bit}U;\n        break;\n      }}").unwrap();
         }
         writeln!(
             out,
             "      default: {{\n        status = wl_codec_skip(&cursor, end, wire);\n        if (status != WL_CODEC_OK) return status;\n        break;\n      }}\n    }}\n  }}"
         )
         .unwrap();
-        for (i, field) in plan.message.fields.iter().enumerate() {
-            if field.cardinality == Cardinality::Required {
-                writeln!(
-                    out,
-                    "  if (!temp.h{i}) return WL_CODEC_ERR_MISSING_REQUIRED_FIELD;"
-                )
-                .unwrap();
-            }
+        let required_mask =
+            plan.message
+                .fields
+                .iter()
+                .enumerate()
+                .fold(0_u8, |mask, (i, field)| {
+                    if field.cardinality == Cardinality::Required {
+                        mask | (1_u8 << i)
+                    } else {
+                        mask
+                    }
+                });
+        if required_mask != 0 {
+            writeln!(out, "  if ((seen & {required_mask}U) != {required_mask}U) return WL_CODEC_ERR_MISSING_REQUIRED_FIELD;").unwrap();
         }
         writeln!(
             out,

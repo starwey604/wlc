@@ -28,6 +28,7 @@ pub(crate) enum TokenKind {
     RightBracket,
     Less,
     Greater,
+    Arrow,
     End,
 }
 
@@ -89,6 +90,11 @@ impl Lexer<'_> {
             });
         };
         let kind = match character {
+            '-' if self.source[self.offset..].starts_with("->") => {
+                self.advance();
+                self.advance();
+                TokenKind::Arrow
+            }
             '=' => {
                 self.advance();
                 TokenKind::Equal

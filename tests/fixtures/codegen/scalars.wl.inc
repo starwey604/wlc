@@ -19,8 +19,8 @@ message Scalars @id(101) {
 }
 message Parent @id(102) { optional Scalars child @id(16); }
 message Borrowed @id(103) { repeated Scalars children @id(1); optional string text @id(2); }
-message Packed32 @id(104) { packed float32 samples[30] @id(1); }
+message Packed32 @id(104) { optional packed float32 samples[30] @id(1); }
 message Packed64 @id(105) { required packed float64 samples[64] @id(65535); }
 message PackedFixed @id(106) { required packed fixed64 samples[1] @id(16); }
-message PackedFixed32 @id(107) { packed fixed32 samples[128] @id(21); }
-message MixedPacked @id(108) { packed float32 samples[3] @id(1); optional uint32 sequence @id(2); }
+message PackedFixed32 @id(107) { optional packed fixed32 samples[128] @id(21); }
+message MixedPacked @id(108) { optional packed float32 samples[3] @id(1); optional uint32 sequence @id(2); }

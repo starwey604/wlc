@@ -63,7 +63,7 @@ pub struct ManifestArtifact<'a> {
 pub fn generate_codegen_manifest(
     module: &str,
     schema: &SemanticModel,
-    binding_profile_identity: Option<u64>,
+    node_identity: Option<u64>,
     artifacts: &[ManifestArtifact<'_>],
 ) -> String {
     let schema_identity = schema_identity(schema);
@@ -92,10 +92,10 @@ pub fn generate_codegen_manifest(
     push_json_string(&mut output, crate::IDENTITY_ALGORITHM);
     write!(
         output,
-        ",\n    \"schema\": \"0x{schema_identity:016x}\",\n    \"binding_profile\": "
+        ",\n    \"schema\": \"0x{schema_identity:016x}\",\n    \"node\": "
     )
     .unwrap();
-    match binding_profile_identity {
+    match node_identity {
         Some(identity) => write!(output, "\"0x{identity:016x}\"").unwrap(),
         None => output.push_str("null"),
     }

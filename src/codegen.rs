@@ -6,8 +6,8 @@ use miette::Diagnostic;
 use thiserror::Error;
 
 use crate::{
-    BindingProfileModel,
     codec_plan::{CodecPlan, CodecProfile},
+    node::Node,
     semantic::{ResolvedType, SemanticModel, Symbol},
 };
 
@@ -27,7 +27,7 @@ pub(crate) use descriptor::field_descriptor_data;
 use engine::emit_source;
 pub use names::c_identifier;
 pub use names::c_identifier as c_module_name;
-pub(crate) use names::{c_type, type_name, upper_snake};
+pub(crate) use names::{c_type, is_c_keyword, type_name, upper_snake};
 use symbols::Symbols;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -63,40 +63,41 @@ pub fn generate_c(model: &SemanticModel, module: &str) -> Result<GeneratedC, Cod
     emit_c(model, module, &codecs, &all_directions(model))
 }
 
-/// Generate a C11 codec obeying per-route profile codecs (without direction pruning).
-pub fn generate_c_for_profile(
+/// Generate codecs for selected nodes, optionally pruning unused directions.
+pub fn generate_c_for_nodes(
     model: &SemanticModel,
-    profile: &BindingProfileModel,
-    module: &str,
-) -> Result<GeneratedC, CodegenError> {
-    generate_c_with_directions(model, profile, module, false)
-}
-
-/// Internal entry point used by `compile-kernel` (prunes unused message directions).
-pub(crate) fn generate_c_with_directions(
-    model: &SemanticModel,
-    profile: &BindingProfileModel,
+    nodes: &[Node],
     module: &str,
     prune_routes: bool,
 ) -> Result<GeneratedC, CodegenError> {
     let mut selected = HashMap::new();
-    for route in &profile.send_routes {
-        selected.insert(route.message_id, route.codec);
-    }
-    for route in &profile.direct_routes {
-        if let Some(existing) = selected.insert(route.message_id, route.codec)
-            && existing != route.codec
-        {
-            return Err(CodegenError(format!(
-                "conflicting codec selection for message `{}`",
-                route.message_name
-            )));
+    for node in nodes {
+        for route in node.send_routes.iter().chain(&node.recv_routes) {
+            if let Some(existing) = selected.insert(route.message_id, route.codec)
+                && existing != route.codec
+            {
+                return Err(CodegenError(format!(
+                    "conflicting codec selection for message `{}`",
+                    route.message_name
+                )));
+            }
+        }
+        for rpc in node.calls.iter().chain(&node.serves) {
+            for id in [rpc.request_id, rpc.response_id] {
+                if let Some(existing) = selected.insert(id, CodecProfile::SchemaV1)
+                    && existing != CodecProfile::SchemaV1
+                {
+                    return Err(CodegenError(
+                        "RPC conflicts with ordinary positional codec".into(),
+                    ));
+                }
+            }
         }
     }
     let codecs = CodecPlan::with_overrides(model, CodecProfile::SchemaV1, selected)
         .map_err(|error| CodegenError(error.to_string()))?;
     let directions = if prune_routes {
-        route_directions(model, profile)
+        route_directions(model, nodes)
     } else {
         all_directions(model)
     };
@@ -114,10 +115,7 @@ fn all_directions(model: &SemanticModel) -> HashMap<u16, MessageDirections> {
         .collect()
 }
 
-fn route_directions(
-    model: &SemanticModel,
-    profile: &BindingProfileModel,
-) -> HashMap<u16, MessageDirections> {
+fn route_directions(model: &SemanticModel, nodes: &[Node]) -> HashMap<u16, MessageDirections> {
     let mut dirs: HashMap<u16, MessageDirections> = model
         .declarations
         .iter()
@@ -133,31 +131,30 @@ fn route_directions(
         })
         .collect();
 
-    for route in &profile.send_routes {
-        if let Some(entry) = dirs.get_mut(&route.message_id) {
-            entry.encode = true;
-        }
-    }
-    for route in &profile.direct_routes {
-        if let Some(entry) = dirs.get_mut(&route.message_id) {
-            entry.decode = true;
-        }
-    }
-    let layout = profile.endpoint_layout();
-    for service in &profile.rpc_services {
-        if layout.has_client() {
-            if let Some(entry) = dirs.get_mut(&service.request_id) {
+    for node in nodes {
+        for route in &node.send_routes {
+            if let Some(entry) = dirs.get_mut(&route.message_id) {
                 entry.encode = true;
             }
-            if let Some(entry) = dirs.get_mut(&service.response_id) {
+        }
+        for route in &node.recv_routes {
+            if let Some(entry) = dirs.get_mut(&route.message_id) {
                 entry.decode = true;
             }
         }
-        if layout.has_server() {
-            if let Some(entry) = dirs.get_mut(&service.request_id) {
+        for rpc in &node.calls {
+            if let Some(entry) = dirs.get_mut(&rpc.request_id) {
+                entry.encode = true;
+            }
+            if let Some(entry) = dirs.get_mut(&rpc.response_id) {
                 entry.decode = true;
             }
-            if let Some(entry) = dirs.get_mut(&service.response_id) {
+        }
+        for rpc in &node.serves {
+            if let Some(entry) = dirs.get_mut(&rpc.request_id) {
+                entry.decode = true;
+            }
+            if let Some(entry) = dirs.get_mut(&rpc.response_id) {
                 entry.encode = true;
             }
         }
@@ -188,6 +185,7 @@ fn emit_c(
     codecs: &CodecPlan<'_>,
     directions: &HashMap<u16, MessageDirections>,
 ) -> Result<GeneratedC, CodegenError> {
+    crate::node_codegen::check_names(schema, &[]).map_err(|e| CodegenError(e.to_string()))?;
     let model = plan::CModel::new(schema, module)?;
     let module = model.module;
     let messages = model.messages;

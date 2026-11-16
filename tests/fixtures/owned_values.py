@@ -17,7 +17,7 @@ class Serial(c.Structure):
 
 class DeviceInfo(c.Structure):
     _fields_ = [
-        ("has_name", c.c_bool), ("name", Name),
+        ("name", Name),
         ("has_greeting", c.c_bool), ("greeting", Greeting),
         ("has_serial", c.c_bool), ("serial", Serial),
         ("has_state", c.c_bool), ("state", c.c_int32),
@@ -37,7 +37,7 @@ assert decode(wire, 6, c.byref(value)) == 0
 copy = DeviceInfo.from_buffer_copy(value)
 c.memset(wire, 0xEE, c.sizeof(wire))
 c.memset(c.byref(value), 0xEE, c.sizeof(value))
-assert copy.has_name and copy.name.length == 4
+assert copy.name.length == 4
 assert bytes(copy.name.data[:4]) == b"A\0\xc3\xa9"
 assert bytes(copy.greeting.data[:3]) == "电".encode()
 assert not copy.has_greeting and copy.state == 1 and not copy.has_state
