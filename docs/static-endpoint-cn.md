@@ -25,7 +25,7 @@ node device {
 }
 ```
 
-使用 WLC 0.14.0 / 生成契约 0.14 与 Wirelink 0.14.0。RPC 固定使用 Schema-v1；普通消息可使用 `codec = positional_v1` 或 `@codec(positional_v1)`。节点路由要求有界类型，存储严格按所选 `call` / `serve` / `send` 角色裁剪。
+使用 生成契约为 1 的 WLC 与 Wirelink。RPC 固定使用 Schema-v1；普通消息可使用 `codec = positional_v1` 或 `@codec(positional_v1)`。节点路由要求有界类型，存储严格按所选 `call` / `serve` / `send` 角色裁剪。
 
 ## embedded 默认装配与 external 异步路径
 

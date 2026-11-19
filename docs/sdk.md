@@ -5,18 +5,18 @@
 Generate an installable C++20 client and typed Python sync/async package from a single `.wl` schema:
 
 ```sh
-wlc sdk device.wl --node host --name device --package-version 0.14.0 --out-dir sdk
+wlc sdk device.wl --node host --name device --package-version 0.0.99 --out-dir sdk
 cmake -S sdk -B build/sdk -DCMAKE_PREFIX_PATH=/path/to/wirelink-install
 cmake --build build/sdk --parallel
 ```
 
-Use WLC 0.14.0 / generated contract 0.14, binding source API 3, and matching Wirelink 0.14.0. The SDK package version is chosen by its author. Pass `--node` when multiple nodes declare `call` routes; if no explicit client node exists, `wlc sdk` synthesizes one from top-level `rpc` declarations. The generator projects the selected client to `io = external`, `handlers = static`, drops default completion bindings, and omits MCU embedded glue.
+Build with WLC and Wirelink that use codegen contract 1 and SDK binding source API 3. The SDK package version is chosen by its author. Pass `--node` when multiple nodes declare `call` routes; if no explicit client node exists, `wlc sdk` synthesizes one from top-level `rpc` declarations. The generator projects the selected client to `io = external`, `handlers = static`, drops default completion bindings, and omits MCU embedded glue.
 
 ## Build native libraries or a Python wheel
 
 Install Wirelink with `WIRELINK_BUILD_CPP_BINDINGS=ON`, `WIRELINK_BUILD_PLATFORM=ON`, and `CMAKE_POSITION_INDEPENDENT_CODE=ON`, supplying standalone Asio headers. Generated C ships inside the SDK source package, so building it needs no Rust/WLC checkout. CMake defaults `<NAME>_BUILD_PYTHON=OFF`; wheel packaging enables it, and `BUILD_TESTING` controls hand-written tests. See the generated README for exact package commands and the [Calculator guide](https://github.com/starwey604/wirelink/blob/main/examples/06_bindings/GUIDE.md) for a runnable C service and Python tests.
 
-CMake checks WLC version and codegen contract `0.14` in the included `<name>_manifest.json` against installed Wirelink package metadata. `wlc-sdk-build.json` records build metadata (`wirelink-sdk-build-v2`, kernel contract 1); it does not select linker layout. Rebuild WLC after changing compiled-in templates before regenerating. `--overwrite` replaces generated files only; keep custom tests and guides outside that inventory.
+CMake checks the codegen contract in `<name>_manifest.json` against the installed Wirelink package. `wlc-sdk-build.json` records the endpoint contract in the `wirelink-sdk-build-v3` format. Rebuild WLC after changing compiled-in templates before regenerating. `--overwrite` replaces generated files only; keep custom tests and guides outside that inventory.
 
 ## Share the native owner, retain results
 

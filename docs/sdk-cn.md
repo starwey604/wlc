@@ -5,18 +5,18 @@
 从同一 `.wl` 文件生成可安装的 C++20 客户端和带类型提示的 Python 同步/异步包：
 
 ```sh
-wlc sdk device.wl --node host --name device --package-version 0.14.0 --out-dir sdk
+wlc sdk device.wl --node host --name device --package-version 0.0.99 --out-dir sdk
 cmake -S sdk -B build/sdk -DCMAKE_PREFIX_PATH=/path/to/wirelink-install
 cmake --build build/sdk --parallel
 ```
 
-使用 WLC 0.14.0 / 生成契约 0.14、binding source API 3 与匹配的 Wirelink 0.14.0。SDK 包版本由作者指定。若有多个含 `call` 的节点须传 `--node`；无显式节点时可从顶层 `rpc` 合成客户端。生成器将目标节点投影为 `io = external`、`handlers = static` 的纯 RPC 客户端，移除节点固定完成回调及 MCU 的 embedded 物理胶水。
+构建使用生成契约 1、SDK 源码 API 版本 3 的 WLC 与 Wirelink。SDK 包版本由作者指定。若有多个含 `call` 的节点须传 `--node`；无显式节点时可从顶层 `rpc` 合成客户端。生成器将目标节点投影为 `io = external`、`handlers = static` 的纯 RPC 客户端，移除节点固定完成回调及 MCU 的 embedded 物理胶水。
 
 ## 构建原生库或 Python wheel
 
 安装 Wirelink 时启用 `WIRELINK_BUILD_CPP_BINDINGS=ON` 与 `WIRELINK_BUILD_PLATFORM=ON`，并提供 standalone Asio 头文件。Linux Python extension 静态依赖需要开启 `CMAKE_POSITION_INDEPENDENT_CODE=ON`。生成源码包内含已生成的 C 代码，编译无需 Rust/WLC。CMake 默认 `<NAME>_BUILD_PYTHON=OFF`，wheel 打包会自动启用；原生测试受 `BUILD_TESTING` 控制。具体包命令见生成目录 README；完整可运行 C 服务端与 Python 测试见 [Calculator 指南](https://github.com/starwey604/wirelink/blob/main/examples/06_bindings/GUIDE.md)。
 
-CMake 会对照已安装的 Wirelink 元数据校验随包 `<name>_manifest.json` 的 WLC 版本与生成契约 0.14。`wlc-sdk-build.json` 记录构建元数据（`wirelink-sdk-build-v2`、kernel contract 1），不控制链接布局。修改 WLC 内置模板后须重建编译器再重新生成。`--overwrite` 仅替换生成清单内的文件，应用测试与指南请放在生成清单之外。
+CMake 将 `<name>_manifest.json` 中的生成契约与已安装的 Wirelink 包比对。`wlc-sdk-build.json` 以 `wirelink-sdk-build-v3` 格式记录端点契约。修改 WLC 内置模板后须重建编译器再重新生成。`--overwrite` 仅替换生成清单内的文件，应用测试与指南请放在生成清单之外。
 
 ## 共用原生 owner，保存结果
 

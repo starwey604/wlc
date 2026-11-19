@@ -2,13 +2,13 @@
 
 [返回仓库首页](../README.md) · [工程文档总览](../docs/README.md) · [Wire v2 协议规范](../docs/wire-format.md) · [驱动移植指南](../docs/porting-adapters.md)
 
-**WLC**（Wirelink Compiler）负责校验 `.wl` 文件中的消息、RPC 和节点角色，生成**零堆分配（0 `malloc`）、字节 100% 确定**的纯 C11 编解码器与强类型节点，并可一键生成 **C++20 / Python 3.10+ UDP 客户端 SDK**。
+**WLC**（Wirelink Compiler）负责校验 `.wl` 文件中的消息、RPC 和节点角色，生成**零堆分配（0 `malloc`）**的纯 C11 编解码器与强类型节点，并可一键生成 **C++20 / Python 3.10+ UDP 客户端 SDK**。
 
 ---
 
 ## 一、 构建 WLC 与命令行速查
 
-在仓库根目录执行以下命令构建编译器并生成代码：
+WLC 和 Wirelink 当前的开发版本为 `0.0.99`，生成 C 的兼容性由独立的生成契约 `1` 决定。在 Wirelink 仓库根目录构建编译器并生成代码。
 
 ```sh
 cargo build --release --locked --manifest-path wlc/Cargo.toml
@@ -38,6 +38,7 @@ wlc compile examples/01_rpc/calculator.wl --all-nodes --out-dir build/loopback
 | `wlc validate app.wl [--previous old.wl]` | 校验语法、ID 唯一性、节点路由及可选的向后兼容演进规则 |
 | `wlc plan app.wl [--node <name> \| --all-nodes]` | 打印字段编码规划、节点各方向路由及编译期计算出的帧长上限 |
 | `wlc dependencies app.wl` | 输出包含所有传递 `import` 在内的 `.wl` 依赖文件路径列表 |
+| `wlc codegen-contract` | 输出生成 C 所需的契约整数 |
 | `wlc identity app.wl` | 输出确定性的 Schema 身份摘要 |
 
 ---

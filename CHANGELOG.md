@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.0.99
+
+- Generate C for the endpoint API and report integer codegen contract 1 in the
+  CLI and v2 manifest, independently of the compiler version.
+- Generate SDKs that check the installed core's codegen contract.
+- Run compiler and generated C tests on stable Rust in CI.
+
 ## 0.14.0
 
 - Replace `.bind.wl` profiles and `compile-kernel` with single-file `rpc` and

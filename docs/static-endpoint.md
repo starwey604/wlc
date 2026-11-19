@@ -25,7 +25,7 @@ node device {
 }
 ```
 
-Use WLC 0.14.0 / codegen contract 0.14 with matching Wirelink 0.14.0. RPC routes always use Schema-v1; ordinary messages may select `positional_v1` per node or per route. Node routes require bounded types, and TX storage is pruned by declared `call` / `serve` / `send` roles.
+Use WLC and Wirelink with codegen contract 1. RPC routes always use Schema-v1; ordinary messages may select `positional_v1` per node or per route. Node routes require bounded types, and TX storage is pruned by declared `call` / `serve` / `send` roles.
 
 ## Embedded defaults vs. external drivers
 
@@ -35,7 +35,7 @@ Use WLC 0.14.0 / codegen contract 0.14 with matching Wirelink 0.14.0. RPC routes
 
 ## Admission, stepping, and shutdown
 
-The underlying kernel provides **four outbound call slots, three reply slots, and one ordinary message snapshot**, driven by a single owner executing `init`, `send`, `call`, `cancel`, `step`, `close`, and `quiescent`.
+The endpoint provides **four outbound call slots, three reply slots, and one ordinary message snapshot**, driven by a single owner executing `init`, `send`, `call`, `cancel`, `step`, `close`, and `quiescent`.
 
 - **Simple call vs. `_ex`**: `<node>_call_<rpc>(self, &req, done)` passes the node pointer to `done` and arms the node's `timeout_ms` on the **next owner `step(now)`**. `<node>_call_<rpc>_ex(self, &req, now, timeout, done, user, out)` times from explicit `now` with custom `timeout`, `user` pointer, and optional cancellation handle.
 - **Handlers and callbacks**: Service handlers populate the response and return `0` or a nonzero `int32_t` business rejection status. Terminal callbacks borrow response views until return; bounded response structs can be copied by value. Local cancellation or timeout cannot roll back remote execution.
