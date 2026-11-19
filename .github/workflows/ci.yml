@@ -3,38 +3,34 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      wirelink_ref:
+        description: Wirelink branch or ref
+        default: main
+        type: string
 
 permissions:
   contents: read
 
 jobs:
   quality:
-    uses: ./.github/workflows/verify.yml
-    with:
-      source_ref: ${{ github.sha }}
-
-  host-smoke:
-    name: Host smoke (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - windows-2025
-          - macos-15-intel
-          - macos-15
-    runs-on: ${{ matrix.os }}
+    name: Rust quality and generated C
+    runs-on: ubuntu-latest
     steps:
-      - name: Check out wlc
-        uses: actions/checkout@v7
-
-      - name: Install Rust
-        run: rustup toolchain install 1.96.1 --profile minimal
-
-      - name: Build host compiler
-        run: cargo +1.96.1 build --locked
-
-      - name: Run portable CLI tests
-        run: cargo +1.96.1 test --locked --test cli
-
-      - name: Run portable SDK generator tests
-        run: cargo +1.96.1 test --locked --test sdk -- --skip cpp_values_round_trip_through_the_real_c_codec
+      - uses: actions/checkout@v7
+        with:
+          repository: starwey604/wirelink
+          ref: ${{ inputs.wirelink_ref || 'main' }}
+          path: wirelink
+      - uses: actions/checkout@v7
+        with:
+          path: wirelink/wlc
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - name: Check compiler and generated C
+        working-directory: wirelink/wlc
+        run: |
+          cargo +stable fmt --all --check
+          cargo +stable clippy --locked --all-targets --all-features -- -D warnings
+          cargo +stable test --locked

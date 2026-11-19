@@ -21,7 +21,7 @@ wlc module-name device.wl
 
 - **默认必选**：无修饰符字段与裸 `packed` 固定数组默认必选，不生成 `has_<field>`；仅 `optional` / `optional packed` 生成存在位。解码器仍验证所有必选字段在线上到齐。从旧版可选 `packed` 迁移时须显式改写为 `optional packed`。
 - **有界与无界存储**：`string<N>` / `bytes<N>` 将数据内联保存在消息结构体中，通过生成的 setter 检查容量并复制；无界 `string` / `bytes` 与 `repeated` 在独立 codec 中使用调用方借用视图/backing，节点路由要求消息有界。
-- **契约规则**：详情见 [Wire v2 与编码规范](https://github.com/starwey604/wirelink/blob/main/docs/wire-format.md) 与 [0.14 迁移说明](https://github.com/starwey604/wirelink/blob/main/docs/release-v0.14.0-cn.md)。
+- **契约规则**：详情见 [Wire v2 与编码规范](https://github.com/starwey604/wirelink/blob/main/docs/wire-format.md)。
 
 ## 校验组合与演进
 

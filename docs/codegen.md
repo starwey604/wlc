@@ -21,7 +21,7 @@ wlc module-name device.wl
 
 - **Default-required fields**: Unqualified fields and bare `packed` fixed arrays are required by default and omit `has_<field>`; only `optional` and `optional packed` emit presence members. Decoders still reject inputs missing any required field. Migrate legacy optional packed arrays explicitly to `optional packed`.
 - **Bounded vs. borrowed storage**: Bounded `string<N>` / `bytes<N>` store data inline in the message struct with checked setters. Unbounded `string` / `bytes` and `repeated` use caller-owned borrowed views/backing in standalone codecs; node routes require bounded frames.
-- **Wire rules**: See [Wire v2 format](https://github.com/starwey604/wirelink/blob/main/docs/wire-format.md) and the [0.14 migration notes](https://github.com/starwey604/wirelink/blob/main/docs/release-v0.14.0-cn.md).
+- **Wire rules**: See [Wire v2 format](https://github.com/starwey604/wirelink/blob/main/docs/wire-format.md).
 
 ## Validate composition and evolution
 
