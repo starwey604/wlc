@@ -1,9 +1,9 @@
 {
-  "format": "wirelink-codegen-manifest-v1",
+  "format": "wirelink-codegen-manifest-v2",
   "compiler": {
     "name": "wlc",
-    "version": "0.14.0",
-    "codegen_contract": {"major": 0, "minor": 14}
+    "version": "0.0.99",
+    "codegen_contract": 1
   },
   "module": "business",
   "identity": {
@@ -18,8 +18,8 @@
   ],
   "artifact_digest_algorithm": "fnv1a64-domain-bytes-v1",
   "artifacts": [
-    {"path": "business.c", "size": 3718, "digest": "0x57f8d8905fd373ee"},
-    {"path": "business.h", "size": 2237, "digest": "0xc16862df83ea21a9"},
-    {"path": "business_manifest.json", "size": 894, "digest": "0x061466ba31827b21"}
+    {"path": "business.c", "size": 3734, "digest": "0xa7d318a38c35074e"},
+    {"path": "business.h", "size": 2229, "digest": "0x2022ad7e996594bf"},
+    {"path": "business_manifest.json", "size": 870, "digest": "0x911406c8befefe51"}
   ]
 }

@@ -269,7 +269,7 @@ fn cpp_values_round_trip_through_the_real_c_codec() {
         .arg("-o")
         .arg(directory.path().join("codec_rt.o"));
     let mut core_commands = Vec::new();
-    for source in ["kernel", "packet_port"] {
+    for source in ["endpoint", "packet_port"] {
         let mut command = Command::new("cc");
         command
             .args([
@@ -292,7 +292,7 @@ fn cpp_values_round_trip_through_the_real_c_codec() {
         .arg(directory.path().join("test.cpp"))
         .arg(directory.path().join("codec.o"))
         .arg(directory.path().join("codec_rt.o"))
-        .arg(directory.path().join("kernel.o"))
+        .arg(directory.path().join("endpoint.o"))
         .arg(directory.path().join("packet_port.o"));
     for include in [
         root.join("include"),
@@ -335,7 +335,7 @@ fn cpp_values_round_trip_through_the_real_c_codec() {
         ])
         .arg(directory.path().join("src/endpoint.c"))
         .arg("-o")
-        .arg(directory.path().join("endpoint.o"));
+        .arg(directory.path().join("sdk_endpoint.o"));
     let mut client = Command::new("c++");
     client
         .args([
@@ -365,7 +365,13 @@ fn cpp_values_round_trip_through_the_real_c_codec() {
     bridge_link
         .args(["-std=c11", "-Wall", "-Wextra", "-Wpedantic", "-Werror"])
         .arg(directory.path().join("bridge_test.c"));
-    for object in ["codec", "codec_rt", "kernel", "packet_port", "endpoint"] {
+    for object in [
+        "codec",
+        "codec_rt",
+        "endpoint",
+        "packet_port",
+        "sdk_endpoint",
+    ] {
         bridge_link.arg(directory.path().join(format!("{object}.o")));
     }
     for include in [

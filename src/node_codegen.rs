@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Self-contained nodes over the allocation-free packet kernel.
+//! Self-contained nodes over the allocation-free packet endpoint.
 use crate::{
     ManifestArtifact, SemanticModel,
     ast::Cardinality,
@@ -282,9 +282,9 @@ pub fn generate_node_c_with_pruning(
         .expect("codec header suffix")
         .to_owned();
     if !nodes.is_empty() {
-        c.header.push_str("#include <wirelink/kernel.h>\n");
+        c.header.push_str("#include <wirelink/endpoint.h>\n");
     }
-    c.header.push_str("#include <wirelink/version.h>\n#if !WIRELINK_CODEGEN_CONTRACT_ACCEPTS(0, 14)\n#error \"WLC requires generated-code contract 0.14\"\n#endif\n");
+    writeln!(c.header, "#include <wirelink/version.h>\n#if WIRELINK_CODEGEN_CONTRACT != {0}\n#error \"WLC requires generated-code contract {0}\"\n#endif", crate::CODEGEN_CONTRACT).unwrap();
     if nodes
         .iter()
         .any(|n| n.io == IoMode::Embedded && n.framing != Framing::Native)
@@ -378,7 +378,7 @@ fn emit_node(schema: &SemanticModel, n: &Node, c: Capacity, h: &mut String, s: &
     }
     writeln!(
         h,
-        "struct {p}_node {{\n  wl_kernel_t core;\n  void *user;\n  wl_kernel_error_fn on_error;"
+        "struct {p}_node {{\n  wl_endpoint_t core;\n  void *user;\n  wl_endpoint_error_fn on_error;"
     )
     .unwrap();
     if dynamic {
@@ -397,13 +397,13 @@ fn emit_node(schema: &SemanticModel, n: &Node, c: Capacity, h: &mut String, s: &
         }
         writeln!(
             h,
-            "  }} reply;\n  uint8_t replies[WL_KERNEL_REPLIES][{}];",
+            "  }} reply;\n  uint8_t replies[WL_ENDPOINT_REPLIES][{}];",
             c.reply
         )
         .unwrap();
     }
     if !n.calls.is_empty() {
-        writeln!(h, "  uint8_t requests[WL_KERNEL_CALLS][{}];", c.request).unwrap();
+        writeln!(h, "  uint8_t requests[WL_ENDPOINT_CALLS][{}];", c.request).unwrap();
     }
     if !n.send_routes.is_empty() {
         writeln!(h, "  uint8_t message[{}];", c.message).unwrap();
@@ -456,7 +456,7 @@ fn emit_node(schema: &SemanticModel, n: &Node, c: Capacity, h: &mut String, s: &
     if !n.calls.is_empty() {
         writeln!(
             h,
-            "wl_err_t {p}_cancel({p}_node_t *self, wl_kernel_call_handle_t handle);"
+            "wl_err_t {p}_cancel({p}_node_t *self, wl_call_handle_t handle);"
         )
         .unwrap();
     }
@@ -513,7 +513,7 @@ fn emit_node(schema: &SemanticModel, n: &Node, c: Capacity, h: &mut String, s: &
             }
             writeln!(h, "  return {p}_send_{m}(self, &value);\n}}").unwrap();
         }
-        writeln!(s,"wl_err_t {p}_send_{m}({p}_node_t *self, const {m}_t *message) {{\n  if (self == NULL || message == NULL) return WL_ERR_INVALID_ARG;\n  uint8_t *frame; size_t capacity;\n  wl_err_t error = wl_kernel_msg_claim(&self->core, &frame, &capacity);\n  if (error != WL_OK) return error;\n  size_t length = 0U;\n  if ({m}_encode(message, frame + 4U, capacity - 4U, &length) != WL_CODEC_OK) return WL_ERR_CORRUPT_PAYLOAD;\n  error = wl_wire_frame_seal(frame, capacity, WL_WIRE_MSG, {}U, length);\n  return error == WL_OK ? wl_kernel_msg_commit(&self->core, length + 4U) : error;\n}}",r.message_id).unwrap();
+        writeln!(s,"wl_err_t {p}_send_{m}({p}_node_t *self, const {m}_t *message) {{\n  if (self == NULL || message == NULL) return WL_ERR_INVALID_ARG;\n  uint8_t *frame; size_t capacity;\n  wl_err_t error = wl_endpoint_msg_claim(&self->core, &frame, &capacity);\n  if (error != WL_OK) return error;\n  size_t length = 0U;\n  if ({m}_encode(message, frame + 4U, capacity - 4U, &length) != WL_CODEC_OK) return WL_ERR_CORRUPT_PAYLOAD;\n  error = wl_wire_frame_seal(frame, capacity, WL_WIRE_MSG, {}U, length);\n  return error == WL_OK ? wl_endpoint_msg_commit(&self->core, length + 4U) : error;\n}}",r.message_id).unwrap();
     }
     emit_calls(n, h, s);
     writeln!(s,"static void {p}_error(void *user, uint16_t id, wl_err_t error) {{\n  {p}_node_t *self = user;\n  if (self->on_error != NULL) self->on_error(self->user, id, error);\n}}").unwrap();
@@ -563,7 +563,7 @@ fn emit_node(schema: &SemanticModel, n: &Node, c: Capacity, h: &mut String, s: &
             writeln!(s,"  wl_packet_stream_config_t stream = {{.port = &self->port,\n      .tx_storage = {{self->tx_wire, sizeof(self->tx_wire)}}, .physical_submit = {p}_submit,\n      .user = self, .maximum_frame_size = {}U, .maximum_rx_frame_size = {}U}};\n  error = wl_packet_stream_{connector}_init(&self->stream, &stream);\n  if (error != WL_OK) {{ wl_packet_stop(&self->port); return error; }}",c.tx,c.rx).unwrap();
         }
     }
-    writeln!(s,"  wl_kernel_config_t config = {{.port = {}, .route = {}, .on_error = {p}_error, .user = self,\n      .storage = {{",if embedded{"&self->port"}else{"port"},if has_route{format!("{p}_route")}else{"NULL".into()}).unwrap();
+    writeln!(s,"  wl_endpoint_config_t config = {{.port = {}, .route = {}, .on_error = {p}_error, .user = self,\n      .storage = {{",if embedded{"&self->port"}else{"port"},if has_route{format!("{p}_route")}else{"NULL".into()}).unwrap();
     for (field, stride, cap, array) in [
         ("requests", "request_stride", c.request, true),
         ("replies", "reply_stride", c.reply, true),
@@ -582,7 +582,7 @@ fn emit_node(schema: &SemanticModel, n: &Node, c: Capacity, h: &mut String, s: &
         )
         .unwrap();
     }
-    s.push_str("      }};\n  return wl_kernel_init(&self->core, &config);\n}\n");
+    s.push_str("      }};\n  return wl_endpoint_init(&self->core, &config);\n}\n");
     if embedded {
         let args = if dynamic { ", handlers, user" } else { "" };
         writeln!(s,"wl_err_t {p}_init({p}_node_t *self{extra}) {{\n  uint32_t instance;\n  wl_err_t error = wl_packet_instance_next(&instance);\n  return error == WL_OK ? {p}_init_with_instance(self, instance{args}) : error;\n}}").unwrap();
@@ -592,13 +592,13 @@ fn emit_node(schema: &SemanticModel, n: &Node, c: Capacity, h: &mut String, s: &
             writeln!(s,"wl_err_t {p}_rx_packet({p}_node_t *self, const uint8_t *data, size_t length) {{\n  return self == NULL ? WL_ERR_INVALID_ARG : wl_packet_rx_push(&self->port, data, length);\n}}").unwrap();
         }
     }
-    writeln!(s,"wl_err_t {p}_step({p}_node_t *self, uint32_t now) {{\n  return self == NULL ? WL_ERR_INVALID_ARG : wl_kernel_step(&self->core, now, WL_KERNEL_BUDGET);\n}}\nwl_err_t {p}_close({p}_node_t *self) {{\n  if (self == NULL) return WL_ERR_INVALID_ARG;\n  wl_err_t error = wl_kernel_close(&self->core);").unwrap();
+    writeln!(s,"wl_err_t {p}_step({p}_node_t *self, uint32_t now) {{\n  return self == NULL ? WL_ERR_INVALID_ARG : wl_endpoint_step(&self->core, now, WL_ENDPOINT_BUDGET);\n}}\nwl_err_t {p}_close({p}_node_t *self) {{\n  if (self == NULL) return WL_ERR_INVALID_ARG;\n  wl_err_t error = wl_endpoint_close(&self->core);").unwrap();
     if stream {
         s.push_str("  if (error == WL_OK) error = wl_packet_stream_abort_rx(&self->stream);\n");
     }
-    writeln!(s,"  return error;\n}}\nint {p}_quiescent(const {p}_node_t *self) {{\n  return self != NULL && wl_kernel_quiescent(&self->core);\n}}").unwrap();
+    writeln!(s,"  return error;\n}}\nint {p}_quiescent(const {p}_node_t *self) {{\n  return self != NULL && wl_endpoint_quiescent(&self->core);\n}}").unwrap();
     if !n.calls.is_empty() {
-        writeln!(s,"wl_err_t {p}_cancel({p}_node_t *self, wl_kernel_call_handle_t handle) {{\n  return self == NULL ? WL_ERR_INVALID_ARG : wl_kernel_cancel(&self->core, handle);\n}}").unwrap();
+        writeln!(s,"wl_err_t {p}_cancel({p}_node_t *self, wl_call_handle_t handle) {{\n  return self == NULL ? WL_ERR_INVALID_ARG : wl_endpoint_cancel(&self->core, handle);\n}}").unwrap();
     }
 }
 fn emit_calls(n: &Node, h: &mut String, s: &mut String) {
@@ -607,16 +607,20 @@ fn emit_calls(n: &Node, h: &mut String, s: &mut String) {
         let rpc = type_name(&r.name);
         let req = type_name(&r.request_name);
         let resp = type_name(&r.response_name);
-        writeln!(h,"typedef void (*{p}_{rpc}_cb_t)({p}_node_t *, wl_kernel_result_t, const {resp}_t *);\ntypedef void (*{p}_{rpc}_ex_cb_t)(void *, wl_kernel_result_t, const {resp}_t *);").unwrap();
+        writeln!(h,"typedef void (*{p}_{rpc}_cb_t)({p}_node_t *, wl_rpc_result_t, const {resp}_t *);\ntypedef void (*{p}_{rpc}_ex_cb_t)(void *, wl_rpc_result_t, const {resp}_t *);").unwrap();
         if let Some(done) = &r.handler {
-            writeln!(h,"void {done}({p}_node_t *self, wl_kernel_result_t result, const {resp}_t *response);").unwrap();
+            writeln!(
+                h,
+                "void {done}({p}_node_t *self, wl_rpc_result_t result, const {resp}_t *response);"
+            )
+            .unwrap();
         }
         let cb = if r.handler.is_none() {
             format!(", {p}_{rpc}_cb_t callback")
         } else {
             String::new()
         };
-        writeln!(h,"/* Simplified calls start their timeout on the next step(now). */\nwl_err_t {p}_call_{rpc}({p}_node_t *self, const {req}_t *request{cb});\nwl_err_t {p}_call_{rpc}_ex({p}_node_t *self, const {req}_t *request, uint32_t now, uint32_t timeout_ms, {p}_{rpc}_ex_cb_t callback, void *user, wl_kernel_call_handle_t *out);").unwrap();
+        writeln!(h,"/* Simplified calls start their timeout on the next step(now). */\nwl_err_t {p}_call_{rpc}({p}_node_t *self, const {req}_t *request{cb});\nwl_err_t {p}_call_{rpc}_ex({p}_node_t *self, const {req}_t *request, uint32_t now, uint32_t timeout_ms, {p}_{rpc}_ex_cb_t callback, void *user, wl_call_handle_t *out);").unwrap();
         for ex in [false, true] {
             let suffix = if ex { "_ex" } else { "" };
             let ctx = if ex {
@@ -624,21 +628,21 @@ fn emit_calls(n: &Node, h: &mut String, s: &mut String) {
             } else {
                 &format!("({p}_node_t *)core")
             };
-            writeln!(s,"static void {p}_complete_{rpc}{suffix}(wl_kernel_t *core, const wl_kernel_call_t *call, wl_kernel_result_t result, const uint8_t *body, size_t length) {{\n  (void)core;\n  {resp}_t response;\n  const {resp}_t *view = NULL;\n  if (result.outcome == WL_KERNEL_SUCCESS) {{\n    if ({resp}_decode(body, length, &response) == WL_CODEC_OK) view = &response;\n    else result = (wl_kernel_result_t){{WL_KERNEL_LOCAL_ERROR, WL_ERR_CORRUPT_PAYLOAD}};\n  }}\n  (({p}_{rpc}{suffix}_cb_t)call->callback)({ctx}, result, view);\n}}").unwrap();
+            writeln!(s,"static void {p}_complete_{rpc}{suffix}(wl_endpoint_t *core, const wl_endpoint_call_t *call, wl_rpc_result_t result, const uint8_t *body, size_t length) {{\n  (void)core;\n  {resp}_t response;\n  const {resp}_t *view = NULL;\n  if (result.outcome == WL_RPC_SUCCESS) {{\n    if ({resp}_decode(body, length, &response) == WL_CODEC_OK) view = &response;\n    else result = (wl_rpc_result_t){{WL_RPC_LOCAL_ERROR, WL_ERR_CORRUPT_PAYLOAD}};\n  }}\n  (({p}_{rpc}{suffix}_cb_t)call->callback)({ctx}, result, view);\n}}").unwrap();
         }
-        writeln!(s,"static wl_err_t {p}_call_{rpc}_start({p}_node_t *self, const {req}_t *request, uint32_t now, uint32_t timeout, uint8_t has_now, wl_kernel_complete_fn complete, void (*callback)(void), void *user, wl_kernel_call_handle_t *out) {{\n  if (out != NULL) *out = (wl_kernel_call_handle_t){{0}};\n  if (self == NULL || request == NULL || callback == NULL || timeout > INT32_MAX) return WL_ERR_INVALID_ARG;\n  if (timeout == 0U) timeout = {}U;\n  uint8_t slot; uint8_t *payload; size_t capacity;\n  wl_err_t error = wl_kernel_call_claim(&self->core, &slot, &payload, &capacity);\n  if (error != WL_OK) return error;\n  size_t length = 0U;\n  if ({req}_encode(request, payload, capacity, &length) != WL_CODEC_OK) return WL_ERR_CORRUPT_PAYLOAD;\n  return wl_kernel_call_commit(&self->core, slot, {}U, {}U, length, now, timeout, has_now, complete, callback, user, out);\n}}",n.timeout_ms,r.request_id,r.response_id).unwrap();
+        writeln!(s,"static wl_err_t {p}_call_{rpc}_start({p}_node_t *self, const {req}_t *request, uint32_t now, uint32_t timeout, uint8_t has_now, wl_endpoint_complete_fn complete, void (*callback)(void), void *user, wl_call_handle_t *out) {{\n  if (out != NULL) *out = (wl_call_handle_t){{0}};\n  if (self == NULL || request == NULL || callback == NULL || timeout > INT32_MAX) return WL_ERR_INVALID_ARG;\n  if (timeout == 0U) timeout = {}U;\n  uint8_t slot; uint8_t *payload; size_t capacity;\n  wl_err_t error = wl_endpoint_call_claim(&self->core, &slot, &payload, &capacity);\n  if (error != WL_OK) return error;\n  size_t length = 0U;\n  if ({req}_encode(request, payload, capacity, &length) != WL_CODEC_OK) return WL_ERR_CORRUPT_PAYLOAD;\n  return wl_endpoint_call_commit(&self->core, slot, {}U, {}U, length, now, timeout, has_now, complete, callback, user, out);\n}}",n.timeout_ms,r.request_id,r.response_id).unwrap();
         let callback = r.handler.as_deref().unwrap_or("callback");
-        writeln!(s,"wl_err_t {p}_call_{rpc}({p}_node_t *self, const {req}_t *request{cb}) {{\n  return {p}_call_{rpc}_start(self, request, 0U, 0U, 0U, {p}_complete_{rpc}, (void (*)(void)){callback}, self, NULL);\n}}\nwl_err_t {p}_call_{rpc}_ex({p}_node_t *self, const {req}_t *request, uint32_t now, uint32_t timeout_ms, {p}_{rpc}_ex_cb_t callback, void *user, wl_kernel_call_handle_t *out) {{\n  return {p}_call_{rpc}_start(self, request, now, timeout_ms, 1U, {p}_complete_{rpc}_ex, (void (*)(void))callback, user, out);\n}}").unwrap();
+        writeln!(s,"wl_err_t {p}_call_{rpc}({p}_node_t *self, const {req}_t *request{cb}) {{\n  return {p}_call_{rpc}_start(self, request, 0U, 0U, 0U, {p}_complete_{rpc}, (void (*)(void)){callback}, self, NULL);\n}}\nwl_err_t {p}_call_{rpc}_ex({p}_node_t *self, const {req}_t *request, uint32_t now, uint32_t timeout_ms, {p}_{rpc}_ex_cb_t callback, void *user, wl_call_handle_t *out) {{\n  return {p}_call_{rpc}_start(self, request, now, timeout_ms, 1U, {p}_complete_{rpc}_ex, (void (*)(void))callback, user, out);\n}}").unwrap();
     }
 }
 fn emit_route(n: &Node, s: &mut String) {
     let p = &n.name;
     let dynamic = n.handlers == Handlers::Dynamic;
-    writeln!(s,"static wl_err_t {p}_route(wl_kernel_t *core, const wl_kernel_frame_t *frame) {{\n  {p}_node_t *self = ({p}_node_t *)core;\n  (void)self;\n  switch (frame->message_id) {{").unwrap();
+    writeln!(s,"static wl_err_t {p}_route(wl_endpoint_t *core, const wl_wire_frame_t *frame) {{\n  {p}_node_t *self = ({p}_node_t *)core;\n  (void)self;\n  switch (frame->message_id) {{").unwrap();
     for r in &n.calls {
         writeln!(
             s,
-            "  case {}U: return wl_kernel_response(core, frame);",
+            "  case {}U: return wl_endpoint_response(core, frame);",
             r.response_id
         )
         .unwrap();
@@ -655,14 +659,14 @@ fn emit_route(n: &Node, s: &mut String) {
             )
             .unwrap();
         }
-        writeln!(s,"    wl_kernel_rpc_metadata_t metadata;\n    wl_err_t error = wl_wire_rpc_read(frame->kind, frame->payload, frame->length, &metadata);\n    if (error != WL_OK) return error;\n    uint8_t slot; uint8_t *payload; size_t capacity;\n    error = wl_kernel_reply_claim(core, {}U, &metadata, &slot, &payload, &capacity);\n    if (error != WL_OK) return error;\n    {req}_t request;\n    if ({req}_decode(metadata.body, metadata.length, &request) != WL_CODEC_OK) {{\n      wl_kernel_reply_abort(core, slot); return WL_ERR_CORRUPT_PAYLOAD;\n    }}\n    {resp}_clear(&self->reply.{rpc});",r.response_id).unwrap();
+        writeln!(s,"    wl_rpc_metadata_t metadata;\n    wl_err_t error = wl_wire_rpc_read(frame->kind, frame->payload, frame->length, &metadata);\n    if (error != WL_OK) return error;\n    uint8_t slot; uint8_t *payload; size_t capacity;\n    error = wl_endpoint_reply_claim(core, {}U, &metadata, &slot, &payload, &capacity);\n    if (error != WL_OK) return error;\n    {req}_t request;\n    if ({req}_decode(metadata.body, metadata.length, &request) != WL_CODEC_OK) {{\n      wl_endpoint_reply_abort(core, slot); return WL_ERR_CORRUPT_PAYLOAD;\n    }}\n    {resp}_clear(&self->reply.{rpc});",r.response_id).unwrap();
         let handler = if dynamic {
             format!("self->handlers.on_{rpc}")
         } else {
             r.handler.clone().unwrap_or_else(|| format!("{p}_on_{rpc}"))
         };
         let user = if dynamic { "self->user" } else { "self" };
-        writeln!(s,"    int32_t status = {handler}({user}, &request, &self->reply.{rpc});\n    if (status != 0) return wl_kernel_reply_error(core, slot, status);\n    size_t length = 0U;\n    if ({resp}_encode(&self->reply.{rpc}, payload, capacity, &length) != WL_CODEC_OK) {{\n      wl_kernel_reply_abort(core, slot); return WL_ERR_CORRUPT_PAYLOAD;\n    }}\n    return wl_kernel_reply_commit(core, slot, length);\n  }}").unwrap();
+        writeln!(s,"    int32_t status = {handler}({user}, &request, &self->reply.{rpc});\n    if (status != 0) return wl_endpoint_reply_error(core, slot, status);\n    size_t length = 0U;\n    if ({resp}_encode(&self->reply.{rpc}, payload, capacity, &length) != WL_CODEC_OK) {{\n      wl_endpoint_reply_abort(core, slot); return WL_ERR_CORRUPT_PAYLOAD;\n    }}\n    return wl_endpoint_reply_commit(core, slot, length);\n  }}").unwrap();
     }
     for r in &n.recv_routes {
         let m = type_name(&r.message_name);

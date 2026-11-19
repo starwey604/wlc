@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 #include "wire.h"
-#include "wirelink/kernel_wire.h"
+#include "wirelink/wire.h"
 #include <assert.h>
 #include <string.h>
 /* Same metadata/domain cases through unified Schema-v1 codecs. */
@@ -12,15 +12,15 @@ static void headers(void) {
   for(size_t i=0;i<sizeof(ids)/sizeof(ids[0]);++i)
     for(size_t j=0;j<sizeof(sessions)/sizeof(sessions[0]);++j)
       for(size_t k=0;k<sizeof(statuses)/sizeof(statuses[0]);++k) {
-        size_t length=0;wl_kernel_rpc_metadata_t value;
+        size_t length=0;wl_rpc_metadata_t value;
         assert(wl_wire_rpc_write(bytes,sizeof(bytes),sessions[j],ids[i],statuses[k],&length)==WL_OK);
-        assert(length==wl_kernel_rpc_header_size(statuses[k]));
+        assert(length==wl_wire_rpc_header_size(statuses[k]));
         assert(length==(statuses[k]?12U:8U));
         uint8_t kind=statuses[k]?WL_WIRE_RPC_ERR:WL_WIRE_RPC_RESP;
         assert(wl_wire_rpc_read(kind,bytes,length,&value)==WL_OK);
         assert(value.session==sessions[j] && value.operation==ids[i] && value.status==statuses[k] && value.length==0);
         if (!statuses[k]) assert(wl_wire_rpc_read(WL_WIRE_RPC_REQ,bytes,length,&value)==WL_OK);
-        else assert(wl_wire_rpc_read(WL_WIRE_RPC_REQ,bytes,length,&value)==WL_ERR_BAD_FRAME || length==WL_KERNEL_RPC_HEADER_ERR);
+        else assert(wl_wire_rpc_read(WL_WIRE_RPC_REQ,bytes,length,&value)==WL_ERR_BAD_FRAME || length==WL_WIRE_RPC_HEADER_ERR);
         for(size_t truncated=0;truncated<length;++truncated)
           assert(wl_wire_rpc_read(kind,bytes,truncated,&value)==WL_ERR_CORRUPT_PAYLOAD);
       }

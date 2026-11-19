@@ -198,7 +198,7 @@ pub(super) fn emit(plan: &Plan<'_>, files: &mut BTreeMap<String, String>) {
         native.push_str("  );\n}\n\n");
     }
     native.push_str("} // namespace\n\nNB_MODULE(_native, module) {\n  module.attr(\"core_version\") = WIRELINK_VERSION_STRING;\n");
-    writeln!(native, "  module.attr(\"codegen_contract\") = \"{}.{}\";\n  module.attr(\"binding_api\") = {BINDING_API_VERSION};", crate::CODEGEN_CONTRACT_MAJOR, crate::CODEGEN_CONTRACT_MINOR).unwrap();
+    writeln!(native, "  module.attr(\"codegen_contract\") = \"{}\";\n  module.attr(\"binding_api\") = {BINDING_API_VERSION};", crate::CODEGEN_CONTRACT).unwrap();
     native.push_str(include_str!("templates/error.cpp.in"));
 
     native.push_str("  module.def(\"closed_error\", [] { return wirelink::Error::local(WL_ERR_NOT_INITIALIZED); });\n  module.def(\"queue_full_error\", [] { return wirelink::Error::local(WL_ERR_QUEUE_FULL); });\n  nb::class_<wlc_python_signal_handle>(module, \"CompletionSignal\")\n      .def(nb::init<>())\n      .def(\"wait\", &wlc_python_signal_handle::wait, nb::call_guard<nb::gil_scoped_release>())\n      .def(\"stop\", &wlc_python_signal_handle::stop);\n");

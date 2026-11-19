@@ -4,7 +4,7 @@ project(@CMAKE_PACKAGE@ VERSION @CMAKE_VERSION@ LANGUAGES C CXX)
 include(CTest)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
-find_package(Wirelink 0.14.0 EXACT CONFIG REQUIRED COMPONENTS cpp_host)
+find_package(Wirelink CONFIG REQUIRED COMPONENTS cpp_host)
 foreach(dependency cpp_host platform)
   if(NOT TARGET Wirelink::${dependency})
     message(FATAL_ERROR "Install Wirelink with CPP_BINDINGS and PLATFORM enabled")
@@ -12,12 +12,10 @@ foreach(dependency cpp_host platform)
 endforeach()
 
 # Checked-in C artifacts make the source distribution independent of a WLC
-# checkout/compiler. Verify the paired compiler and codegen contract before
+# checkout/compiler. Check the generated-code contract before
 # compiling any generated C.
 set(WIRELINK_WLC_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/generated/@NAME@_manifest.json")
-set(WIRELINK_WLC_EXPECTED_VERSION "${WIRELINK_WLC_VERSION}")
-set(WIRELINK_WLC_EXPECTED_CONTRACT_MAJOR "${WIRELINK_WLC_CODEGEN_CONTRACT_MAJOR}")
-set(WIRELINK_WLC_EXPECTED_CONTRACT_MINOR "${WIRELINK_WLC_CODEGEN_CONTRACT_MINOR}")
+set(WIRELINK_WLC_EXPECTED_CONTRACT "${WIRELINK_WLC_CODEGEN_CONTRACT}")
 include("${Wirelink_DIR}/WirelinkWlcVerifyManifest.cmake")
 
 add_library(@NAME@_client STATIC src/client.cpp src/endpoint.c generated/@NAME@.c)
@@ -32,7 +30,7 @@ target_include_directories(@NAME@_client PUBLIC
   PRIVATE generated)
 target_link_libraries(@NAME@_client PUBLIC Wirelink::cpp_host PRIVATE Wirelink::platform)
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/wlc-sdk-build.json"
-  "{\n  \"format\": \"wirelink-sdk-build-v2\",\n  \"namespace\": \"@NAME@\",\n  \"kernel_contract\": 1\n}\n")
+  "{\n  \"format\": \"wirelink-sdk-build-v3\",\n  \"namespace\": \"@NAME@\",\n  \"endpoint_contract\": 1\n}\n")
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/wlc-sdk-build.json"
   DESTINATION ${CMAKE_INSTALL_DATADIR}/@NAME@ COMPONENT development)
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -60,7 +58,7 @@ if(@UPPER@_BUILD_PYTHON)
     OUTPUT_VARIABLE _nanobind_dir OUTPUT_STRIP_TRAILING_WHITESPACE
     COMMAND_ERROR_IS_FATAL ANY)
   find_package(nanobind 3 CONFIG REQUIRED PATHS "${_nanobind_dir}")
-  foreach(dependency kernel host asio_udp platform cpp_host)
+  foreach(dependency endpoint host asio_udp platform cpp_host)
     get_target_property(_type Wirelink::${dependency} TYPE)
     if(NOT _type STREQUAL "STATIC_LIBRARY")
       message(FATAL_ERROR "The self-contained SDK wheel requires static Wirelink::${dependency}")

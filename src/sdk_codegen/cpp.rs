@@ -11,7 +11,7 @@ pub(super) fn emit(plan: &Plan<'_>, files: &mut BTreeMap<String, String>) {
     let name = &plan.options.name;
     // Keep system/Wirelink dependencies global, then isolate schema C typedefs
     // (e.g. Mode -> mode_t) from system typedefs in the C++ bridge.
-    files.insert("src/native.hpp".into(), format!("/* SPDX-License-Identifier: Apache-2.0 */\n#pragma once\n#include <cfloat>\n#include <cstddef>\n#include <cstdint>\n#include <wirelink/codec.h>\n#include <wirelink/kernel.h>\n// Only passive values cross this namespace. Endpoint callbacks stay in C.\nnamespace {name}::wlc_native {{\n#include \"{name}.h\"\n}}\n"));
+    files.insert("src/native.hpp".into(), format!("/* SPDX-License-Identifier: Apache-2.0 */\n#pragma once\n#include <cfloat>\n#include <cstddef>\n#include <cstdint>\n#include <wirelink/codec.h>\n#include <wirelink/endpoint.h>\n// Only passive values cross this namespace. Endpoint callbacks stay in C.\nnamespace {name}::wlc_native {{\n#include \"{name}.h\"\n}}\n"));
     let native = files.get_mut("src/native.hpp").unwrap();
     native.push_str("// C enum macros must not rewrite scoped C++ enum member names.\n");
     for enumeration in &plan.enums {
@@ -231,7 +231,7 @@ typedef struct {{
     let rx_unit_size = maximum_rx_frame + 1;
     let mut bridge_source = format!(
         r#"/* SPDX-License-Identifier: Apache-2.0 */
-/* C owns atomic port storage and all kernel callback types. */
+/* C owns atomic port storage and all endpoint callback types. */
 #include "endpoint.h"
 #include "{name}.h"
 #include <string.h>
@@ -263,19 +263,19 @@ wl_err_t {name}_sdk_endpoint_initialize(void* storage, uint32_t instance,
     for rpc in &plan.node.calls {
         let method = c_identifier(&rpc.name);
         let resp = c_type_name(&rpc.response_name);
-        writeln!(bridge_header, "wl_err_t {name}_sdk_{method}_submit({name}_sdk_call_t*, uint32_t, uint32_t, wl_host_rpc_notify_fn, void*, wl_kernel_call_handle_t*);").unwrap();
-        writeln!(bridge_source, r#"static void {name}_sdk_{method}_done(void* context, wl_kernel_result_t result, const {resp}_t* response) {{
+        writeln!(bridge_header, "wl_err_t {name}_sdk_{method}_submit({name}_sdk_call_t*, uint32_t, uint32_t, wl_host_rpc_notify_fn, void*, wl_call_handle_t*);").unwrap();
+        writeln!(bridge_source, r#"static void {name}_sdk_{method}_done(void* context, wl_rpc_result_t result, const {resp}_t* response) {{
   {name}_sdk_call_t* state = context;
-  if (result.outcome == WL_KERNEL_SUCCESS) {{
+  if (result.outcome == WL_RPC_SUCCESS) {{
     if (response == NULL)
-      result = (wl_kernel_result_t){{WL_KERNEL_LOCAL_ERROR, WL_ERR_CORRUPT_PAYLOAD}};
+      result = (wl_rpc_result_t){{WL_RPC_LOCAL_ERROR, WL_ERR_CORRUPT_PAYLOAD}};
     else
       memcpy(state->response, response, sizeof(*response));
   }}
   state->notify(state->notify_context, result);
 }}
 wl_err_t {name}_sdk_{method}_submit({name}_sdk_call_t* state, uint32_t now, uint32_t timeout,
-    wl_host_rpc_notify_fn notify, void* context, wl_kernel_call_handle_t* call) {{
+    wl_host_rpc_notify_fn notify, void* context, wl_call_handle_t* call) {{
   {name}_sdk_owner_t* owner = state->endpoint;
   state->notify = notify;
   state->notify_context = context;
@@ -341,7 +341,7 @@ wirelink::Result<wirelink::Operation<{resp}>> Client::{method}_async(const {req}
     {c_resp}_t response{{}};
     {name}_sdk_call_t bridge{{}};
     wl_err_t submit(uint32_t now, uint32_t timeout, wl_host_rpc_notify_fn notify, void* context,
-        wl_kernel_call_handle_t* call) noexcept override {{
+        wl_call_handle_t* call) noexcept override {{
       bridge.endpoint = this->endpoint;
       bridge.request = &request;
       bridge.response = &response;

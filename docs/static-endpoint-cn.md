@@ -1,6 +1,6 @@
 # 组装单文件声明的类型化节点
 
-[English](static-kernel.md) · [代码生成](codegen-cn.md)
+[English](static-endpoint.md) · [代码生成](codegen-cn.md)
 
 在同一 `.wl` 文件中声明消息、RPC 与 `node`，生成单个 `<stem>.h/.c` 和 `<stem>_manifest.json`：
 

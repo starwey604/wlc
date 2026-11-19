@@ -25,9 +25,9 @@ static int32_t apply(void *user, const control_t *request, control_result_t *res
   ++executions;
   return 0;
 }
-static void completed(void *user, wl_kernel_result_t result, const control_result_t *response) {
+static void completed(void *user, wl_rpc_result_t result, const control_result_t *response) {
   (void)user;
-  require(result.outcome == WL_KERNEL_SUCCESS && response != NULL);
+  require(result.outcome == WL_RPC_SUCCESS && response != NULL);
   require(response->operation_id == UINT32_MAX);
   require(response->result == OK);
   ++completions;
@@ -44,7 +44,7 @@ int main(void) {
     require(release_smoke_init(&endpoints[side], &ports[side], &handlers, NULL) == WL_OK);
     control_t request = {.operation_id = UINT32_MAX,
         .joints = {-1.5f, 0.0f, 1.0f, 2.0f, -0.5f, 3.25f}};
-    wl_kernel_call_handle_t call;
+    wl_call_handle_t call;
     require(release_smoke_call_apply_control_ex(&endpoints[side], &request, 0U, 500U,
         completed, NULL, &call) == WL_OK);
     memset(&request, 0, sizeof(request));
@@ -56,11 +56,11 @@ int main(void) {
   }
   require(completions == 2U && executions == 2U);
   for (unsigned side = 0; side < 2U; ++side)
-    require(wl_kernel_close(&endpoints[side].core) == WL_OK);
+    require(wl_endpoint_close(&endpoints[side].core) == WL_OK);
   wl_packet_loopback_stop(&transport);
   for (unsigned side = 0; side < 2U; ++side) {
     require(release_smoke_step(&endpoints[side], 500U) == WL_OK);
-    require(wl_kernel_quiescent(&endpoints[side].core));
+    require(wl_endpoint_quiescent(&endpoints[side].core));
   }
   puts("archived compiler: bidirectional node packed-float RPC PASS");
   return 0;

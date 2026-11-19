@@ -1,6 +1,6 @@
 # 生成 codec、节点与查看部署计划
 
-[English](codegen.md) · [类型化节点](static-kernel-cn.md) · [SDK](sdk-cn.md)
+[English](codegen.md) · [类型化节点](static-endpoint-cn.md) · [SDK](sdk-cn.md)
 
 使用 WLC 0.14.0 / 生成契约 0.14 与匹配的 Wirelink 0.14.0。消息、RPC 与节点全部声明在同一 `.wl` 文件中：
 

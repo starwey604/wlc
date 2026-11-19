@@ -2,7 +2,7 @@
 cmake_minimum_required(VERSION 3.21)
 project(wlc_archived_compiler_smoke LANGUAGES C)
 include(CTest)
-find_package(Wirelink 0.14.0 EXACT CONFIG REQUIRED)
+find_package(Wirelink CONFIG REQUIRED)
 wirelink_wlc_generate(TARGET control_protocol
   SCHEMA "${CMAKE_CURRENT_SOURCE_DIR}/../fixtures/release_smoke.wl")
 add_executable(release_roundtrip main.c)

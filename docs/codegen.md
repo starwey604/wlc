@@ -1,6 +1,6 @@
 # Generate codecs, nodes, and inspect plans
 
-[中文](codegen-cn.md) · [Typed nodes](static-kernel.md) · [SDK](sdk.md)
+[中文](codegen-cn.md) · [Typed nodes](static-endpoint.md) · [SDK](sdk.md)
 
 Use WLC 0.14.0 / codegen contract 0.14 with matching Wirelink 0.14.0. Messages, RPCs, and node roles live in a single `.wl` schema:
 

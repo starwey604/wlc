@@ -10,11 +10,7 @@ fn codegen_contract_is_queryable_without_a_schema() {
         .arg("codegen-contract")
         .assert()
         .success()
-        .stdout(format!(
-            "{}.{}\n",
-            wlc::CODEGEN_CONTRACT_MAJOR,
-            wlc::CODEGEN_CONTRACT_MINOR
-        ));
+        .stdout(format!("{}\n", wlc::CODEGEN_CONTRACT));
 }
 
 #[test]
@@ -62,7 +58,7 @@ fn compile_writes_named_c_artifacts() {
     assert!(header.contains("status_t"));
     assert!(source.contains("#include \"motor_api.h\""));
     assert!(!source.contains("wl_send_reliable"));
-    assert!(manifest.contains("\"format\": \"wirelink-codegen-manifest-v1\""));
+    assert!(manifest.contains("\"format\": \"wirelink-codegen-manifest-v2\""));
     assert!(manifest.contains("\"module\": \"motor_api\""));
     assert!(manifest.contains("\"node\": null"));
     assert!(manifest.contains("\"path\": \"motor_api.h\""));
@@ -223,7 +219,7 @@ fn compile_manifest_is_reproducible_across_output_directories() {
 }
 
 #[test]
-fn release_smoke_fixture_uses_the_current_kernel_contract() {
+fn release_smoke_fixture_uses_the_current_endpoint_contract() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let directory = tempdir().unwrap();
     Command::cargo_bin("wlc")
@@ -236,7 +232,7 @@ fn release_smoke_fixture_uses_the_current_kernel_contract() {
         .success();
     let manifest: String =
         fs::read_to_string(directory.path().join("release_smoke_manifest.json")).unwrap();
-    assert!(manifest.contains("\"minor\": 14"));
+    assert!(manifest.contains(&format!("\"codegen_contract\": {}", wlc::CODEGEN_CONTRACT)));
     for name in ["release_smoke.h", "release_smoke.c"] {
         assert!(directory.path().join(name).is_file(), "missing {name}");
     }

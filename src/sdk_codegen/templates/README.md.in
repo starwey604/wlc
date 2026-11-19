@@ -41,7 +41,7 @@ Use a different SDK name for each independently distributed schema package.
 
 ## SDK maintainers
 
-Build/install the matching Wirelink 0.14.0 checkout with
+Build/install a Wirelink checkout with the same generated-code contract with
 `WIRELINK_BUILD_CPP_BINDINGS=ON`, `WIRELINK_BUILD_PLATFORM=ON`,
 `WIRELINK_BUILD_EXAMPLES=OFF`, `BUILD_SHARED_LIBS=OFF` and
 `CMAKE_POSITION_INDEPENDENT_CODE=ON`. Provide standalone Asio headers through
@@ -64,11 +64,10 @@ The optional Python extension uses `@UPPER@_BUILD_PYTHON=ON` (enabled by the
 Python build frontend); native C++ builds default to OFF. `BUILD_TESTING` loads
 hand-maintained `tests/CMakeLists.txt` when present.
 `share/@NAME@/wlc-sdk-build.json`, or the package-local wheel file, records
-`wirelink-sdk-build-v2` and kernel contract `1`. This is build metadata, not a
-memory-placement or linker-grouping control.
+`wirelink-sdk-build-v3` and endpoint contract `1`.
 
-CMake requires Wirelink 0.14.0 and verifies WLC version/codegen contract 0.14
-from the included node manifest against the installed package metadata. A local
+CMake checks the generated-code contract in the included node manifest against
+the installed Wirelink package. A local
 Linux wheel still needs a supported manylinux build/repair before broad release.
 No package is published by generation or building. License notices for bundled
 native dependencies are included; retain them when distributing wheels.
@@ -90,7 +89,7 @@ Check admission, then use `operation.done()`, `wait()`, `wait_for(duration)`,
 `result()` waits and returns an owned copy, including after client destruction.
 Requests are copied before `_async` returns. Dropping an operation does not
 cancel it. A successful `cancel()` means the request was queued; completion may
-already have won the race. Sync/async calls share the kernel's four call slots. Admission encodes before
+already have won the race. Sync/async calls share the endpoint's four call slots. Admission encodes before
 return; an admission error creates no future callback. Close completes pending
 calls with ClosedError; explicit cancellation completes with CancelledError.
 Neither cancellation nor timeout rolls back remote execution. There is no

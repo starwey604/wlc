@@ -1,6 +1,6 @@
 # Assemble a typed node from a single `.wl` schema
 
-[中文](static-kernel-cn.md) · [Code generation](codegen.md)
+[中文](static-endpoint-cn.md) · [Code generation](codegen.md)
 
 Declare messages, RPCs, and `node` endpoints in one `.wl` file to emit a single `<stem>.h/.c` pair and `<stem>_manifest.json`:
 

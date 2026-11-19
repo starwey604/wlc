@@ -19,9 +19,8 @@ pub use codegen::{GeneratedC, generate_c, generate_c_for_nodes};
 pub use identity::{IDENTITY_ALGORITHM, node_identity, schema_identity};
 pub use loader::{LoadedSchema, load_schema};
 pub use manifest::{
-    ARTIFACT_DIGEST_ALGORITHM, CODEGEN_CONTRACT_MAJOR, CODEGEN_CONTRACT_MINOR,
-    CODEGEN_MANIFEST_FORMAT, COMPILER_NAME, COMPILER_VERSION, ManifestArtifact,
-    generate_codegen_manifest,
+    ARTIFACT_DIGEST_ALGORITHM, CODEGEN_CONTRACT, CODEGEN_MANIFEST_FORMAT, COMPILER_NAME,
+    COMPILER_VERSION, ManifestArtifact, generate_codegen_manifest,
 };
 pub use node::{Node, NodeError, analyze_nodes};
 pub use node_codegen::{GeneratedNodeC, generate_node_c};

@@ -40,7 +40,7 @@
   Initialize the shared encoder's measured-length local for warning-clean GCC
   `-Os` generation; update the five provenance snapshots for that source-only
   initialization change. Business wire bytes and legacy profile defaults stay
-  unchanged. See `docs/static-kernel.md` for prototype scope and integration.
+  unchanged. See `docs/static-endpoint.md` for prototype scope and integration.
 
 - **Breaking API:** generated `*_endpoint_config_defaults()` and quick
   `*_endpoint_init()` now require a `wl_link_defaults_t` argument. Generic

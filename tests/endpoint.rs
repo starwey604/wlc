@@ -46,7 +46,7 @@ fn compile_and_run(generated: wlc::GeneratedNodeC, program: &str, connector: Opt
     for file in ["demo.c", "test.c"] {
         cc.arg(directory.path().join(file));
     }
-    for file in ["codec.c", "kernel.c", "packet_port.c"] {
+    for file in ["codec.c", "endpoint.c", "packet_port.c"] {
         cc.arg(root.join("src").join(file));
     }
     if let Some(connector) = connector {
@@ -181,8 +181,8 @@ static unsigned callbacks;
 static wl_packet_submit_t sink(void *u, const uint8_t *p, size_t n, wl_packet_token_t t) {
   (void)u; (void)p; (void)n; (void)t; return WL_PACKET_SENT;
 }
-static void done(void *u, wl_kernel_result_t r, const response_t *v) {
-  assert(u == &callbacks && r.outcome == WL_KERNEL_TIMED_OUT && v == NULL); ++callbacks;
+static void done(void *u, wl_rpc_result_t r, const response_t *v) {
+  assert(u == &callbacks && r.outcome == WL_RPC_TIMED_OUT && v == NULL); ++callbacks;
 }
 int main(void) {
   static demo_node_t endpoint; static wl_packet_port_t port; static uint8_t rx[2][128];
@@ -250,9 +250,9 @@ int32_t demo_on_execute(demo_node_t *self, const request_t *request, response_t 
   for (unsigned i = 0; i < 32; ++i) response->data.data[i] = (uint8_t)i;
   return 0;
 }
-static void done(demo_node_t *self, wl_kernel_result_t result, const response_t *response) {
+static void done(demo_node_t *self, wl_rpc_result_t result, const response_t *response) {
   (void)self;
-  assert(result.outcome == WL_KERNEL_SUCCESS && response && response->data.length == 32);
+  assert(result.outcome == WL_RPC_SUCCESS && response && response->data.length == 32);
   for (unsigned i=0; i<32; ++i) assert(response->data.data[i] == (uint8_t)i);
   ++completed;
 }

@@ -20,7 +20,7 @@ node wire { call Execute; call Names; recv Telemetry; }
     let files = generate_node_c(&schema, &nodes, "wire").unwrap().files;
     assert!(files["wire.h"].contains("REQUEST_MAX_ENCODED_SIZE UINT64_C(15)"));
     assert!(files["wire.h"].contains("WIRE_REQUEST_FRAME_MAX 27U"));
-    assert!(!files.contains_key("wire_kernel_codecs.h"));
+    assert!(!files.contains_key("wire_endpoint_codecs.h"));
     assert!(!files.contains_key("wire_values.h"));
     assert!(!files["wire.c"].contains("fingerprint"));
     let dir = tempfile::tempdir().unwrap();

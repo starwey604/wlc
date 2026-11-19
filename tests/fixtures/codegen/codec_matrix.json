@@ -1,9 +1,9 @@
 {
-  "format": "wirelink-codegen-manifest-v1",
+  "format": "wirelink-codegen-manifest-v2",
   "compiler": {
     "name": "wlc",
-    "version": "0.14.0",
-    "codegen_contract": {"major": 0, "minor": 14}
+    "version": "0.0.99",
+    "codegen_contract": 1
   },
   "module": "business",
   "identity": {

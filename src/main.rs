@@ -105,11 +105,7 @@ fn write_files(output: &Path, files: std::collections::BTreeMap<String, String>)
 }
 fn main() -> Result<()> {
     match Arguments::parse().command {
-        Command::CodegenContract => println!(
-            "{}.{}",
-            wlc::CODEGEN_CONTRACT_MAJOR,
-            wlc::CODEGEN_CONTRACT_MINOR
-        ),
+        Command::CodegenContract => println!("{}", wlc::CODEGEN_CONTRACT),
         Command::ModuleName { schema } => {
             let name = stem(&schema);
             if name.is_empty() {
