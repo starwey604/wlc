@@ -124,22 +124,6 @@ pub(super) fn emit_source(
         has_repeated_map.insert(plan.message.id, has_rep);
     }
 
-    let mut has_forward = false;
-    for (plan, kind) in plans.iter().zip(&kinds) {
-        let name = symbols.message_name(plan.message);
-        if needed_desc.contains(&plan.message.id) {
-            source.push_str(&format!("static const wl_codec_desc_t {name}_desc;\n"));
-            has_forward = true;
-        }
-        if *kind == Kind::GenericPositional {
-            source.push_str(&format!("static const wl_codec_desc_t {name}_pos_desc;\n"));
-            has_forward = true;
-        }
-    }
-    if has_forward {
-        source.push('\n');
-    }
-
     for (index, (shape, shape_dir)) in shapes.iter().enumerate() {
         let name = fixed::shape_name(index);
         source.push_str(&fixed::shape_source(shape, &name, *shape_dir, symbols));
@@ -150,6 +134,28 @@ pub(super) fn emit_source(
             .get(&plan.message.id)
             .copied()
             .unwrap_or_default();
+        // Nested descriptors are emitted in dependency order. Define each
+        // descriptor before the wrappers that reference it.
+        if needed_desc.contains(&plan.message.id) {
+            let emit_fields = match kind {
+                Kind::GenericTagged => true,
+                Kind::GenericPositional => true,
+                Kind::DirectPacked => dir.decode || plan.profile == CodecProfile::PositionalV1,
+                Kind::DirectFixed(_) => plan.profile == CodecProfile::PositionalV1,
+            };
+            let is_child = referenced_as_child.contains(&plan.message.id);
+            descriptor::emit_descriptor(
+                &mut source,
+                plan,
+                symbols,
+                emit_fields,
+                is_child,
+                dir,
+                has_repeated_map[&plan.message.id],
+                false,
+            );
+        }
+
         match kind {
             Kind::DirectFixed(shape_idx) => {
                 let shape = fixed::shape_name(*shape_idx);
@@ -159,11 +165,6 @@ pub(super) fn emit_source(
                 source.push_str(&packed::source(plan, symbols, dir).expect("packed plan"));
             }
             Kind::GenericPositional => {
-                source.push_str(&positional::source(
-                    &codecs.messages[&plan.message.id],
-                    symbols,
-                    dir,
-                ));
                 descriptor::emit_descriptor(
                     &mut source,
                     plan,
@@ -174,6 +175,11 @@ pub(super) fn emit_source(
                     false,
                     true,
                 );
+                source.push_str(&positional::source(
+                    &codecs.messages[&plan.message.id],
+                    symbols,
+                    dir,
+                ));
             }
             Kind::GenericTagged => {
                 let name = symbols.message_name(plan.message);
@@ -199,26 +205,6 @@ pub(super) fn emit_source(
                 }
                 source.push('\n');
             }
-        }
-
-        if needed_desc.contains(&plan.message.id) {
-            let emit_fields = match kind {
-                Kind::GenericTagged => true,
-                Kind::GenericPositional => true,
-                Kind::DirectPacked => dir.decode || plan.profile == CodecProfile::PositionalV1,
-                Kind::DirectFixed(_) => plan.profile == CodecProfile::PositionalV1,
-            };
-            let is_child = referenced_as_child.contains(&plan.message.id);
-            descriptor::emit_descriptor(
-                &mut source,
-                plan,
-                symbols,
-                emit_fields,
-                is_child,
-                dir,
-                has_repeated_map[&plan.message.id],
-                false,
-            );
         }
     }
 

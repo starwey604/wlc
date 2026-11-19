@@ -30,6 +30,9 @@ fn positional_routes_preserve_shared_tagged_dependencies() {
                         } else {
                             wlc::generate_c(&schema, "mixed").unwrap()
                         };
+                        assert!(!c.source.lines().any(|line| {
+                            line.starts_with("static const wl_codec_desc_t ") && line.ends_with(';')
+                        }));
                         for (name, contents) in [("mixed.h", c.header), ("mixed.c", c.source)] {
                             fs::write(dir.path().join(name), contents).unwrap();
                         }

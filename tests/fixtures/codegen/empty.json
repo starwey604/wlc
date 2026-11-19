@@ -18,8 +18,8 @@
   ],
   "artifact_digest_algorithm": "fnv1a64-domain-bytes-v1",
   "artifacts": [
-    {"path": "business.c", "size": 3734, "digest": "0xa7d318a38c35074e"},
+    {"path": "business.c", "size": 3692, "digest": "0x0983ddb6369d1946"},
     {"path": "business.h", "size": 2229, "digest": "0x2022ad7e996594bf"},
-    {"path": "business_manifest.json", "size": 870, "digest": "0x911406c8befefe51"}
+    {"path": "business_manifest.json", "size": 870, "digest": "0xbbe5650f1f704c69"}
   ]
 }

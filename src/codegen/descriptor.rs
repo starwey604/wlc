@@ -68,54 +68,59 @@ pub(super) fn emit_descriptor(
     };
     let ty = type_name(&message.name);
 
+    let mut trampolines = String::new();
     if emit_trampolines {
-        if emit_fields {
-            writeln!(
-                out,
-                "static void {name}_wlc_clear_v(void *value) {{ wl_codec_clear(&{sym}_desc, value); }}"
-            )
-            .unwrap();
+        let mut trampoline = |signature: String, body: String| {
+            writeln!(out, "static {signature};").unwrap();
+            writeln!(trampolines, "static {signature} {{ {body} }}").unwrap();
+        };
+        let clear = if emit_fields {
+            format!("wl_codec_clear(&{sym}_desc, value);")
         } else {
-            writeln!(
-                out,
-                "static void {name}_wlc_clear_v(void *value) {{ {name}_clear(value); }}"
-            )
-            .unwrap();
-        }
+            format!("{name}_clear(value);")
+        };
+        trampoline(format!("void {name}_wlc_clear_v(void *value)"), clear);
         if directions.encode {
-            if emit_fields {
-                writeln!(
-                    out,
-                    "static wl_codec_status_t {name}_wlc_encode_v(const void *value, uint8_t *out, size_t capacity, size_t *length) {{ return wl_codec_encode(&{sym}_desc, value, out, capacity, length); }}"
+            let (measure, encode) = if emit_fields {
+                (
+                    format!("return wl_codec_measure(&{sym}_desc, value, out_size);"),
+                    format!("return wl_codec_encode(&{sym}_desc, value, out, capacity, length);"),
                 )
-                .unwrap();
             } else {
-                writeln!(
-                    out,
-                    "static wl_codec_status_t {name}_wlc_measure_v(const void *value, size_t *out_size) {{\n  const size_t size = {name}_encoded_size(value);\n  if (size == SIZE_MAX) return WL_CODEC_ERR_INVALID_VALUE;\n  *out_size = size;\n  return WL_CODEC_OK;\n}}"
+                (
+                    format!(
+                        "const size_t size = {name}_encoded_size(value); if (size == SIZE_MAX) return WL_CODEC_ERR_INVALID_VALUE; *out_size = size; return WL_CODEC_OK;"
+                    ),
+                    format!("return {name}_encode(value, out, capacity, length);"),
                 )
-                .unwrap();
-                writeln!(
-                    out,
-                    "static wl_codec_status_t {name}_wlc_encode_v(const void *value, uint8_t *out, size_t capacity, size_t *length) {{ return {name}_encode(value, out, capacity, length); }}"
-                )
-                .unwrap();
-            }
+            };
+            trampoline(
+                format!(
+                    "wl_codec_status_t {name}_wlc_measure_v(const void *value, size_t *out_size)"
+                ),
+                measure,
+            );
+            trampoline(
+                format!(
+                    "wl_codec_status_t {name}_wlc_encode_v(const void *value, uint8_t *out, size_t capacity, size_t *length)"
+                ),
+                encode,
+            );
         }
         if directions.decode {
-            if emit_fields {
-                writeln!(
-                    out,
-                    "static wl_codec_status_t {name}_wlc_decode_v(const uint8_t *input, size_t length, void *out) {{ {ty}_t scratch; return wl_codec_decode(&{sym}_desc, input, length, out, &scratch); }}"
+            let decode = if emit_fields {
+                format!(
+                    "{ty}_t scratch; return wl_codec_decode(&{sym}_desc, input, length, out, &scratch);"
                 )
-                .unwrap();
             } else {
-                writeln!(
-                    out,
-                    "static wl_codec_status_t {name}_wlc_decode_v(const uint8_t *input, size_t length, void *out) {{ return {name}_decode(input, length, out); }}"
-                )
-                .unwrap();
-            }
+                format!("return {name}_decode(input, length, out);")
+            };
+            trampoline(
+                format!(
+                    "wl_codec_status_t {name}_wlc_decode_v(const uint8_t *input, size_t length, void *out)"
+                ),
+                decode,
+            );
         }
     }
 
@@ -199,11 +204,7 @@ pub(super) fn emit_descriptor(
         "NULL".to_owned()
     };
     let measure_fn = if emit_trampolines && directions.encode {
-        if emit_fields {
-            format!("{name}_wlc_measure_generic_v")
-        } else {
-            format!("{name}_wlc_measure_v")
-        }
+        format!("{name}_wlc_measure_v")
     } else {
         "NULL".to_owned()
     };
@@ -218,20 +219,16 @@ pub(super) fn emit_descriptor(
         "NULL".to_owned()
     };
 
-    if emit_trampolines && directions.encode && emit_fields {
-        writeln!(
-            out,
-            "static wl_codec_status_t {name}_wlc_measure_generic_v(const void *value, size_t *out_size) {{ return wl_codec_measure(&{sym}_desc, value, out_size); }}"
-        )
-        .unwrap();
-    }
-
     let repeated_flag = if has_repeated { 1 } else { 0 };
     writeln!(
         out,
         "static const wl_codec_desc_t {sym}_desc = {{\n  .fields = {fields_ptr},\n  .field_count = {field_count}U,\n  .struct_size = sizeof({ty}_t),\n  .presence_bytes = {presence_bytes}U,\n  .min_number = {min_number}U,\n  .max_number = {max_number}U,\n  .lookup = {lookup_const},\n  .has_repeated = {repeated_flag}U,\n  .dense_map = {dense_ptr},\n  .clear = {clear_fn},\n  .measure = {measure_fn},\n  .encode = {encode_fn},\n  .decode = {decode_fn}\n}};\n"
     )
     .unwrap();
+    if !trampolines.is_empty() {
+        out.push_str(&trampolines);
+        out.push('\n');
+    }
 }
 
 fn format_field_entry(
