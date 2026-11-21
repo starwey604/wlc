@@ -2,6 +2,9 @@
 
 ## 0.0.99
 
+- Use generated-code contract 2 for built-in node ports and explicit runtime I/O binding.
+- Generate UDP SDKs with separate receive and send limits.
+
 - Generate C for the endpoint API and report integer codegen contract 1 in the
   CLI and v2 manifest, independently of the compiler version.
 - Generate SDKs that check the installed core's codegen contract.

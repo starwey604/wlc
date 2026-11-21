@@ -16,4 +16,4 @@ message ControlResult = 3 {
 }
 
 rpc ApplyControl(Control) -> ControlResult;
-node release_smoke { io = external; handlers = dynamic; call ApplyControl; serve ApplyControl; }
+node release_smoke { handlers = dynamic; call ApplyControl; serve ApplyControl; }

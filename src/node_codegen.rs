@@ -5,7 +5,7 @@ use crate::{
     ast::Cardinality,
     codec_plan::{CodecPlan, CodecProfile},
     codegen::{c_identifier, c_type, type_name, upper_snake},
-    node::{Framing, Handlers, IoMode, Node, NodeError},
+    node::{Framing, Handlers, Node, NodeError},
     semantic::{MessageSymbol, ResolvedType, Symbol},
 };
 use std::{
@@ -185,23 +185,18 @@ pub(crate) fn check_names(schema: &SemanticModel, nodes: &[Node]) -> Result<(), 
         if n.handlers == Handlers::Dynamic {
             register(&mut names, format!("{p}_handlers_t"))?;
         }
-        if n.io == IoMode::Embedded {
-            for suffix in ["init_with_instance", "submit", "tx_ready"] {
+        for suffix in ["init_with_instance", "init_io", "submit", "tx_ready"] {
+            register(&mut names, format!("{p}_{suffix}"))?;
+        }
+        let rx = if n.framing == Framing::Native {
+            "rx_packet"
+        } else {
+            "rx_feed"
+        };
+        register(&mut names, format!("{p}_{rx}"))?;
+        if !n.calls.is_empty() || !n.serves.is_empty() || !n.send_routes.is_empty() {
+            for suffix in ["tx_write_fn", "init_sync"] {
                 register(&mut names, format!("{p}_{suffix}"))?;
-            }
-            register(
-                &mut names,
-                format!(
-                    "{p}_{}",
-                    if n.framing == Framing::Native {
-                        "rx_packet"
-                    } else {
-                        "rx_feed"
-                    }
-                ),
-            )?;
-            if !n.calls.is_empty() || !n.serves.is_empty() || !n.send_routes.is_empty() {
-                register(&mut names, format!("{p}_tx_write"))?;
             }
         }
         if !n.calls.is_empty() {
@@ -285,10 +280,7 @@ pub fn generate_node_c_with_pruning(
         c.header.push_str("#include <wirelink/endpoint.h>\n");
     }
     writeln!(c.header, "#include <wirelink/version.h>\n#if WIRELINK_CODEGEN_CONTRACT != {0}\n#error \"WLC requires generated-code contract {0}\"\n#endif", crate::CODEGEN_CONTRACT).unwrap();
-    if nodes
-        .iter()
-        .any(|n| n.io == IoMode::Embedded && n.framing != Framing::Native)
-    {
+    if nodes.iter().any(|n| n.framing != Framing::Native) {
         c.header.push_str("#include <wirelink/packet_stream.h>\n");
     }
     c.source.push_str("\n#include <limits.h>\n");
@@ -327,10 +319,9 @@ pub fn generate_node_c_with_pruning(
 }
 fn node_metadata(n: &Node, c: Capacity) -> String {
     format!(
-        "{{\"name\":\"{}\",\"framing\":\"{}\",\"io\":\"{}\",\"handlers\":\"{}\",\"timeout_ms\":{},\"request_frame_capacity\":{},\"reply_frame_capacity\":{},\"message_frame_capacity\":{},\"rx_frame_capacity\":{},\"tx_frame_capacity\":{},\"rx_wire_capacity\":{},\"tx_wire_capacity\":{}}}",
+        "{{\"name\":\"{}\",\"framing\":\"{}\",\"handlers\":\"{}\",\"timeout_ms\":{},\"request_frame_capacity\":{},\"reply_frame_capacity\":{},\"message_frame_capacity\":{},\"rx_frame_capacity\":{},\"tx_frame_capacity\":{},\"rx_wire_capacity\":{},\"tx_wire_capacity\":{}}}",
         n.name,
         n.framing.name(),
-        n.io.name(),
         n.handlers.name(),
         n.timeout_ms,
         c.request,
@@ -345,9 +336,8 @@ fn node_metadata(n: &Node, c: Capacity) -> String {
 fn emit_node(schema: &SemanticModel, n: &Node, c: Capacity, h: &mut String, s: &mut String) {
     let p = &n.name;
     let upper = upper_snake(p);
-    let embedded = n.io == IoMode::Embedded;
     let dynamic = n.handlers == Handlers::Dynamic;
-    let stream = embedded && n.framing != Framing::Native;
+    let stream = n.framing != Framing::Native;
     let tx = !n.calls.is_empty() || !n.serves.is_empty() || !n.send_routes.is_empty();
     let connector = if n.framing == Framing::CobsCrc16 {
         "cobs_crc16"
@@ -355,6 +345,9 @@ fn emit_node(schema: &SemanticModel, n: &Node, c: Capacity, h: &mut String, s: &
         "length16_none"
     };
     writeln!(h,"\ntypedef struct {p}_node {p}_node_t;\n#define {upper}_REQUEST_FRAME_MAX {}U\n#define {upper}_REPLY_FRAME_MAX {}U\n#define {upper}_MESSAGE_FRAME_MAX {}U\n#define {upper}_RX_FRAME_MAX {}U\n#define {upper}_TX_FRAME_MAX {}U\n#define {upper}_RX_WIRE_MAX {}U\n#define {upper}_TX_WIRE_MAX {}U",c.request,c.reply,c.message,c.rx,c.tx,c.rx_wire,c.tx_wire).unwrap();
+    if tx {
+        writeln!(h, "/* Accept and drain the whole frame, or reject it without consuming bytes. */\ntypedef wl_err_t (*{p}_tx_write_fn)({p}_node_t *self, const uint8_t *data, size_t length);").unwrap();
+    }
     if dynamic {
         writeln!(h, "typedef struct {{").unwrap();
         if n.serves.is_empty() && n.recv_routes.is_empty() {
@@ -408,13 +401,13 @@ fn emit_node(schema: &SemanticModel, n: &Node, c: Capacity, h: &mut String, s: &
     if !n.send_routes.is_empty() {
         writeln!(h, "  uint8_t message[{}];", c.message).unwrap();
     }
-    if embedded {
-        writeln!(
-            h,
-            "  wl_packet_port_t port;\n  uint8_t rx[WL_PACKET_RX_SLOTS][{}];",
-            c.rx_wire
-        )
-        .unwrap();
+    writeln!(
+        h,
+        "  wl_packet_port_t port;\n  uint8_t rx[WL_PACKET_RX_SLOTS][{upper}_RX_WIRE_MAX + 1U];"
+    )
+    .unwrap();
+    if tx {
+        writeln!(h, "  {p}_tx_write_fn tx_write;").unwrap();
     }
     if stream {
         writeln!(
@@ -430,25 +423,24 @@ fn emit_node(schema: &SemanticModel, n: &Node, c: Capacity, h: &mut String, s: &
     } else {
         String::new()
     };
-    if embedded {
-        writeln!(h,"/* Automatic instances are unique only within this process lifetime.\n * Stop I/O before reinitialization; persistent links should supply an instance. */\nwl_err_t {p}_init({p}_node_t *self{extra});\nwl_err_t {p}_init_with_instance({p}_node_t *self, uint32_t instance{extra});").unwrap();
-        if tx {
-            writeln!(h,"/* Accept and drain the whole frame, or reject it without consuming bytes. */\nwl_err_t {p}_tx_write({p}_node_t *self, const uint8_t *data, size_t length);").unwrap();
-        }
-        writeln!(h,"static inline void {p}_tx_ready({p}_node_t *self) {{ wl_packet_activity(&self->port); }}").unwrap();
-        if stream {
-            writeln!(h,"wl_err_t {p}_rx_feed({p}_node_t *self, const uint8_t *data, size_t length, size_t *consumed);").unwrap();
-        } else {
-            writeln!(
-                h,
-                "wl_err_t {p}_rx_packet({p}_node_t *self, const uint8_t *data, size_t length);"
-            )
-            .unwrap();
-        }
+    let tx_arg = if tx {
+        format!(", {p}_tx_write_fn tx_write")
+    } else {
+        String::new()
+    };
+    let args = if dynamic { ", handlers, user" } else { "" };
+    writeln!(h,"/* Automatic instances are unique only within this process lifetime.\n * Stop I/O before reinitialization; persistent links should supply an instance. */\nwl_err_t {p}_init({p}_node_t *self{tx_arg}{extra});\nwl_err_t {p}_init_with_instance({p}_node_t *self, uint32_t instance{tx_arg}{extra});\n/* Instance zero requests an automatic instance. */\nwl_err_t {p}_init_io({p}_node_t *self, uint32_t instance, const wl_packet_io_t *io{extra});").unwrap();
+    writeln!(
+        h,
+        "static inline void {p}_tx_ready({p}_node_t *self) {{ wl_packet_activity(&self->port); }}"
+    )
+    .unwrap();
+    if stream {
+        writeln!(h,"wl_err_t {p}_rx_feed({p}_node_t *self, const uint8_t *data, size_t length, size_t *consumed);").unwrap();
     } else {
         writeln!(
             h,
-            "wl_err_t {p}_init({p}_node_t *self, wl_packet_port_t *port{extra});"
+            "wl_err_t {p}_rx_packet({p}_node_t *self, const uint8_t *data, size_t length);"
         )
         .unwrap();
     }
@@ -521,49 +513,40 @@ fn emit_node(schema: &SemanticModel, n: &Node, c: Capacity, h: &mut String, s: &
     if has_route {
         emit_route(n, s);
     }
-    if embedded {
-        writeln!(s,"static wl_packet_submit_t {p}_submit(void *user, const uint8_t *data, size_t length, wl_packet_token_t token) {{\n  (void)token;").unwrap();
-        if tx {
-            writeln!(s,"  wl_err_t error = {p}_tx_write(user, data, length);\n  if (error == WL_OK) return WL_PACKET_SENT;\n  return error == WL_ERR_WOULD_BLOCK || error == WL_ERR_BUSY ? WL_PACKET_BUSY : WL_PACKET_FAILED;\n}}").unwrap();
-        } else {
-            s.push_str("  (void)user; (void)data; (void)length;\n  return WL_PACKET_FAILED;\n}\n");
-        }
-    }
-    let signature = if embedded {
-        format!("{p}_init_with_instance({p}_node_t *self, uint32_t instance{extra})")
+    writeln!(s,"static wl_packet_submit_t {p}_submit(void *user, const uint8_t *data, size_t length, wl_packet_token_t token) {{\n  (void)token;").unwrap();
+    if tx {
+        writeln!(s,"  {p}_node_t *self = user;\n  wl_err_t error = self->tx_write(self, data, length);\n  if (error == WL_OK) return WL_PACKET_SENT;\n  return error == WL_ERR_WOULD_BLOCK || error == WL_ERR_BUSY ? WL_PACKET_BUSY : WL_PACKET_FAILED;\n}}").unwrap();
     } else {
-        format!("{p}_init({p}_node_t *self, wl_packet_port_t *port{extra})")
-    };
-    writeln!(
-        s,
-        "wl_err_t {signature} {{\n  if (self == NULL{}) return WL_ERR_INVALID_ARG;",
-        if embedded {
-            " || instance == 0U"
-        } else {
-            " || port == NULL"
-        }
-    )
-    .unwrap();
+        s.push_str("  (void)user; (void)data; (void)length;\n  return WL_PACKET_FAILED;\n}\n");
+    }
+    let tx_required = if tx { " || io->submit == NULL" } else { "" };
+    writeln!(s,"wl_err_t {p}_init_io({p}_node_t *self, uint32_t instance, const wl_packet_io_t *io{extra}) {{\n  if (self == NULL || io == NULL{tx_required}) return WL_ERR_INVALID_ARG;\n  const wl_packet_io_t binding = *io;\n  const int external_rx = binding.rx_storage != NULL || binding.rx_storage_size != 0U || binding.rx_unit_size != 0U;\n  if (external_rx && (binding.rx_storage == NULL || binding.rx_unit_size < {upper}_RX_WIRE_MAX + 1U ||\n      binding.rx_unit_size > binding.rx_storage_size / WL_PACKET_RX_SLOTS)) return WL_ERR_INVALID_ARG;").unwrap();
     if dynamic {
         writeln!(s,"  if (handlers == NULL) return WL_ERR_INVALID_ARG;\n  const {p}_handlers_t saved = *handlers;").unwrap();
     }
-    s.push_str("  memset(self, 0, sizeof(*self));\n");
+    s.push_str("  wl_err_t error;\n  if (instance == 0U) {\n    error = wl_packet_instance_next(&instance);\n    if (error != WL_OK) return error;\n  }\n  memset(self, 0, sizeof(*self));\n");
     if dynamic {
         s.push_str("  self->handlers = saved; self->user = user;\n");
     }
-    if embedded {
-        let submit = if stream {
-            format!("wl_packet_stream_{connector}_submit")
-        } else {
-            format!("{p}_submit")
-        };
-        let user = if stream { "&self->stream" } else { "self" };
-        writeln!(s,"  wl_packet_config_t physical = {{.instance = instance, .rx_storage = &self->rx[0][0],\n      .rx_unit_size = sizeof(self->rx[0]), .rx_storage_size = sizeof(self->rx),\n      .submit = {submit}, .user = {user}}};\n  wl_err_t error = wl_packet_init(&self->port, &physical);\n  if (error != WL_OK) return error;").unwrap();
-        if stream {
-            writeln!(s,"  wl_packet_stream_config_t stream = {{.port = &self->port,\n      .tx_storage = {{self->tx_wire, sizeof(self->tx_wire)}}, .physical_submit = {p}_submit,\n      .user = self, .maximum_frame_size = {}U, .maximum_rx_frame_size = {}U}};\n  error = wl_packet_stream_{connector}_init(&self->stream, &stream);\n  if (error != WL_OK) {{ wl_packet_stop(&self->port); return error; }}",c.tx,c.rx).unwrap();
-        }
+    let physical = if tx {
+        "binding.submit".to_owned()
+    } else {
+        format!("binding.submit != NULL ? binding.submit : {p}_submit")
+    };
+    let (submit, notify, context) = if stream {
+        (
+            format!("wl_packet_stream_{connector}_submit"),
+            "binding.notify != NULL ? wl_packet_stream_notify : NULL",
+            "&self->stream",
+        )
+    } else {
+        (physical.clone(), "binding.notify", "binding.user")
+    };
+    writeln!(s,"  wl_packet_config_t packet = {{.instance = instance,\n      .rx_storage = external_rx ? binding.rx_storage : &self->rx[0][0],\n      .rx_unit_size = external_rx ? binding.rx_unit_size : sizeof(self->rx[0]),\n      .rx_storage_size = external_rx ? binding.rx_storage_size : sizeof(self->rx),\n      .submit = {submit}, .notify = {notify}, .user = {context}}};\n  error = wl_packet_init(&self->port, &packet);\n  if (error != WL_OK) return error;").unwrap();
+    if stream {
+        writeln!(s,"  wl_packet_stream_config_t stream = {{.port = &self->port,\n      .tx_storage = {{self->tx_wire, sizeof(self->tx_wire)}}, .physical_submit = {physical},\n      .notify = binding.notify, .user = binding.user, .maximum_frame_size = {upper}_TX_FRAME_MAX,\n      .maximum_rx_frame_size = {upper}_RX_FRAME_MAX}};\n  error = wl_packet_stream_{connector}_init(&self->stream, &stream);\n  if (error != WL_OK) {{ wl_packet_stop(&self->port); return error; }}").unwrap();
     }
-    writeln!(s,"  wl_endpoint_config_t config = {{.port = {}, .route = {}, .on_error = {p}_error, .user = self,\n      .storage = {{",if embedded{"&self->port"}else{"port"},if has_route{format!("{p}_route")}else{"NULL".into()}).unwrap();
+    writeln!(s,"  wl_endpoint_config_t config = {{.port = &self->port, .route = {}, .on_error = {p}_error, .user = self,\n      .storage = {{",if has_route{format!("{p}_route")}else{"NULL".into()}).unwrap();
     for (field, stride, cap, array) in [
         ("requests", "request_stride", c.request, true),
         ("replies", "reply_stride", c.reply, true),
@@ -582,15 +565,16 @@ fn emit_node(schema: &SemanticModel, n: &Node, c: Capacity, h: &mut String, s: &
         )
         .unwrap();
     }
-    s.push_str("      }};\n  return wl_endpoint_init(&self->core, &config);\n}\n");
-    if embedded {
-        let args = if dynamic { ", handlers, user" } else { "" };
-        writeln!(s,"wl_err_t {p}_init({p}_node_t *self{extra}) {{\n  uint32_t instance;\n  wl_err_t error = wl_packet_instance_next(&instance);\n  return error == WL_OK ? {p}_init_with_instance(self, instance{args}) : error;\n}}").unwrap();
-        if stream {
-            writeln!(s,"wl_err_t {p}_rx_feed({p}_node_t *self, const uint8_t *data, size_t length, size_t *consumed) {{\n  if (self == NULL) {{ if (consumed != NULL) *consumed = 0U; return WL_ERR_INVALID_ARG; }}\n  return wl_packet_stream_{connector}_feed(&self->stream, data, length, consumed);\n}}").unwrap();
-        } else {
-            writeln!(s,"wl_err_t {p}_rx_packet({p}_node_t *self, const uint8_t *data, size_t length) {{\n  return self == NULL ? WL_ERR_INVALID_ARG : wl_packet_rx_push(&self->port, data, length);\n}}").unwrap();
-        }
+    s.push_str("      }};\n  error = wl_endpoint_init(&self->core, &config);\n  if (error != WL_OK) wl_packet_stop(&self->port);\n  return error;\n}\n");
+    if tx {
+        writeln!(s,"static wl_err_t {p}_init_sync({p}_node_t *self, uint32_t instance{tx_arg}{extra}) {{\n  if (tx_write == NULL) return WL_ERR_INVALID_ARG;\n  const wl_packet_io_t io = {{.submit = {p}_submit, .user = self}};\n  wl_err_t error = {p}_init_io(self, instance, &io{args});\n  if (error == WL_OK) self->tx_write = tx_write;\n  return error;\n}}\nwl_err_t {p}_init({p}_node_t *self{tx_arg}{extra}) {{\n  return {p}_init_sync(self, 0U, tx_write{args});\n}}\nwl_err_t {p}_init_with_instance({p}_node_t *self, uint32_t instance{tx_arg}{extra}) {{\n  if (instance == 0U) return WL_ERR_INVALID_ARG;\n  return {p}_init_sync(self, instance, tx_write{args});\n}}").unwrap();
+    } else {
+        writeln!(s,"wl_err_t {p}_init({p}_node_t *self{extra}) {{\n  return {p}_init_io(self, 0U, &(wl_packet_io_t){{0}}{args});\n}}\nwl_err_t {p}_init_with_instance({p}_node_t *self, uint32_t instance{extra}) {{\n  if (instance == 0U) return WL_ERR_INVALID_ARG;\n  return {p}_init_io(self, instance, &(wl_packet_io_t){{0}}{args});\n}}").unwrap();
+    }
+    if stream {
+        writeln!(s,"wl_err_t {p}_rx_feed({p}_node_t *self, const uint8_t *data, size_t length, size_t *consumed) {{\n  if (self == NULL) {{ if (consumed != NULL) *consumed = 0U; return WL_ERR_INVALID_ARG; }}\n  return wl_packet_stream_{connector}_feed(&self->stream, data, length, consumed);\n}}").unwrap();
+    } else {
+        writeln!(s,"wl_err_t {p}_rx_packet({p}_node_t *self, const uint8_t *data, size_t length) {{\n  if (self == NULL) return WL_ERR_INVALID_ARG;\n  if (length > {upper}_RX_WIRE_MAX) return WL_ERR_BUF_TOO_SMALL;\n  return wl_packet_rx_push(&self->port, data, length);\n}}").unwrap();
     }
     writeln!(s,"wl_err_t {p}_step({p}_node_t *self, uint32_t now) {{\n  return self == NULL ? WL_ERR_INVALID_ARG : wl_endpoint_step(&self->core, now, WL_ENDPOINT_BUDGET);\n}}\nwl_err_t {p}_close({p}_node_t *self) {{\n  if (self == NULL) return WL_ERR_INVALID_ARG;\n  wl_err_t error = wl_endpoint_close(&self->core);").unwrap();
     if stream {

@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use crate::{
     ManifestArtifact, SemanticModel, generate_codegen_manifest,
-    node::{Handlers, IoMode, Node},
+    node::{Handlers, Node},
     node_identity,
 };
 
@@ -48,7 +48,6 @@ pub fn generate_sdk(
     let name = &options.name;
     let mut client = node.clone();
     client.name = name.clone();
-    client.io = IoMode::External;
     client.handlers = Handlers::Static;
     // The host bridge supplies a per-call completion through the explicit API.
     for call in &mut client.calls {

@@ -8,7 +8,7 @@
 
 ## 一、 构建 WLC 与命令行速查
 
-WLC 和 Wirelink 当前的开发版本为 `0.0.99`，生成 C 的兼容性由独立的生成契约 `1` 决定。在 Wirelink 仓库根目录构建编译器并生成代码。
+WLC 和 Wirelink 当前的开发版本为 `0.0.99`，生成 C 的兼容性由独立的生成契约 `2` 决定。在 Wirelink 仓库根目录构建编译器并生成代码。
 
 ```sh
 cargo build --release --locked --manifest-path wlc/Cargo.toml
@@ -79,13 +79,12 @@ node sensor {
 
 ---
 
-## 三、 节点的 5 项配置与默认值
+## 三、节点的 4 项配置与默认值
 
 | 节点配置项 | 默认值 | 可选值与适用场景 |
 | :--- | :--- | :--- |
 | **`framing`** | `native` | 默认面向带包边界链路（如 UDP）；UART 串口选 `cobs_crc16`；受控可靠字节流选 `length16` |
 | **`codec`** | `schema_v1` | 默认 TLV 编码（支持增删 optional 字段平滑演进）；普通消息可选零 Tag 开销的 `positional_v1`（RPC 固定使用 `schema_v1`） |
-| **`io`** | `embedded` | 默认内嵌端口、双 RX 槽与流转换器；异步零拷贝 DMA 或对接现有外部适配器时选 `external` |
 | **`handlers`** | `static` | 默认直接链接同名静态 C 函数（首参为 `<node>_node_t *`）；需运行时动态传回调表时选 `dynamic`（首参为 `void *user`） |
 | **`timeout_ms`** | `500` | 简化调用 `<node>_call_<rpc>()` 的默认超时毫秒数（范围 `1 .. INT32_MAX`） |
 
@@ -100,8 +99,9 @@ node sensor {
 假设节点名为 `n`（即 `node n { ... }`）：
 
 - **初始化**：
-  - `n_init(&node)`（`embedded` 模式）：初始化内嵌端口与缓冲，自动分配进程内唯一的非零实例号。若物理链路在 MCU 重启后可能残留旧包，可使用 `n_init_with_instance(&node, id)` 传入应用管理的非零会话 ID。
-  - `n_init(&node, &port)`（`external` 模式）：挂载由外部驱动持有的 `wl_packet_port_t`。
+  - `n_init(&node, tx_write)` 初始化节点内置端口和双 RX 槽，自动分配进程内唯一的非零实例号。纯接收节点省略 `tx_write`。需要显式管理非零实例号时使用 `n_init_with_instance(&node, id, tx_write)`。
+  - `n_init_io(&node, instance, &io)` 绑定异步驱动。`instance` 为零时自动分配。驱动使用 `&node.port`，需要特定接收槽对齐时可通过 `wl_packet_io_t` 提供外部 RX 存储。
+  - `handlers = dynamic` 节点在以上函数的参数末尾追加回调表和用户指针。
 - **发消息与调 RPC**：
   - `n_send_<msg>(&node, &value)`：返回 `WL_OK` 时已完成输入编码快照；若唯一的普通消息槽正忙，返回 `WL_ERR_WOULD_BLOCK`。
   - `n_call_<rpc>(&node, &request, done)`：简化调用，回调首参为 `n_node_t *`；从**下一次 `n_step(&node, now)`** 开始计算默认超时。
@@ -109,10 +109,10 @@ node sensor {
 - **步进与安全关闭**：
   - `n_step(&node, now_ms)`：由单一 Owner 传入毫秒时间戳，驱动发送、接收解码、超时与完成回调。
   - `n_close(&node)` / `n_quiescent(&node)`：先停止 RX 生产者，再调用 `close()` 并继续步进，直到 `quiescent()` 返回真（所有回调与物理租约均已排空）。
-- **物理层收发入口（`embedded` 模式）**：
-  - 应用实现 `n_tx_write(&node, data, len)`（整帧同步接受或返回 `WL_ERR_WOULD_BLOCK`），外设从忙恢复时调用 `n_tx_ready(&node)`；
+- **同步物理层收发入口**：
+  - 传入的发送函数接收 `(&node, data, len)`，同步接受整帧或返回 `WL_ERR_WOULD_BLOCK`。外设从忙恢复时调用 `n_tx_ready(&node)`。
   - 接收端根据 `framing` 调用 `n_rx_packet(&node, data, len)`（`native`）或 `n_rx_feed(&node, data, len, &consumed)`（流模式，务必按 `consumed` 移走已消费前缀、保留未消费尾部）。详见 [驱动移植指南](../docs/porting-adapters.md)。
-- **编译期容量宏**：`<N>_{REQUEST,REPLY,MESSAGE,RX,TX}_FRAME_MAX`（规范帧上限）与 `<N>_{RX,TX}_WIRE_MAX`（计入流分帧后的物理帧上限）。未声明的发送方向不分配缓冲。
+- **编译期容量宏**：`<N>_{REQUEST,REPLY,MESSAGE,RX,TX}_FRAME_MAX`（规范帧上限）与 `<N>_{RX,TX}_WIRE_MAX`（计入流分帧后的物理帧上限）。业务发送槽按节点角色分配。
 
 ---
 

@@ -34,20 +34,6 @@ impl Framing {
     }
 }
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum IoMode {
-    #[default]
-    Embedded,
-    External,
-}
-impl IoMode {
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Embedded => "embedded",
-            Self::External => "external",
-        }
-    }
-}
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Handlers {
     #[default]
     Static,
@@ -89,7 +75,6 @@ impl RpcRoute {
 pub struct Node {
     pub name: String,
     pub framing: Framing,
-    pub io: IoMode,
     pub handlers: Handlers,
     pub timeout_ms: u32,
     pub send_routes: Vec<MessageRoute>,
@@ -102,7 +87,6 @@ impl Node {
         Self {
             name: name.into(),
             framing: Framing::Native,
-            io: IoMode::Embedded,
             handlers: Handlers::Static,
             timeout_ms: 500,
             send_routes: Vec::new(),
@@ -231,8 +215,6 @@ pub fn analyze_nodes(ast: &Schema, model: &SemanticModel) -> Result<Vec<Node>, N
                 ("framing", "native") => node.framing = Framing::Native,
                 ("framing", "cobs_crc16") => node.framing = Framing::CobsCrc16,
                 ("framing", "length16") => node.framing = Framing::Length16,
-                ("io", "embedded") => node.io = IoMode::Embedded,
-                ("io", "external") => node.io = IoMode::External,
                 ("handlers", "static") => node.handlers = Handlers::Static,
                 ("handlers", "dynamic") => node.handlers = Handlers::Dynamic,
                 ("codec", value) => default_codec = codec(value)?,
@@ -407,7 +389,6 @@ pub fn sdk_node(
                 ));
             }
             let mut node = Node::new("client");
-            node.io = IoMode::External;
             let mut used = BTreeSet::new();
             for rpc in &ast.rpcs {
                 let req = message(model, &rpc.request.value)?;

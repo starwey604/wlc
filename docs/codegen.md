@@ -2,7 +2,7 @@
 
 [中文](codegen-cn.md) · [Typed nodes](static-endpoint.md) · [SDK](sdk.md)
 
-Use WLC and Wirelink with codegen contract 1. Messages, RPCs, and node roles live in a single `.wl` schema:
+Use WLC and Wirelink with codegen contract 2. Messages, RPCs, and node roles live in a single `.wl` schema:
 
 ```sh
 wlc validate device.wl [--previous old.wl]
@@ -31,6 +31,6 @@ Use `validate --previous previous.wl` or `compile --previous previous.wl` to che
 
 ## Integrate generation into CMake
 
-Wirelink provides `wirelink_wlc_generate(TARGET ... SCHEMA ... [NODE name | ALL_NODES] [PREVIOUS old.wl])` for node targets and `wirelink_wlc_generate_codec(TARGET ... SCHEMA ...)` for codec-only targets. Set `WIRELINK_WLC_EXECUTABLE` to a local WLC binary with codegen contract 1; transitive imports are tracked as build dependencies. See [development checks](https://github.com/starwey604/wirelink/blob/main/docs/development.md).
+Wirelink provides `wirelink_wlc_generate(TARGET ... SCHEMA ... [NODE name | ALL_NODES] [PREVIOUS old.wl])` for node targets and `wirelink_wlc_generate_codec(TARGET ... SCHEMA ...)` for codec-only targets. Set `WIRELINK_WLC_EXECUTABLE` to a local WLC binary with codegen contract 2; transitive imports are tracked as build dependencies. See [development checks](https://github.com/starwey604/wirelink/blob/main/docs/development.md).
 
 Use a dedicated output directory per deployment so stale generated ABI files are never mixed. Rebuild WLC after changing codegen templates before regenerating C or SDK outputs, and validate generated code with wire vectors, malformed inputs, and compiled C consumers.

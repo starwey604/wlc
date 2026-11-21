@@ -60,7 +60,8 @@ fn project_is_deterministic_and_emits_one_external_client_node() {
             .all(|path| !path.contains("_kernel."))
     );
     assert!(
-        generated.files["src/endpoint.c"].contains("device_init(&owner->endpoint, &owner->port)")
+        generated.files["src/endpoint.c"]
+            .contains("device_init_io(&owner->endpoint, instance, &io)")
     );
     assert!(!generated.files["src/values.hpp"].contains("has_enabled"));
     assert!(generated.files["src/values.hpp"].contains("has_label"));
@@ -497,16 +498,18 @@ fn cli_resolves_imported_rpc_declarations_and_local_host_node() {
 }
 
 #[test]
-fn udp_storage_covers_both_directions_and_an_oversize_sentinel() {
+fn udp_bridge_uses_separate_direction_limits_and_a_receive_sentinel() {
     let generated = sdk(
         "message Request @id(1) { packed fixed32 values[16] @id(1); } message Response @id(2) {}",
         RPC,
     )
     .unwrap();
-    // 64 bytes + tagged key/length + 12-byte RPC framing, then one sentinel.
+    let header = &generated.files["generated/device.h"];
+    assert!(header.contains("#define DEVICE_RX_WIRE_MAX 16U"));
+    assert!(header.contains("#define DEVICE_TX_WIRE_MAX 78U"));
+    assert!(header.contains("rx[WL_PACKET_RX_SLOTS][DEVICE_RX_WIRE_MAX + 1U]"));
     let bridge = &generated.files["src/endpoint.c"];
-    assert!(bridge.contains("rx[WL_PACKET_RX_SLOTS][79]"));
-    assert!(bridge.contains("&owner->port, 78}"));
+    assert!(bridge.contains("&owner->endpoint.port, DEVICE_RX_WIRE_MAX, DEVICE_TX_WIRE_MAX"));
 }
 
 #[test]

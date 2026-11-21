@@ -3,13 +3,13 @@
   "compiler": {
     "name": "wlc",
     "version": "0.0.99",
-    "codegen_contract": 1
+    "codegen_contract": 2
   },
   "module": "business",
   "identity": {
     "algorithm": "fnv1a64-v1",
     "schema": "0xcf57edfa09599916",
-    "node": "0x439e4966017059de"
+    "node": "0x54c8d3ce1306af4d"
   },
   "codec_formats": {
     "EVENT_CODEC_FORMAT": "schema-v1",
@@ -29,8 +29,8 @@
   ],
   "artifact_digest_algorithm": "fnv1a64-domain-bytes-v1",
   "artifacts": [
-    {"path": "business.c", "size": 23984, "digest": "0x7832cd756bda2400"},
-    {"path": "business.h", "size": 9375, "digest": "0xec13e45fe2976250"},
-    {"path": "business_manifest.json", "size": 1682, "digest": "0xdf1db665d4908f8b"}
+    {"path": "business.c", "size": 25329, "digest": "0xb57ddbd79c6ec9e3"},
+    {"path": "business.h", "size": 9653, "digest": "0x2089c13f932d0a6a"},
+    {"path": "business_manifest.json", "size": 1666, "digest": "0x97815217ac50d073"}
   ]
 }

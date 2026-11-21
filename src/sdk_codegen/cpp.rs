@@ -225,10 +225,7 @@ typedef struct {{
 }} {name}_sdk_call_t;
 "#
     );
-    let maximum_rx_frame = plan.maximum_datagram_size;
-    // UDP reserves one byte past the accepted datagram limit to detect
-    // truncation, rather than accepting the prefix of an oversized datagram.
-    let rx_unit_size = maximum_rx_frame + 1;
+    let upper = crate::codegen::upper_snake(name);
     let mut bridge_source = format!(
         r#"/* SPDX-License-Identifier: Apache-2.0 */
 /* C owns atomic port storage and all endpoint callback types. */
@@ -237,26 +234,20 @@ typedef struct {{
 #include <string.h>
 typedef struct {{
   {name}_node_t endpoint;
-  wl_packet_port_t port;
-  uint8_t rx[WL_PACKET_RX_SLOTS][{rx_unit_size}];
 }} {name}_sdk_owner_t;
 size_t {name}_sdk_endpoint_size(void) {{ return sizeof({name}_sdk_owner_t); }}
 size_t {name}_sdk_endpoint_alignment(void) {{ return _Alignof({name}_sdk_owner_t); }}
 wl_err_t {name}_sdk_endpoint_prepare(void* storage, wl_host_endpoint_t* descriptor) {{
   {name}_sdk_owner_t* owner = storage;
   memset(owner, 0, sizeof(*owner));
-  *descriptor = (wl_host_endpoint_t){{owner, &owner->endpoint.core, &owner->port, {maximum_rx_frame}}};
+  *descriptor = (wl_host_endpoint_t){{owner, &owner->endpoint.core, &owner->endpoint.port, {upper}_RX_WIRE_MAX, {upper}_TX_WIRE_MAX}};
   return WL_OK;
 }}
 wl_err_t {name}_sdk_endpoint_initialize(void* storage, uint32_t instance,
     wl_packet_sink_fn sink, wl_packet_notify_fn notify, void* user) {{
   {name}_sdk_owner_t* owner = storage;
-  wl_packet_config_t config = {{.instance = instance, .rx_storage = &owner->rx[0][0],
-    .rx_storage_size = sizeof(owner->rx), .rx_unit_size = sizeof(owner->rx[0]),
-    .submit = sink, .notify = notify, .user = user}};
-  const wl_err_t error = wl_packet_init(&owner->port, &config);
-  if (error != WL_OK) return error;
-  return {name}_init(&owner->endpoint, &owner->port);
+  const wl_packet_io_t io = {{.submit = sink, .notify = notify, .user = user}};
+  return {name}_init_io(&owner->endpoint, instance, &io);
 }}
 "#
     );

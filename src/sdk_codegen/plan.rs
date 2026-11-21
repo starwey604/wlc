@@ -19,7 +19,6 @@ pub(super) struct Plan<'a> {
     pub messages: Vec<&'a MessageSymbol>,
     pub enums: Vec<&'a EnumSymbol>,
     pub node: &'a Node,
-    pub maximum_datagram_size: usize,
     pub package: String,
     pub cmake_package: String,
     pub cmake_version: String,
@@ -206,8 +205,6 @@ impl<'a> Plan<'a> {
             ]
             .map(str::to_owned),
         );
-        // PacketUdpAdapter has one admission bound for both directions.
-        let mut maximum_datagram_size = 16_usize;
         for rpc in &node.calls {
             let method = identifier(&rpc.name);
             let c_method = c_identifier(&rpc.name);
@@ -239,8 +236,6 @@ impl<'a> Plan<'a> {
                         rpc.name
                     )));
                 }
-                maximum_datagram_size =
-                    maximum_datagram_size.max((rpc_maxima[&id].unwrap() + 12) as usize);
             }
         }
         Ok(Self {
@@ -248,7 +243,6 @@ impl<'a> Plan<'a> {
             messages: c.messages,
             enums,
             node,
-            maximum_datagram_size,
             package: format!("{name}_sdk"),
             cmake_package: format!("{}Sdk", name.to_upper_camel_case()),
             cmake_version: version.to_owned(),

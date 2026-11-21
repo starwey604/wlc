@@ -6,7 +6,6 @@
 #include <string.h>
 
 static release_smoke_node_t endpoints[2];
-static wl_packet_port_t ports[2];
 static uint8_t storage[2][2][256];
 static wl_packet_loopback_t transport;
 static unsigned completions, executions;
@@ -33,15 +32,12 @@ static void completed(void *user, wl_rpc_result_t result, const control_result_t
   ++completions;
 }
 int main(void) {
-  require(wl_packet_loopback_init(&transport, &ports[0], &ports[1], NULL, NULL) == WL_OK);
+  require(wl_packet_loopback_init(&transport, &endpoints[0].port, &endpoints[1].port, NULL, NULL) == WL_OK);
   for (unsigned side = 0; side < 2U; ++side) {
-    wl_packet_config_t config = {.instance = 1001U + side,
-        .rx_storage = &storage[side][0][0], .rx_unit_size = 256U,
-        .rx_storage_size = sizeof(storage[side]), .submit = wl_packet_loopback_submit,
+    const wl_packet_io_t config = {.submit = wl_packet_loopback_submit,
         .notify = wl_packet_loopback_notify, .user = &transport.directions[side]};
-    require(wl_packet_init(&ports[side], &config) == WL_OK);
     release_smoke_handlers_t handlers = {.on_apply_control = apply};
-    require(release_smoke_init(&endpoints[side], &ports[side], &handlers, NULL) == WL_OK);
+    require(release_smoke_init_io(&endpoints[side], 1001U + side, &config, &handlers, NULL) == WL_OK);
     control_t request = {.operation_id = UINT32_MAX,
         .joints = {-1.5f, 0.0f, 1.0f, 2.0f, -0.5f, 3.25f}};
     wl_call_handle_t call;

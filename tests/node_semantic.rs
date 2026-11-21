@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 use std::fs;
-use wlc::node::{Framing, Handlers, IoMode};
+use wlc::node::{Framing, Handlers};
 use wlc::{analyze_nodes, analyze_schema, generate_node_c, parse_schema};
 const MESSAGES: &str = "message Req @id(1) { uint32 value @id(1); } message Resp @id(2) { uint32 value @id(1); } message Tick @id(3) { uint32 value @id(1); }";
 fn nodes(tail: &str) -> Result<Vec<wlc::Node>, String> {
@@ -12,10 +12,9 @@ fn nodes(tail: &str) -> Result<Vec<wlc::Node>, String> {
 fn defaults_and_explicit_configuration_have_the_same_model() {
     let a = nodes("rpc Add(Req)->Resp; node sensor { send Tick; recv Tick; call Add; serve Add; }")
         .unwrap();
-    let b=nodes("node sensor { serve Add(Req)->Resp; call Add; recv Tick @codec(schema_v1); send Tick; timeout_ms=500; framing=native; codec=schema_v1; io=embedded; handlers=static; }").unwrap();
+    let b=nodes("node sensor { serve Add(Req)->Resp; call Add; recv Tick @codec(schema_v1); send Tick; timeout_ms=500; framing=native; codec=schema_v1; handlers=static; }").unwrap();
     assert_eq!(a, b);
     assert_eq!(a[0].framing, Framing::Native);
-    assert_eq!(a[0].io, IoMode::Embedded);
     assert_eq!(a[0].handlers, Handlers::Static);
     assert_eq!(wlc::node_identity(&a[0]), wlc::node_identity(&b[0]));
     let mut changed = a[0].clone();

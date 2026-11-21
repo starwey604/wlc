@@ -89,6 +89,8 @@ fn removed_contracts_are_errors_on_the_single_frontend() {
         "node demo { direct Tick; }",
         "node demo { rpc_role = server; }",
         "node demo { deferred = true; }",
+        "node demo { io = embedded; }",
+        "node demo { io = external; }",
     ] {
         let source = format!("{SCHEMA} {removed}");
         let rejected = match parse_schema(&source) {
@@ -167,10 +169,7 @@ fn node_cli_generates_versioned_artifacts_and_rejects_reliable() {
 fn dynamic_external_node_compiles_and_times_out_without_old_core() {
     let generated = generate(&format!(
         "{SCHEMA} {}",
-        NODE.replace(
-            "node demo {",
-            "node demo { io = external; handlers = dynamic;"
-        )
+        NODE.replace("node demo {", "node demo { handlers = dynamic;")
     ));
     compile_and_run(
         generated,
@@ -185,12 +184,14 @@ static void done(void *u, wl_rpc_result_t r, const response_t *v) {
   assert(u == &callbacks && r.outcome == WL_RPC_TIMED_OUT && v == NULL); ++callbacks;
 }
 int main(void) {
-  static demo_node_t endpoint; static wl_packet_port_t port; static uint8_t rx[2][128];
-  wl_packet_config_t c = {.instance=99, .rx_storage=&rx[0][0], .rx_unit_size=sizeof(rx[0]),
+  static demo_node_t endpoint; static uint8_t rx[2][128];
+  wl_packet_io_t c = { .rx_storage=&rx[0][0], .rx_unit_size=sizeof(rx[0]),
     .rx_storage_size=sizeof(rx), .submit=sink};
   demo_handlers_t handlers = {0};
-  assert(wl_packet_init(&port,&c) == WL_OK);
-  assert(demo_init(&endpoint,&port,&handlers,NULL) == WL_OK);
+  assert(demo_init_io(&endpoint,99,&(wl_packet_io_t){.submit=sink,.rx_unit_size=128},&handlers,NULL) == WL_ERR_INVALID_ARG);
+  assert(demo_init_io(&endpoint,99,&c,&handlers,NULL) == WL_OK);
+  assert(wl_packet_rx_unit_size(&endpoint.port) == sizeof(rx[0]));
+  assert(endpoint.port.config.rx_storage == &rx[0][0]);
   request_t req = {.input=INT32_MIN,.name={.length=3,.data={'a',0,'b'}}};
   assert(demo_call_execute_ex(&endpoint,&req,100000U,1U,done,&callbacks,NULL) == WL_OK);
   tick_t tick = {0};
@@ -258,7 +259,7 @@ static void done(demo_node_t *self, wl_rpc_result_t result, const response_t *re
 }
 int main(void) {
   static demo_node_t endpoint;
-  assert(demo_init(&endpoint) == WL_OK);
+  assert(demo_init(&endpoint, demo_tx_write) == WL_OK);
   request_t request = {.input=INT32_MIN,.name={.length=3,.data={'a',0,'b'}}};
   assert(demo_call_execute(&endpoint,&request,done) == WL_OK);
   memset(&request,0,sizeof(request));
@@ -301,7 +302,11 @@ fn pure_receive_stream_and_tx_ready_backpressure_recovery() {
 #include "demo.h"
 #include <assert.h>
 static sub_node_t subscriber;
-static unsigned attempts, deliveries;
+static unsigned attempts, deliveries, notifications;
+static void notify(void *user) {{
+  assert(user == &notifications);
+  ++notifications;
+}}
 wl_err_t pub_tx_write(pub_node_t *self, const uint8_t *data, size_t length) {{
   (void)self; if (++attempts==1U) return WL_ERR_WOULD_BLOCK;
   {receive}
@@ -311,7 +316,12 @@ void sub_on_tick(sub_node_t *self, const tick_t *tick) {{
 }}
 int main(void) {{
   pub_node_t publisher;
-  assert(pub_init(&publisher)==WL_OK && sub_init(&subscriber)==WL_OK);
+  assert(pub_init(&publisher, NULL)==WL_ERR_INVALID_ARG);
+  assert(pub_init(&publisher, pub_tx_write)==WL_OK);
+  const wl_packet_io_t io = {{.notify=notify,.user=&notifications}};
+  assert(sub_init_io(&subscriber,0,&io)==WL_OK);
+  sub_tx_ready(&subscriber);
+  assert(notifications == 1U);
   assert(pub_send_tick_val(&publisher,42U,7U)==WL_OK);
   assert(pub_step(&publisher,0U)==WL_OK && attempts==1U);
   assert(pub_step(&publisher,1U)==WL_OK && attempts==1U);
@@ -348,7 +358,7 @@ fn selected_client_links_without_server_handlers_under_default_link_options() {
 wl_err_t client_tx_write(client_node_t *self,const uint8_t *data,size_t length) {
   (void)self; (void)data; (void)length; return WL_OK;
 }
-int main(void) { client_node_t client; assert(client_init(&client)==WL_OK);
+int main(void) { client_node_t client; assert(client_init(&client, client_tx_write)==WL_OK);
   assert(client_close(&client)==WL_OK && client_step(&client,0U)==WL_OK && client_quiescent(&client)); return 0; }
 "#,
         None,

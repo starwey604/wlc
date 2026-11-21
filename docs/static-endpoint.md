@@ -17,7 +17,6 @@ rpc Read(ReadRequest) -> ReadResponse;
 
 node device {
   framing = native;       // native | cobs_crc16 | length16
-  io = embedded;          // embedded | external
   handlers = static;      // static | dynamic
   timeout_ms = 500;       // 1..2147483647
   serve Read;
@@ -25,13 +24,11 @@ node device {
 }
 ```
 
-Use WLC and Wirelink with codegen contract 1. RPC routes always use Schema-v1; ordinary messages may select `positional_v1` per node or per route. Node routes require bounded types, and TX storage is pruned by declared `call` / `serve` / `send` roles.
+Use WLC and Wirelink with codegen contract 2. RPC routes always use Schema-v1; ordinary messages may select `positional_v1` per node or per route. Node routes require bounded types, and TX storage is pruned by declared `call` / `serve` / `send` roles.
 
-## Embedded defaults vs. external drivers
+## Runtime I/O binding
 
-- **Embedded (default)**: `<node>_node_t` embeds `wl_packet_port_t`, two RX slots, and stream state when using `cobs_crc16` / `length16`. Call `<node>_init(&node)` (or `<node>_init_with_instance(&node, id)`), implement whole-frame `<node>_tx_write(self, data, length)`, and call `<node>_tx_ready(&node)` when a busy sink becomes writable. Deliver RX via `<node>_rx_packet(...)` (native) or `<node>_rx_feed(..., &consumed)` (streams, preserving any unconsumed tail).
-- **External (`io = external`)**: The application supplies an initialized `wl_packet_port_t` via `<node>_init(&node, &port)` for async DMA, zero-copy, or UDP/UART adapters, preserving `SENT / STARTED / BUSY / FAILED` physical lease ownership.
-- **Static (default) vs. dynamic**: Static handlers link directly as `<node>_on_<msg/rpc>(self, ...)` with context in `self->user`; `handlers = dynamic` generates `<node>_handlers_t` taking `void *user`.
+Nodes own their port, two default RX slots, and their selected stream connector. Use `<node>_init(&node, tx_write)` for a synchronous whole-frame sink, or omit the callback for receive-only nodes. Use `<node>_init_io(&node, instance, &io)` for async adapters and supply optional external RX storage for hardware such as USB Bulk. Feed byte streams through `_rx_feed`, retaining unconsumed bytes. Packet transports use `_rx_packet` or port claim/commit. Dynamic handlers add a handler table and user pointer.
 
 ## Admission, stepping, and shutdown
 

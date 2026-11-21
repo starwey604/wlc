@@ -70,10 +70,9 @@ pub fn schema_identity(model: &SemanticModel) -> u64 {
 
 /// Exact normalized local node identity; report alongside schema_identity.
 pub fn node_identity(model: &Node) -> u64 {
-    let mut hash = StableHash::new(b"wlc.node.identity.v1");
+    let mut hash = StableHash::new(b"wlc.node.identity.v2");
     hash.string(&model.name);
     hash.string(model.framing.name());
-    hash.string(model.io.name());
     hash.string(model.handlers.name());
     hash.u32(model.timeout_ms);
     for routes in [&model.send_routes, &model.recv_routes] {
