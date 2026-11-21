@@ -2,7 +2,7 @@
 
 [English](codegen.md) · [类型化节点](static-endpoint-cn.md) · [SDK](sdk-cn.md)
 
-使用 生成契约为 2 的 WLC 与 Wirelink。消息、RPC 与节点全部声明在同一 `.wl` 文件中：
+使用 生成契约为 1 的 WLC 与 Wirelink。消息、RPC 与节点全部声明在同一 `.wl` 文件中：
 
 ```sh
 wlc validate device.wl [--previous old.wl]
@@ -31,6 +31,6 @@ wlc module-name device.wl
 
 ## 接入 CMake 构建
 
-加载 Wirelink 后，使用 `wirelink_wlc_generate(TARGET ... SCHEMA ... [NODE name | ALL_NODES] [PREVIOUS old.wl])` 生成节点，使用 `wirelink_wlc_generate_codec(TARGET ... SCHEMA ...)` 生成纯编解码器。通过 `WIRELINK_WLC_EXECUTABLE` 指定本地生成契约为 2 的编译器；传递 `import` 自动成为构建/重配置依赖。参阅 [开发与验证指南](https://github.com/starwey604/wirelink/blob/main/docs/development.md)。
+加载 Wirelink 后，使用 `wirelink_wlc_generate(TARGET ... SCHEMA ... [NODE name | ALL_NODES] [PREVIOUS old.wl])` 生成节点，使用 `wirelink_wlc_generate_codec(TARGET ... SCHEMA ...)` 生成纯编解码器。通过 `WIRELINK_WLC_EXECUTABLE` 指定本地生成契约为 1 的编译器；传递 `import` 自动成为构建/重配置依赖。参阅 [开发与验证指南](https://github.com/starwey604/wirelink/blob/main/docs/development.md)。
 
 每种角色或部署使用独立输出目录，切勿混编旧版产物。修改内置模板或生成逻辑后，需先重建 WLC 再重新生成 C 与 SDK，并同时运行公开字节向量、畸形输入和编译/执行验证。

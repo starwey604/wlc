@@ -10,7 +10,7 @@ cmake -S sdk -B build/sdk -DCMAKE_PREFIX_PATH=/path/to/wirelink-install
 cmake --build build/sdk --parallel
 ```
 
-构建使用生成契约 2、SDK 源码 API 版本 3 的 WLC 与 Wirelink。SDK 包版本由作者指定。若有多个含 `call` 的节点须传 `--node`；无显式节点时可从顶层 `rpc` 合成客户端。生成器为目标节点生成静态处理器客户端，通过 `init_io` 将内置端口接到 UDP，并按调用绑定完成回调。
+构建使用生成契约 1、SDK 源码 API 版本 3 的 WLC 与 Wirelink。SDK 包版本由作者指定。若有多个含 `call` 的节点须传 `--node`；无显式节点时可从顶层 `rpc` 合成客户端。生成器为目标节点生成静态处理器客户端，通过 `init_io` 将内置端口接到 UDP，并按调用绑定完成回调。
 
 ## 构建原生库或 Python wheel
 

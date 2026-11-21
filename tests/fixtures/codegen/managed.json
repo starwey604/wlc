@@ -3,7 +3,7 @@
   "compiler": {
     "name": "wlc",
     "version": "0.0.99",
-    "codegen_contract": 2
+    "codegen_contract": 1
   },
   "module": "business",
   "identity": {
@@ -30,7 +30,7 @@
   "artifact_digest_algorithm": "fnv1a64-domain-bytes-v1",
   "artifacts": [
     {"path": "business.c", "size": 25329, "digest": "0xb57ddbd79c6ec9e3"},
-    {"path": "business.h", "size": 9653, "digest": "0x2089c13f932d0a6a"},
-    {"path": "business_manifest.json", "size": 1666, "digest": "0x97815217ac50d073"}
+    {"path": "business.h", "size": 9653, "digest": "0x466ba2cc4ecb1328"},
+    {"path": "business_manifest.json", "size": 1666, "digest": "0x6983cb7899e1808b"}
   ]
 }

@@ -8,7 +8,7 @@
 
 ## 一、 构建 WLC 与命令行速查
 
-WLC 和 Wirelink 当前的开发版本为 `0.0.99`，生成 C 的兼容性由独立的生成契约 `2` 决定。在 Wirelink 仓库根目录构建编译器并生成代码。
+WLC 和 Wirelink 当前的开发版本为 `0.0.99`，生成 C 的兼容性由独立的生成契约 `1` 决定。在 Wirelink 仓库根目录构建编译器并生成代码。
 
 ```sh
 cargo build --release --locked --manifest-path wlc/Cargo.toml

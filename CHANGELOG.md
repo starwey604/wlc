@@ -2,7 +2,7 @@
 
 ## 0.0.99
 
-- Use generated-code contract 2 for built-in node ports and explicit runtime I/O binding.
+- Generate built-in node ports and bind runtime I/O explicitly at initialization.
 - Generate UDP SDKs with separate receive and send limits.
 
 - Generate C for the endpoint API and report integer codegen contract 1 in the

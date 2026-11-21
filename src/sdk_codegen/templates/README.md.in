@@ -64,7 +64,7 @@ The optional Python extension uses `@UPPER@_BUILD_PYTHON=ON` (enabled by the
 Python build frontend); native C++ builds default to OFF. `BUILD_TESTING` loads
 hand-maintained `tests/CMakeLists.txt` when present.
 `share/@NAME@/wlc-sdk-build.json`, or the package-local wheel file, records
-`wirelink-sdk-build-v3` and endpoint contract `2`.
+`wirelink-sdk-build-v3` and endpoint contract `1`.
 
 CMake checks the generated-code contract in the included node manifest against
 the installed Wirelink package. A local

@@ -8,7 +8,7 @@ use crate::{
 };
 
 /// Compatibility between generated C and the Wirelink headers.
-pub const CODEGEN_CONTRACT: u16 = 2;
+pub const CODEGEN_CONTRACT: u16 = 1;
 /// Stable JSON manifest format identifier.
 pub const CODEGEN_MANIFEST_FORMAT: &str = "wirelink-codegen-manifest-v2";
 /// Diagnostic, non-cryptographic artifact digest algorithm.
