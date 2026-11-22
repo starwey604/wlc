@@ -28,12 +28,12 @@ node device {
 
 ## 运行时接线
 
-节点内置端口、默认双 RX 槽和所选流连接器。同步发送使用 `<node>_init(&node, tx_write)`，纯接收节点省略发送回调。异步或零拷贝驱动使用 `<node>_init_io(&node, instance, &io)`，USB 可指定外部 RX 存储和槽步长。字节流通过 `_rx_feed` 接收并保留未消费尾部，包传输通过 `_rx_packet` 或端口 claim/commit 接收。`handlers = dynamic` 使用回调表和 `void *user`，静态处理器直接链接。
+通过 `<node>_bind(&node, transport)` 绑定驱动。驱动可提供满足 DMA 或 USB Bulk 对齐要求的 RX 槽。同步整帧发送使用 `<node>_bind_sync(&node, tx_write)`，纯接收节点省略回调。持久链路通过相应的 `_instance` 入口传入非零实例号。字节流使用 `wl_node_rx_feed(&node.node, ...)` 并保留未消费尾部，原生包使用 `wl_node_rx_packet` 或驱动侧 claim/commit。动态处理器另传回调表与用户指针。
 
 ## 接纳、推进与关闭
 
-核心固定支持 **4 个出站调用槽、3 个回复槽、1 个普通消息快照槽**，并由单一 owner 串行调用 `init`、`send`、`call`、`cancel`、`step`、`close` 与 `quiescent`。
+核心固定支持 **4 个出站调用槽、3 个回复槽、1 个普通消息快照槽**，并由单一 owner 串行调用 `bind`、`send`、`call`、`cancel`、`step`、`close` 与 `quiescent`。
 
 - **简化调用与 `_ex`**：`<node>_call_<rpc>(self, &req, done)` 回调首参为节点指针，使用 `timeout_ms`，且从**下一次 `step(now)`** 开始计时；`<node>_call_<rpc>_ex(self, &req, now, timeout, done, user, out)` 从显式 `now` 计时，可传入上下文与可选取消句柄。
 - **handler 与回调生命周期**：服务端 handler 填写响应后返回 `0`（成功）或非零 `int32_t` 业务拒绝码；完成回调借用响应视图至返回前，需保留时直接按值复制有界结构体。`cancel` / `timeout` 不撤销远端执行，应用自行处理重试与幂等。
-- **关闭顺序**：先停止 RX 生产者，再调用 `<node>_close(&node)`。异步驱动须归还 TX 租约。持续推进 `<node>_step(&node, now)`，等 `<node>_quiescent(&node)` 返回非零后再释放或复用存储。完整移植契约见 [传输层移植指南](https://github.com/starwey604/wirelink/blob/main/docs/porting-adapters.md)。
+- **关闭顺序**：同步模式先停止外部 RX 生产者，再调用 `wl_node_close(&node.node, now_ms)`。收到 `WL_ERR_WOULD_BLOCK` 或 `WL_ERR_BUSY` 时重试，遇到驱动错误时处理错误。成功后即可复用存储。详见[传输层移植指南](https://github.com/starwey604/wirelink/blob/main/docs/porting-adapters.md)。

@@ -11,7 +11,7 @@ pub(super) fn emit(plan: &Plan<'_>, files: &mut BTreeMap<String, String>) {
     let name = &plan.options.name;
     // Keep system/Wirelink dependencies global, then isolate schema C typedefs
     // (e.g. Mode -> mode_t) from system typedefs in the C++ bridge.
-    files.insert("src/native.hpp".into(), format!("/* SPDX-License-Identifier: Apache-2.0 */\n#pragma once\n#include <cfloat>\n#include <cstddef>\n#include <cstdint>\n#include <wirelink/codec.h>\n#include <wirelink/endpoint.h>\n// Only passive values cross this namespace. Endpoint callbacks stay in C.\nnamespace {name}::wlc_native {{\n#include \"{name}.h\"\n}}\n"));
+    files.insert("src/native.hpp".into(), format!("/* SPDX-License-Identifier: Apache-2.0 */\n#pragma once\n#include <cfloat>\n#include <cstddef>\n#include <cstdint>\n#include <wirelink/codec.h>\n#include <wirelink/node.h>\n// Isolate schema names from system C++ typedefs.\nnamespace {name}::wlc_native {{\n#include \"{name}.h\"\n}}\n"));
     let native = files.get_mut("src/native.hpp").unwrap();
     native.push_str("// C enum macros must not rewrite scoped C++ enum member names.\n");
     for enumeration in &plan.enums {
@@ -212,10 +212,6 @@ pub(super) fn emit(plan: &Plan<'_>, files: &mut BTreeMap<String, String>) {
 #ifdef __cplusplus
 extern "C" {{
 #endif
-size_t {name}_sdk_endpoint_size(void);
-size_t {name}_sdk_endpoint_alignment(void);
-wl_err_t {name}_sdk_endpoint_prepare(void*, wl_host_endpoint_t*);
-wl_err_t {name}_sdk_endpoint_initialize(void*, uint32_t, wl_packet_sink_fn, wl_packet_notify_fn, void*);
 typedef struct {{
   void* endpoint;
   const void* request;
@@ -225,32 +221,9 @@ typedef struct {{
 }} {name}_sdk_call_t;
 "#
     );
-    let upper = crate::codegen::upper_snake(name);
-    let mut bridge_source = format!(
-        r#"/* SPDX-License-Identifier: Apache-2.0 */
-/* C owns atomic port storage and all endpoint callback types. */
-#include "endpoint.h"
-#include "{name}.h"
-#include <string.h>
-typedef struct {{
-  {name}_node_t endpoint;
-}} {name}_sdk_owner_t;
-size_t {name}_sdk_endpoint_size(void) {{ return sizeof({name}_sdk_owner_t); }}
-size_t {name}_sdk_endpoint_alignment(void) {{ return _Alignof({name}_sdk_owner_t); }}
-wl_err_t {name}_sdk_endpoint_prepare(void* storage, wl_host_endpoint_t* descriptor) {{
-  {name}_sdk_owner_t* owner = storage;
-  memset(owner, 0, sizeof(*owner));
-  *descriptor = (wl_host_endpoint_t){{owner, &owner->endpoint.core, &owner->endpoint.port, {upper}_RX_WIRE_MAX, {upper}_TX_WIRE_MAX}};
-  return WL_OK;
-}}
-wl_err_t {name}_sdk_endpoint_initialize(void* storage, uint32_t instance,
-    wl_packet_sink_fn sink, wl_packet_notify_fn notify, void* user) {{
-  {name}_sdk_owner_t* owner = storage;
-  const wl_packet_io_t io = {{.submit = sink, .notify = notify, .user = user}};
-  return {name}_init_io(&owner->endpoint, instance, &io);
-}}
-"#
-    );
+    let mut bridge_source =
+        String::from("/* SPDX-License-Identifier: Apache-2.0 */\n#include \"endpoint.h\"\n");
+    writeln!(bridge_source, "#include \"{name}.h\"\n#include <string.h>").unwrap();
     for rpc in &plan.node.calls {
         let method = c_identifier(&rpc.name);
         let resp = c_type_name(&rpc.response_name);
@@ -267,10 +240,10 @@ wl_err_t {name}_sdk_endpoint_initialize(void* storage, uint32_t instance,
 }}
 wl_err_t {name}_sdk_{method}_submit({name}_sdk_call_t* state, uint32_t now, uint32_t timeout,
     wl_host_rpc_notify_fn notify, void* context, wl_call_handle_t* call) {{
-  {name}_sdk_owner_t* owner = state->endpoint;
+  {name}_node_t* owner = state->endpoint;
   state->notify = notify;
   state->notify_context = context;
-  return {name}_call_{method}_ex(&owner->endpoint, state->request, now, timeout,
+  return {name}_call_{method}_ex(owner, state->request, now, timeout,
       {name}_sdk_{method}_done, state, call);
 }}
 "#).unwrap();
@@ -291,19 +264,18 @@ wl_err_t {name}_sdk_{method}_submit({name}_sdk_call_t* state, uint32_t now, uint
 namespace {name} {{
 using namespace wlc_native;
 namespace {{
-void destroy(void* pointer) noexcept {{
-  ::operator delete(pointer, std::align_val_t({name}_sdk_endpoint_alignment()));
+void destroy(wl_node_t* node) noexcept {{
+  delete reinterpret_cast<{name}_node_t*>(node);
 }}
-void* create(wl_host_endpoint_t& descriptor, wirelink::Error& error) {{
-  std::unique_ptr<void, decltype(&destroy)> storage(
-      ::operator new({name}_sdk_endpoint_size(), std::align_val_t({name}_sdk_endpoint_alignment())), destroy);
-  const auto status = {name}_sdk_endpoint_prepare(storage.get(), &descriptor);
-  if (status != WL_OK) {{ error = wirelink::Error::local(status); return nullptr; }}
-  return storage.release();
+wl_err_t create(uint32_t instance, wl_transport_t* transport, wl_node_t** out) {{
+  auto owner = std::make_unique<{name}_node_t>();
+  const auto status = {name}_bind_instance(owner.get(), instance, transport);
+  if (status == WL_OK) *out = &owner.release()->node;
+  return status;
 }}
 }}
 wirelink::Result<Client> Client::connect(const wirelink::UdpOptions& options) {{
-  auto session = wirelink::Session::connect(options, {{create, {name}_sdk_endpoint_initialize, destroy}});
+  auto session = wirelink::Session::connect(options, {{create, destroy}});
   if (!session) return session.error();
   return Client(std::move(session).value());
 }}

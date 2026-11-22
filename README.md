@@ -99,19 +99,19 @@ node sensor {
 假设节点名为 `n`（即 `node n { ... }`）：
 
 - **初始化**：
-  - `n_init(&node, tx_write)` 初始化节点内置端口和双 RX 槽，自动分配进程内唯一的非零实例号。纯接收节点省略 `tx_write`。需要显式管理非零实例号时使用 `n_init_with_instance(&node, id, tx_write)`。
-  - `n_init_io(&node, instance, &io)` 绑定异步驱动。`instance` 为零时自动分配。驱动使用 `&node.port`，需要特定接收槽对齐时可通过 `wl_packet_io_t` 提供外部 RX 存储。
+  - `n_bind(&node, transport)` 绑定驱动并自动分配非零实例号。持久链路可用 `n_bind_instance(&node, id, transport)` 指定实例号。
+  - `n_bind_sync(&node, tx_write)` 绑定整帧同步发送函数。纯接收节点省略回调。同步持久链路使用 `n_bind_sync_instance(&node, id, tx_write)`。
   - `handlers = dynamic` 节点在以上函数的参数末尾追加回调表和用户指针。
 - **发消息与调 RPC**：
   - `n_send_<msg>(&node, &value)`：返回 `WL_OK` 时已完成输入编码快照；若唯一的普通消息槽正忙，返回 `WL_ERR_WOULD_BLOCK`。
-  - `n_call_<rpc>(&node, &request, done)`：简化调用，回调首参为 `n_node_t *`；从**下一次 `n_step(&node, now)`** 开始计算默认超时。
-  - `n_call_<rpc>_ex(&node, &request, now, timeout, done, user, &out)`：显式时间调用，回调首参为 `void *user`；从传入的 `now` 立即计时（`timeout = 0` 使用默认超时），可通过 `out` 句柄调用 `n_cancel(&node, handle)`。
+  - `n_call_<rpc>(&node, &request, done)`：简化调用，回调首参为 `n_node_t *`；从**下一次 `wl_node_step(&node.node, now)`** 开始计算默认超时。
+  - `n_call_<rpc>_ex(&node, &request, now, timeout, done, user, &out)`：显式时间调用，回调首参为 `void *user`；从传入的 `now` 立即计时（`timeout = 0` 使用默认超时），可通过 `out` 句柄调用 `wl_node_cancel(&node.node, handle)`。
 - **步进与安全关闭**：
-  - `n_step(&node, now_ms)`：由单一 Owner 传入毫秒时间戳，驱动发送、接收解码、超时与完成回调。
-  - `n_close(&node)` / `n_quiescent(&node)`：先停止 RX 生产者，再调用 `close()` 并继续步进，直到 `quiescent()` 返回真（所有回调与物理租约均已排空）。
+  - `wl_node_step(&node.node, now_ms)`：由单一 Owner 传入毫秒时间戳，驱动发送、接收解码、超时与完成回调。
+  - 同步模式先停止 RX 生产者。调用 `wl_node_close(&node.node, now_ms)`；若返回 `WL_ERR_WOULD_BLOCK` 或 `WL_ERR_BUSY`，继续推进关闭。成功后即可复用存储。
 - **同步物理层收发入口**：
-  - 传入的发送函数接收 `(&node, data, len)`，同步接受整帧或返回 `WL_ERR_WOULD_BLOCK`。外设从忙恢复时调用 `n_tx_ready(&node)`。
-  - 接收端根据 `framing` 调用 `n_rx_packet(&node, data, len)`（`native`）或 `n_rx_feed(&node, data, len, &consumed)`（流模式，务必按 `consumed` 移走已消费前缀、保留未消费尾部）。详见 [驱动移植指南](../docs/porting-adapters.md)。
+  - 传入的发送函数接收 `(&node, data, len)`，同步接受整帧或返回 `WL_ERR_WOULD_BLOCK`。外设从忙恢复时调用 `wl_node_tx_ready(&node.node)`。
+  - 接收端根据 `framing` 调用 `wl_node_rx_packet(&node.node, data, len)`（`native`）或 `wl_node_rx_feed(&node.node, data, len, &consumed)`（流模式，务必按 `consumed` 移走已消费前缀、保留未消费尾部）。详见 [驱动移植指南](../docs/porting-adapters.md)。
 - **编译期容量宏**：`<N>_{REQUEST,REPLY,MESSAGE,RX,TX}_FRAME_MAX`（规范帧上限）与 `<N>_{RX,TX}_WIRE_MAX`（计入流分帧后的物理帧上限）。业务发送槽按节点角色分配。
 
 ---

@@ -6,8 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       wirelink_ref:
-        description: Wirelink branch or ref
-        default: main
+        description: Wirelink branch or ref (defaults to the paired commit)
         type: string
 
 permissions:
@@ -21,7 +20,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: starwey604/wirelink
-          ref: ${{ inputs.wirelink_ref || 'main' }}
+          ref: ${{ inputs.wirelink_ref || 'aeefac198f1fd01af689a6949a52c260254e6785' }}
           path: wirelink
       - uses: actions/checkout@v7
         with:

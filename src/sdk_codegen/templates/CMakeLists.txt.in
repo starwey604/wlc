@@ -58,7 +58,7 @@ if(@UPPER@_BUILD_PYTHON)
     OUTPUT_VARIABLE _nanobind_dir OUTPUT_STRIP_TRAILING_WHITESPACE
     COMMAND_ERROR_IS_FATAL ANY)
   find_package(nanobind 3 CONFIG REQUIRED PATHS "${_nanobind_dir}")
-  foreach(dependency endpoint host asio_udp platform cpp_host)
+  foreach(dependency endpoint host udp platform cpp_host)
     get_target_property(_type Wirelink::${dependency} TYPE)
     if(NOT _type STREQUAL "STATIC_LIBRARY")
       message(FATAL_ERROR "The self-contained SDK wheel requires static Wirelink::${dependency}")

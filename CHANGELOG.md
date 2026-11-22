@@ -2,7 +2,8 @@
 
 ## 0.0.99
 
-- Generate built-in node ports and bind runtime I/O explicitly at initialization.
+- Generate nodes with a leading `wl_node_t`, typed transport and
+  synchronous binding entry points, and shared `wl_node_*` lifecycle operations.
 - Generate UDP SDKs with separate receive and send limits.
 
 - Generate C for the endpoint API and report integer codegen contract 1 in the

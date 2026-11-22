@@ -28,12 +28,12 @@ Use WLC and Wirelink with codegen contract 1. RPC routes always use Schema-v1; o
 
 ## Runtime I/O binding
 
-Nodes own their port, two default RX slots, and their selected stream connector. Use `<node>_init(&node, tx_write)` for a synchronous whole-frame sink, or omit the callback for receive-only nodes. Use `<node>_init_io(&node, instance, &io)` for async adapters and supply optional external RX storage for hardware such as USB Bulk. Feed byte streams through `_rx_feed`, retaining unconsumed bytes. Packet transports use `_rx_packet` or port claim/commit. Dynamic handlers add a handler table and user pointer.
+Use `<node>_bind(&node, transport)` to attach a driver. The driver can provide aligned RX storage for DMA or USB Bulk. Use `<node>_bind_sync(&node, tx_write)` for a synchronous whole-frame sink and omit the callback for receive-only nodes. Supply a fresh nonzero identity on persistent links using the corresponding `_instance` entry point. Feed stream bytes through `wl_node_rx_feed(&node.node, ...)` and retain the unconsumed suffix. Native packets use `wl_node_rx_packet` or driver-side claim/commit. Dynamic handlers add a handler table and user pointer.
 
 ## Admission, stepping, and shutdown
 
-The endpoint provides **four outbound call slots, three reply slots, and one ordinary message snapshot**, driven by a single owner executing `init`, `send`, `call`, `cancel`, `step`, `close`, and `quiescent`.
+The endpoint provides **four outbound call slots, three reply slots, and one ordinary message snapshot**, driven by a single owner executing `bind`, `send`, `call`, `cancel`, `step`, `close`, and `quiescent`.
 
 - **Simple call vs. `_ex`**: `<node>_call_<rpc>(self, &req, done)` passes the node pointer to `done` and arms the node's `timeout_ms` on the **next owner `step(now)`**. `<node>_call_<rpc>_ex(self, &req, now, timeout, done, user, out)` times from explicit `now` with custom `timeout`, `user` pointer, and optional cancellation handle.
 - **Handlers and callbacks**: Service handlers populate the response and return `0` or a nonzero `int32_t` business rejection status. Terminal callbacks borrow response views until return; bounded response structs can be copied by value. Local cancellation or timeout cannot roll back remote execution.
-- **Close sequence**: Stop RX producers first, call `<node>_close(&node)` (and stop/drain external hardware leases), then step until `<node>_quiescent(&node)` is nonzero before reusing or freeing storage. See [porting adapters](https://github.com/starwey604/wirelink/blob/main/docs/porting-adapters.md).
+- **Close sequence**: Stop any externally driven synchronous RX, then call `wl_node_close(&node.node, now_ms)`. Retry on `WL_ERR_WOULD_BLOCK` or `WL_ERR_BUSY`, handling driver errors before releasing storage. See [porting adapters](https://github.com/starwey604/wirelink/blob/main/docs/porting-adapters.md).

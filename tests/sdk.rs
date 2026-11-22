@@ -60,8 +60,8 @@ fn project_is_deterministic_and_emits_one_external_client_node() {
             .all(|path| !path.contains("_kernel."))
     );
     assert!(
-        generated.files["src/endpoint.c"]
-            .contains("device_init_io(&owner->endpoint, instance, &io)")
+        generated.files["src/client.cpp"]
+            .contains("device_bind_instance(owner.get(), instance, transport)")
     );
     assert!(!generated.files["src/values.hpp"].contains("has_enabled"));
     assert!(generated.files["src/values.hpp"].contains("has_label"));
@@ -270,7 +270,7 @@ fn cpp_values_round_trip_through_the_real_c_codec() {
         .arg("-o")
         .arg(directory.path().join("codec_rt.o"));
     let mut core_commands = Vec::new();
-    for source in ["endpoint", "packet_port"] {
+    for source in ["node", "endpoint", "packet_port"] {
         let mut command = Command::new("cc");
         command
             .args([
@@ -293,6 +293,7 @@ fn cpp_values_round_trip_through_the_real_c_codec() {
         .arg(directory.path().join("test.cpp"))
         .arg(directory.path().join("codec.o"))
         .arg(directory.path().join("codec_rt.o"))
+        .arg(directory.path().join("node.o"))
         .arg(directory.path().join("endpoint.o"))
         .arg(directory.path().join("packet_port.o"));
     for include in [
@@ -369,6 +370,7 @@ fn cpp_values_round_trip_through_the_real_c_codec() {
     for object in [
         "codec",
         "codec_rt",
+        "node",
         "endpoint",
         "packet_port",
         "sdk_endpoint",
@@ -508,8 +510,10 @@ fn udp_bridge_uses_separate_direction_limits_and_a_receive_sentinel() {
     assert!(header.contains("#define DEVICE_RX_WIRE_MAX 16U"));
     assert!(header.contains("#define DEVICE_TX_WIRE_MAX 78U"));
     assert!(header.contains("rx[WL_PACKET_RX_SLOTS][DEVICE_RX_WIRE_MAX + 1U]"));
-    let bridge = &generated.files["src/endpoint.c"];
-    assert!(bridge.contains("&owner->endpoint.port, DEVICE_RX_WIRE_MAX, DEVICE_TX_WIRE_MAX"));
+    let source = &generated.files["generated/device.c"];
+    assert!(
+        source.contains(".rx_wire_max = DEVICE_RX_WIRE_MAX, .tx_wire_max = DEVICE_TX_WIRE_MAX")
+    );
 }
 
 #[test]

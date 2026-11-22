@@ -2,7 +2,6 @@
 #include "device.h"
 #include "endpoint.h"
 #include <assert.h>
-#include <stdlib.h>
 #include <string.h>
 
 static uint8_t sent[2052];
@@ -10,7 +9,7 @@ static size_t sent_length;
 static unsigned completed;
 static wl_rpc_result_t completion;
 
-static wl_packet_submit_t submit(void *user, const uint8_t *data, size_t length,
+static wl_packet_submit_t submit(wl_transport_t *user, const uint8_t *data, size_t length,
                                  wl_packet_token_t token) {
   (void)user;
   (void)token;
@@ -20,6 +19,17 @@ static wl_packet_submit_t submit(void *user, const uint8_t *data, size_t length,
   return WL_PACKET_SENT;
 }
 
+static wl_err_t attach(wl_transport_t *self, const wl_transport_attach_t *info) {
+  (void)self;
+  assert(info->rx_wire_max == DEVICE_RX_WIRE_MAX && info->tx_wire_max == DEVICE_TX_WIRE_MAX);
+  return WL_OK;
+}
+
+static wl_err_t stop(wl_transport_t *self) {
+  (void)self;
+  return WL_OK;
+}
+
 static void done(void *context, wl_rpc_result_t result) {
   assert(context == &completed);
   ++completed;
@@ -27,18 +37,17 @@ static void done(void *context, wl_rpc_result_t result) {
 }
 
 int main(void) {
-  void *storage = malloc(device_sdk_endpoint_size());
-  assert(storage != NULL);
-  wl_host_endpoint_t descriptor;
-  assert(device_sdk_endpoint_prepare(storage, &descriptor) == WL_OK);
-  assert(device_sdk_endpoint_initialize(storage, 901U, submit, NULL, NULL) == WL_OK);
+  device_node_t device;
+  static const wl_transport_ops_t ops = {.submit = submit, .attach = attach, .stop = stop};
+  wl_transport_t transport = {.ops = &ops};
+  assert(device_bind_instance(&device, 901U, &transport) == WL_OK);
   info_request_t request = {0};
   info_response_t response;
   memset(&response, 0xA5, sizeof(response));
-  device_sdk_call_t call = {.endpoint = storage, .request = &request, .response = &response};
+  device_sdk_call_t call = {.endpoint = &device.node, .request = &request, .response = &response};
   wl_call_handle_t handle;
   assert(device_sdk_get_info_submit(&call, 7000U, 50U, done, &completed, &handle) == WL_OK);
-  assert(wl_endpoint_step(descriptor.core, 7000U, WL_ENDPOINT_BUDGET) == WL_OK);
+  assert(wl_node_step(&device.node, 7000U) == WL_OK);
   wl_wire_frame_t frame;
   wl_rpc_metadata_t metadata;
   assert(wl_wire_frame_read(sent, sent_length, &frame) == WL_OK);
@@ -54,19 +63,18 @@ int main(void) {
                                sizeof(reply) - 4U - header_size, &body_size) == WL_CODEC_OK);
   assert(wl_wire_frame_seal(reply, sizeof(reply), WL_WIRE_RPC_RESP,
                             INFO_RESPONSE_MESSAGE_ID, header_size + body_size) == WL_OK);
-  assert(wl_packet_rx_push(descriptor.port, reply, 4U + header_size + body_size) == WL_OK);
-  assert(wl_endpoint_step(descriptor.core, 7001U, WL_ENDPOINT_BUDGET) == WL_OK);
+  assert(wl_node_rx_packet(&device.node, reply, 4U + header_size + body_size) == WL_OK);
+  assert(wl_node_step(&device.node, 7001U) == WL_OK);
   assert(completed == 1U && completion.outcome == WL_RPC_SUCCESS && response.settings.enabled);
 
   /* Explicit SDK time stays authoritative after a long owner idle period. */
   assert(device_sdk_get_info_submit(&call, 100000U, 50U, done, &completed, NULL) == WL_OK);
-  assert(wl_endpoint_step(descriptor.core, 100000U, WL_ENDPOINT_BUDGET) == WL_OK);
+  assert(wl_node_step(&device.node, 100000U) == WL_OK);
   assert(completed == 1U);
-  assert(wl_endpoint_step(descriptor.core, 100050U, WL_ENDPOINT_BUDGET) == WL_OK);
+  assert(wl_node_step(&device.node, 100050U) == WL_OK);
   assert(completed == 2U && completion.outcome == WL_RPC_TIMED_OUT);
-  assert(wl_endpoint_close(descriptor.core) == WL_OK);
-  assert(wl_endpoint_step(descriptor.core, 100051U, WL_ENDPOINT_BUDGET) == WL_OK);
-  assert(wl_endpoint_quiescent(descriptor.core));
-  free(storage);
+  assert(wl_node_close(&device.node, 100051U) == WL_OK);
+  assert(wl_node_step(&device.node, 100051U) == WL_OK);
+  assert(wl_node_quiescent(&device.node));
   return 0;
 }

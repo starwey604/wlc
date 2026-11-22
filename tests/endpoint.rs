@@ -46,7 +46,7 @@ fn compile_and_run(generated: wlc::GeneratedNodeC, program: &str, connector: Opt
     for file in ["demo.c", "test.c"] {
         cc.arg(directory.path().join(file));
     }
-    for file in ["codec.c", "endpoint.c", "packet_port.c"] {
+    for file in ["codec.c", "node.c", "endpoint.c", "packet_port.c"] {
         cc.arg(root.join("src").join(file));
     }
     if let Some(connector) = connector {
@@ -177,29 +177,43 @@ fn dynamic_external_node_compiles_and_times_out_without_old_core() {
 #include "demo.h"
 #include <assert.h>
 static unsigned callbacks;
-static wl_packet_submit_t sink(void *u, const uint8_t *p, size_t n, wl_packet_token_t t) {
+static wl_packet_submit_t sink(wl_transport_t *u, const uint8_t *p, size_t n, wl_packet_token_t t) {
   (void)u; (void)p; (void)n; (void)t; return WL_PACKET_SENT;
 }
 static void done(void *u, wl_rpc_result_t r, const response_t *v) {
   assert(u == &callbacks && r.outcome == WL_RPC_TIMED_OUT && v == NULL); ++callbacks;
 }
+static uint8_t rx[2][128];
+static int invalid_storage = 1;
+static wl_err_t configure_rx(wl_transport_t *self, size_t minimum, wl_transport_rx_override_t *slots) {
+  (void)self;
+  assert(minimum == DEMO_RX_WIRE_MAX + 1U);
+  *slots = (wl_transport_rx_override_t){invalid_storage ? NULL : rx[0], sizeof(rx), sizeof(rx[0])};
+  return WL_OK;
+}
+static wl_err_t attach(wl_transport_t *self, const wl_transport_attach_t *info) {
+  (void)self;
+  assert(wl_packet_rx_unit_size(info->port) == sizeof(rx[0]));
+  assert(info->port->config.rx_storage == rx[0]);
+  return WL_OK;
+}
+static wl_err_t stop(wl_transport_t *self) { (void)self; return WL_OK; }
 int main(void) {
-  static demo_node_t endpoint; static uint8_t rx[2][128];
-  wl_packet_io_t c = { .rx_storage=&rx[0][0], .rx_unit_size=sizeof(rx[0]),
-    .rx_storage_size=sizeof(rx), .submit=sink};
+  static demo_node_t endpoint;
+  static const wl_transport_ops_t ops = {.configure_rx=configure_rx,.attach=attach,.submit=sink,.stop=stop};
+  wl_transport_t transport = {.ops=&ops};
   demo_handlers_t handlers = {0};
-  assert(demo_init_io(&endpoint,99,&(wl_packet_io_t){.submit=sink,.rx_unit_size=128},&handlers,NULL) == WL_ERR_INVALID_ARG);
-  assert(demo_init_io(&endpoint,99,&c,&handlers,NULL) == WL_OK);
-  assert(wl_packet_rx_unit_size(&endpoint.port) == sizeof(rx[0]));
-  assert(endpoint.port.config.rx_storage == &rx[0][0]);
+  assert(demo_bind_instance(&endpoint,99,&transport,&handlers,NULL) == WL_ERR_INVALID_ARG);
+  invalid_storage = 0;
+  assert(demo_bind_instance(&endpoint,99,&transport,&handlers,NULL) == WL_OK);
   request_t req = {.input=INT32_MIN,.name={.length=3,.data={'a',0,'b'}}};
   assert(demo_call_execute_ex(&endpoint,&req,100000U,1U,done,&callbacks,NULL) == WL_OK);
   tick_t tick = {0};
   assert(demo_send_tick(&endpoint,&tick) == WL_OK);
-  assert(demo_step(&endpoint,100000U) == WL_OK && callbacks == 0U);
-  assert(demo_step(&endpoint,100001U) == WL_OK && callbacks == 1U);
-  assert(demo_close(&endpoint) == WL_OK && demo_step(&endpoint,100001U) == WL_OK);
-  assert(demo_quiescent(&endpoint));
+  assert(wl_node_step(&endpoint.node,100000U) == WL_OK && callbacks == 0U);
+  assert(wl_node_step(&endpoint.node,100001U) == WL_OK && callbacks == 1U);
+  assert(wl_node_close(&endpoint.node, 100001U) == WL_OK && wl_node_step(&endpoint.node,100001U) == WL_OK);
+  assert(wl_node_quiescent(&endpoint.node));
   return 0;
 }
 "#,
@@ -239,7 +253,7 @@ static uint8_t saved[256]; static size_t saved_length;
 wl_err_t demo_tx_write(demo_node_t *self, const uint8_t *data, size_t length) {
   size_t consumed = 0;
   assert(length <= sizeof(saved)); memcpy(saved, data, length); saved_length=length;
-  wl_err_t error = demo_rx_feed(self,data,length,&consumed);
+  wl_err_t error = wl_node_rx_feed(&self->node,data,length,&consumed);
   assert(error == WL_OK && consumed == length);
   return WL_OK;
 }
@@ -259,16 +273,16 @@ static void done(demo_node_t *self, wl_rpc_result_t result, const response_t *re
 }
 int main(void) {
   static demo_node_t endpoint;
-  assert(demo_init(&endpoint, demo_tx_write) == WL_OK);
+  assert(demo_bind_sync(&endpoint, demo_tx_write) == WL_OK);
   request_t request = {.input=INT32_MIN,.name={.length=3,.data={'a',0,'b'}}};
   assert(demo_call_execute(&endpoint,&request,done) == WL_OK);
   memset(&request,0,sizeof(request));
-  for (unsigned i=0; i<10 && !completed; ++i) assert(demo_step(&endpoint,100000U) == WL_OK);
+  for (unsigned i=0; i<10 && !completed; ++i) assert(wl_node_step(&endpoint.node,100000U) == WL_OK);
   assert(completed == 1 && effects == 1);
   size_t consumed=0;
-  assert(demo_rx_feed(&endpoint,saved,saved_length/2,&consumed) == WL_OK && consumed==saved_length/2);
-  assert(demo_close(&endpoint) == WL_OK && demo_step(&endpoint,100001U) == WL_OK);
-  assert(demo_quiescent(&endpoint));
+  assert(wl_node_rx_feed(&endpoint.node,saved,saved_length/2,&consumed) == WL_OK && consumed==saved_length/2);
+  assert(wl_node_close(&endpoint.node, 100001U) == WL_OK && wl_node_step(&endpoint.node,100001U) == WL_OK);
+  assert(wl_node_quiescent(&endpoint.node));
   return 0;
 }
 "#,
@@ -291,9 +305,9 @@ fn pure_receive_stream_and_tx_ready_backpressure_recovery() {
         assert!(generated.files["demo.h"].contains("PUB_REQUEST_FRAME_MAX 0U"));
         assert!(generated.files["demo.h"].contains("SUB_REPLY_FRAME_MAX 0U"));
         let receive = if connector.is_some() {
-            "size_t consumed=0; wl_err_t error=sub_rx_feed(&subscriber,data,length,&consumed); assert(consumed==length); return error;"
+            "size_t consumed=0; wl_err_t error=wl_node_rx_feed(&subscriber.node,data,length,&consumed); assert(consumed==length); return error;"
         } else {
-            "return sub_rx_packet(&subscriber,data,length);"
+            "return wl_node_rx_packet(&subscriber.node,data,length);"
         };
         compile_and_run(
             generated,
@@ -303,8 +317,14 @@ fn pure_receive_stream_and_tx_ready_backpressure_recovery() {
 #include <assert.h>
 static sub_node_t subscriber;
 static unsigned attempts, deliveries, notifications;
-static void notify(void *user) {{
-  assert(user == &notifications);
+static wl_transport_t transport;
+static wl_err_t attach(wl_transport_t *self, const wl_transport_attach_t *info) {{
+  assert(self == &transport && info->port == &subscriber.node.port);
+  return WL_OK;
+}}
+static wl_err_t stop(wl_transport_t *self) {{ assert(self == &transport); return WL_OK; }}
+static void notify(wl_transport_t *self) {{
+  assert(self == &transport);
   ++notifications;
 }}
 wl_err_t pub_tx_write(pub_node_t *self, const uint8_t *data, size_t length) {{
@@ -316,21 +336,22 @@ void sub_on_tick(sub_node_t *self, const tick_t *tick) {{
 }}
 int main(void) {{
   pub_node_t publisher;
-  assert(pub_init(&publisher, NULL)==WL_ERR_INVALID_ARG);
-  assert(pub_init(&publisher, pub_tx_write)==WL_OK);
-  const wl_packet_io_t io = {{.notify=notify,.user=&notifications}};
-  assert(sub_init_io(&subscriber,0,&io)==WL_OK);
-  sub_tx_ready(&subscriber);
+  assert(pub_bind_sync(&publisher, NULL)==WL_ERR_INVALID_ARG);
+  assert(pub_bind_sync(&publisher, pub_tx_write)==WL_OK);
+  static const wl_transport_ops_t ops = {{.attach=attach,.notify=notify,.stop=stop}};
+  transport.ops = &ops;
+  assert(sub_bind(&subscriber,&transport)==WL_OK);
+  wl_node_tx_ready(&subscriber.node);
   assert(notifications == 1U);
   assert(pub_send_tick_val(&publisher,42U,7U)==WL_OK);
-  assert(pub_step(&publisher,0U)==WL_OK && attempts==1U);
-  assert(pub_step(&publisher,1U)==WL_OK && attempts==1U);
-  pub_tx_ready(&publisher);
-  assert(pub_step(&publisher,2U)==WL_OK && attempts==2U);
-  assert(sub_step(&subscriber,2U)==WL_OK && deliveries==1U);
-  assert(pub_close(&publisher)==WL_OK && sub_close(&subscriber)==WL_OK);
-  assert(pub_step(&publisher,3U)==WL_OK && sub_step(&subscriber,3U)==WL_OK);
-  assert(pub_quiescent(&publisher) && sub_quiescent(&subscriber));
+  assert(wl_node_step(&publisher.node,0U)==WL_OK && attempts==1U);
+  assert(wl_node_step(&publisher.node,1U)==WL_OK && attempts==1U);
+  wl_node_tx_ready(&publisher.node);
+  assert(wl_node_step(&publisher.node,2U)==WL_OK && attempts==2U);
+  assert(wl_node_step(&subscriber.node,2U)==WL_OK && deliveries==1U);
+  assert(wl_node_close(&publisher.node, 100001U)==WL_OK && wl_node_close(&subscriber.node, 100001U)==WL_OK);
+  assert(wl_node_step(&publisher.node,3U)==WL_OK && wl_node_step(&subscriber.node,3U)==WL_OK);
+  assert(wl_node_quiescent(&publisher.node) && wl_node_quiescent(&subscriber.node));
   return 0;
 }}
 "#
@@ -358,8 +379,8 @@ fn selected_client_links_without_server_handlers_under_default_link_options() {
 wl_err_t client_tx_write(client_node_t *self,const uint8_t *data,size_t length) {
   (void)self; (void)data; (void)length; return WL_OK;
 }
-int main(void) { client_node_t client; assert(client_init(&client, client_tx_write)==WL_OK);
-  assert(client_close(&client)==WL_OK && client_step(&client,0U)==WL_OK && client_quiescent(&client)); return 0; }
+int main(void) { client_node_t client; assert(client_bind_sync(&client, client_tx_write)==WL_OK);
+  assert(wl_node_close(&client.node, 100001U)==WL_OK && wl_node_step(&client.node,0U)==WL_OK && wl_node_quiescent(&client.node)); return 0; }
 "#,
         None,
     );

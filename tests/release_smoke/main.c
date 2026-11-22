@@ -6,7 +6,6 @@
 #include <string.h>
 
 static release_smoke_node_t endpoints[2];
-static uint8_t storage[2][2][256];
 static wl_packet_loopback_t transport;
 static unsigned completions, executions;
 static void require(int condition) {
@@ -32,12 +31,11 @@ static void completed(void *user, wl_rpc_result_t result, const control_result_t
   ++completions;
 }
 int main(void) {
-  require(wl_packet_loopback_init(&transport, &endpoints[0].port, &endpoints[1].port, NULL, NULL) == WL_OK);
+  require(wl_packet_loopback_init(&transport, NULL, NULL) == WL_OK);
   for (unsigned side = 0; side < 2U; ++side) {
-    const wl_packet_io_t config = {.submit = wl_packet_loopback_submit,
-        .notify = wl_packet_loopback_notify, .user = &transport.directions[side]};
     release_smoke_handlers_t handlers = {.on_apply_control = apply};
-    require(release_smoke_init_io(&endpoints[side], 1001U + side, &config, &handlers, NULL) == WL_OK);
+    require(release_smoke_bind_instance(&endpoints[side], 1001U + side,
+        wl_packet_loopback_transport(&transport, side), &handlers, NULL) == WL_OK);
     control_t request = {.operation_id = UINT32_MAX,
         .joints = {-1.5f, 0.0f, 1.0f, 2.0f, -0.5f, 3.25f}};
     wl_call_handle_t call;
@@ -46,17 +44,13 @@ int main(void) {
     memset(&request, 0, sizeof(request));
   }
   for (uint32_t now = 0; now < 500U && completions != 2U; ++now) {
-    require(release_smoke_step(&endpoints[0], now) == WL_OK);
-    require(release_smoke_step(&endpoints[1], now) == WL_OK);
-    require(wl_packet_loopback_service(&transport, 2U) == WL_OK);
+    require(wl_node_step(&endpoints[0].node, now) == WL_OK);
+    require(wl_node_step(&endpoints[1].node, now) == WL_OK);
   }
   require(completions == 2U && executions == 2U);
-  for (unsigned side = 0; side < 2U; ++side)
-    require(wl_endpoint_close(&endpoints[side].core) == WL_OK);
-  wl_packet_loopback_stop(&transport);
   for (unsigned side = 0; side < 2U; ++side) {
-    require(release_smoke_step(&endpoints[side], 500U) == WL_OK);
-    require(wl_endpoint_quiescent(&endpoints[side].core));
+    require(wl_node_close(&endpoints[side].node, 500U) == WL_OK);
+    require(wl_node_quiescent(&endpoints[side].node));
   }
   puts("archived compiler: bidirectional node packed-float RPC PASS");
   return 0;

@@ -10,7 +10,7 @@ cmake -S sdk -B build/sdk -DCMAKE_PREFIX_PATH=/path/to/wirelink-install
 cmake --build build/sdk --parallel
 ```
 
-Build with WLC and Wirelink that use codegen contract 1 and SDK binding source API 3. The SDK package version is chosen by its author. Pass `--node` when multiple nodes declare `call` routes; if no explicit client node exists, `wlc sdk` synthesizes one from top-level `rpc` declarations. The generator generates a static-handler client, supplies per-call completions, and binds its built-in port to UDP with `init_io`.
+Build with WLC and Wirelink that use codegen contract 1 and SDK binding source API 3. The SDK package version is chosen by its author. Pass `--node` when multiple nodes declare `call` routes; if no explicit client node exists, `wlc sdk` synthesizes one from top-level `rpc` declarations. The generator generates a static-handler client, supplies per-call completions, and binds the UDP transport with `<node>_bind_instance`.
 
 ## Build native libraries or a Python wheel
 
