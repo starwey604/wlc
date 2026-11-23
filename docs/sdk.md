@@ -14,7 +14,7 @@ Build with WLC and Wirelink that use codegen contract 1 and SDK binding source A
 
 ## Build native libraries or a Python wheel
 
-Install Wirelink with `WIRELINK_BUILD_CPP_BINDINGS=ON`, `WIRELINK_BUILD_PLATFORM=ON`, and `CMAKE_POSITION_INDEPENDENT_CODE=ON`, supplying standalone Asio headers. Generated C ships inside the SDK source package, so building it needs no Rust/WLC checkout. CMake defaults `<NAME>_BUILD_PYTHON=OFF`; wheel packaging enables it, and `BUILD_TESTING` controls hand-written tests. See the generated README for exact package commands and the [Calculator guide](https://github.com/starwey604/wirelink/blob/main/examples/06_bindings/GUIDE.md) for a runnable C service and Python tests.
+Install Wirelink with `WIRELINK_BUILD_CPP_BINDINGS=ON` and standalone Asio headers. This enables the host runtime, UDP adapter, platform and position-independent code. Generated C ships inside the SDK source package, so building it needs no Rust/WLC checkout. CMake defaults `<NAME>_BUILD_PYTHON=OFF`; wheel packaging enables it, and `BUILD_TESTING` controls hand-written tests. See the generated README for exact package commands and the [Calculator guide](https://github.com/starwey604/wirelink/blob/main/examples/06_bindings/GUIDE.md) for a runnable C service and Python tests.
 
 CMake checks the codegen contract in `<name>_manifest.json` against the installed Wirelink package. `wlc-sdk-build.json` records the endpoint contract in the `wirelink-sdk-build-v3` format. Rebuild WLC after changing compiled-in templates before regenerating. `--overwrite` replaces generated files only; keep custom tests and guides outside that inventory.
 

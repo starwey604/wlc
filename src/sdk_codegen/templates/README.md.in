@@ -41,12 +41,11 @@ Use a different SDK name for each independently distributed schema package.
 
 ## SDK maintainers
 
-Build/install a Wirelink checkout with the same generated-code contract with
-`WIRELINK_BUILD_CPP_BINDINGS=ON`, `WIRELINK_BUILD_PLATFORM=ON`,
-`WIRELINK_BUILD_EXAMPLES=OFF`, `BUILD_SHARED_LIBS=OFF` and
-`CMAKE_POSITION_INDEPENDENT_CODE=ON`. Provide standalone Asio headers through
-`WIRELINK_ASIO_INCLUDE_DIR`. These are source-build prerequisites, including when
-building from an sdist; pre-generated C is included so WLC/Rust is unnecessary.
+Build and install Wirelink with the same generated-code contract. Set
+`WIRELINK_BUILD_CPP_BINDINGS=ON` and `BUILD_SHARED_LIBS=OFF` to build static
+native dependencies with position-independent code. If standalone Asio headers
+are outside the search paths, set `WIRELINK_ASIO_INCLUDE_DIR` to the directory
+containing `asio.hpp`. The SDK source distribution includes the generated C.
 
 ```sh
 cmake -S . -B build/native -DCMAKE_BUILD_TYPE=Release \

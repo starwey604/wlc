@@ -14,7 +14,7 @@ cmake --build build/sdk --parallel
 
 ## 构建原生库或 Python wheel
 
-安装 Wirelink 时启用 `WIRELINK_BUILD_CPP_BINDINGS=ON` 与 `WIRELINK_BUILD_PLATFORM=ON`，并提供 standalone Asio 头文件。Linux Python extension 静态依赖需要开启 `CMAKE_POSITION_INDEPENDENT_CODE=ON`。生成源码包内含已生成的 C 代码，编译无需 Rust/WLC。CMake 默认 `<NAME>_BUILD_PYTHON=OFF`，wheel 打包会自动启用；原生测试受 `BUILD_TESTING` 控制。具体包命令见生成目录 README；完整可运行 C 服务端与 Python 测试见 [Calculator 指南](https://github.com/starwey604/wirelink/blob/main/examples/06_bindings/GUIDE.md)。
+安装 Wirelink 时启用 `WIRELINK_BUILD_CPP_BINDINGS=ON` 并提供独立版 Asio 头文件。CMake 会启用 host runtime、UDP 适配器、platform 和位置无关代码。生成源码包内含已生成的 C 代码，编译无需 Rust/WLC。CMake 默认 `<NAME>_BUILD_PYTHON=OFF`，wheel 打包会自动启用；原生测试受 `BUILD_TESTING` 控制。具体包命令见生成目录 README；完整可运行 C 服务端与 Python 测试见 [Calculator 指南](https://github.com/starwey604/wirelink/blob/main/examples/06_bindings/GUIDE.md)。
 
 CMake 将 `<name>_manifest.json` 中的生成契约与已安装的 Wirelink 包比对。`wlc-sdk-build.json` 以 `wirelink-sdk-build-v3` 格式记录端点契约。修改 WLC 内置模板后须重建编译器再重新生成。`--overwrite` 仅替换生成清单内的文件，应用测试与指南请放在生成清单之外。
 
