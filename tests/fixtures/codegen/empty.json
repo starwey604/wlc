@@ -19,7 +19,7 @@
   "artifact_digest_algorithm": "fnv1a64-domain-bytes-v1",
   "artifacts": [
     {"path": "business.c", "size": 3516, "digest": "0xe98896fe570e97ce"},
-    {"path": "business.h", "size": 1965, "digest": "0xa9df06d6ed308d6c"},
-    {"path": "business_manifest.json", "size": 867, "digest": "0xb120d68760ee6776"}
+    {"path": "business.h", "size": 2036, "digest": "0x68b7420b999ef27e"},
+    {"path": "business_manifest.json", "size": 867, "digest": "0xb90c740e638c06a6"}
   ]
 }

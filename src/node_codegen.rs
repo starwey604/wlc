@@ -268,7 +268,9 @@ pub fn generate_node_c_with_pruning(
         .expect("codec header suffix")
         .to_owned();
     if !nodes.is_empty() {
-        c.header.push_str("#include <wirelink/node.h>\n");
+        c.header.push_str(
+            "#include <wirelink/node.h>\n#ifndef __cplusplus\n#include <stdalign.h>\n#endif\n",
+        );
     }
     writeln!(c.header, "#include <wirelink/version.h>\n#if WIRELINK_CODEGEN_CONTRACT != {0}\n#error \"WLC requires generated-code contract {0}\"\n#endif", crate::CODEGEN_CONTRACT).unwrap();
     c.source.push_str("\n#include <limits.h>\n");
@@ -366,6 +368,8 @@ fn emit_node(
 ) {
     let p = &n.name;
     let upper = upper_snake(p);
+    let request_stride = (c.request + 3) & !3;
+    let reply_stride = (c.reply + 3) & !3;
     let dynamic = n.handlers == Handlers::Dynamic;
     let stream = n.framing != Framing::Native;
     let tx = !n.calls.is_empty() || !n.serves.is_empty() || !n.send_routes.is_empty();
@@ -416,20 +420,24 @@ fn emit_node(
         }
         writeln!(
             h,
-            "  }} reply;\n  uint8_t replies[WL_ENDPOINT_REPLIES][{}];",
-            c.reply
+            "  }} reply;\n  alignas(4) uint8_t replies[WL_ENDPOINT_REPLIES][{reply_stride}];"
         )
         .unwrap();
     }
     if !n.calls.is_empty() {
-        writeln!(h, "  uint8_t requests[WL_ENDPOINT_CALLS][{}];", c.request).unwrap();
+        writeln!(
+            h,
+            "  alignas(4) uint8_t requests[WL_ENDPOINT_CALLS][{request_stride}];"
+        )
+        .unwrap();
     }
     if !n.send_routes.is_empty() {
-        writeln!(h, "  uint8_t message[{}];", c.message).unwrap();
+        writeln!(h, "  alignas(4) uint8_t message[{}];", c.message).unwrap();
     }
+    // Default packet-port RX slots are indexed by rx_wire_max + 1, not a padded stride.
     writeln!(
         h,
-        "  uint8_t rx[{}U][{upper}_RX_WIRE_MAX + 1U];",
+        "  alignas(4) uint8_t rx[{}U][{upper}_RX_WIRE_MAX + 1U];",
         n.rx_slots
     )
     .unwrap();
@@ -595,8 +603,8 @@ wl_err_t {p}_bind_sync_instance({p}_node_t *self, uint32_t instance{tx_arg}{extr
     }
     s.push_str("    .storage = {\n");
     for (field, stride, cap, array) in [
-        ("requests", "request_stride", c.request, true),
-        ("replies", "reply_stride", c.reply, true),
+        ("requests", "request_stride", request_stride, true),
+        ("replies", "reply_stride", reply_stride, true),
         ("message", "message_capacity", c.message, false),
     ] {
         writeln!(

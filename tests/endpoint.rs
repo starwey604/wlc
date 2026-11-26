@@ -13,15 +13,19 @@ fn generate(source: &str) -> wlc::GeneratedNodeC {
     generate_node_c(&schema, &nodes, "demo").unwrap()
 }
 
-fn compile_and_run(generated: wlc::GeneratedNodeC, program: &str, connector: Option<&str>) {
-    let root = std::env::var_os("WIRELINK_SOURCE_DIR")
+fn wirelink_root() -> PathBuf {
+    std::env::var_os("WIRELINK_SOURCE_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .parent()
                 .unwrap()
                 .into()
-        });
+        })
+}
+
+fn compile_and_run(generated: wlc::GeneratedNodeC, program: &str, connector: Option<&str>) {
+    let root = wirelink_root();
     let directory = tempdir().unwrap();
     for (name, content) in generated.files {
         fs::write(directory.path().join(name), content).unwrap();
@@ -71,6 +75,48 @@ fn compile_and_run(generated: wlc::GeneratedNodeC, program: &str, connector: Opt
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn node_dma_storage_layout_compiles_in_c_and_cpp() {
+    let generated = generate(
+        "message Request @id(1) { required bytes<1999> data @id(1); }
+         message Response @id(2) { required bool a @id(1); required bool b @id(2); required bool c @id(3); }
+         message Tick @id(3) { required bool bit @id(1); }
+         rpc Execute(Request) -> Response;
+         node demo { call Execute; serve Execute; send Tick; }",
+    );
+    let directory = tempdir().unwrap();
+    fs::write(directory.path().join("demo.h"), &generated.files["demo.h"]).unwrap();
+    for (compiler, standard, filename) in
+        [("cc", "c11", "layout.c"), ("c++", "c++20", "layout.cpp")]
+    {
+        fs::write(
+            directory.path().join(filename),
+            include_str!("fixtures/node_dma_layout.c"),
+        )
+        .unwrap();
+        let output = Command::new(compiler)
+            .current_dir(directory.path())
+            .arg(format!("-std={standard}"))
+            .args([
+                "-Wall",
+                "-Wextra",
+                "-Wpedantic",
+                "-Werror",
+                "-fsyntax-only",
+                "-I",
+            ])
+            .arg(wirelink_root().join("include"))
+            .arg(filename)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{compiler}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 #[test]
@@ -206,6 +252,8 @@ int main(void) {
   assert(demo_bind_instance(&endpoint,99,&transport,&handlers,NULL) == WL_ERR_INVALID_ARG);
   invalid_storage = 0;
   assert(demo_bind_instance(&endpoint,99,&transport,&handlers,NULL) == WL_OK);
+  assert(endpoint.node.core.storage.request_stride == sizeof(endpoint.requests[0]));
+  assert(endpoint.node.core.storage.reply_stride == sizeof(endpoint.replies[0]));
   request_t req = {.input=INT32_MIN,.name={.length=3,.data={'a',0,'b'}}};
   assert(demo_call_execute_ex(&endpoint,&req,100000U,1U,done,&callbacks,NULL) == WL_OK);
   tick_t tick = {0};

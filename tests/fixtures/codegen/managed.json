@@ -29,8 +29,8 @@
   ],
   "artifact_digest_algorithm": "fnv1a64-domain-bytes-v1",
   "artifacts": [
-    {"path": "business.c", "size": 24069, "digest": "0xd23c5fbce0ed8d6f"},
-    {"path": "business.h", "size": 9029, "digest": "0xe22c487cb70a321f"},
-    {"path": "business_manifest.json", "size": 1679, "digest": "0x0e88e6b5a8b7123b"}
+    {"path": "business.c", "size": 24069, "digest": "0x24a235dd14b75b0a"},
+    {"path": "business.h", "size": 9122, "digest": "0x125a487be1c15b60"},
+    {"path": "business_manifest.json", "size": 1679, "digest": "0xb03fd934c9e7afc9"}
   ]
 }
