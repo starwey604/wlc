@@ -93,7 +93,7 @@ pub(super) fn source(s: &mut String, p: &MessagePlan<'_>, dir: MessageDirections
                 writeln!(s, "  *cursor++ = 0x{byte:02x}U;").unwrap();
             }
             if matches!(f.ty, ResolvedType::Bytes | ResolvedType::String) {
-                writeln!(s, "  cursor = wl_codec_putv(cursor, v->{id}.length);\n  memcpy(cursor, v->{id}.data, v->{id}.length);\n  cursor += v->{id}.length;").unwrap();
+                writeln!(s, "  cursor = wl_codec_putv(cursor, v->{id}.length);\n  wl_codec_copy_bytes(cursor, v->{id}.data, v->{id}.length);\n  cursor += v->{id}.length;").unwrap();
             } else {
                 fixed::emit_scalar_write(s, f, &format!("v->{id}"), "  ", false);
             }

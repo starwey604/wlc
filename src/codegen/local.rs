@@ -166,7 +166,7 @@ fn read_field(s: &mut String, f: &FieldSymbol, positional: bool, scalar_shape: b
             s.push_str("      st = wl_codec_utf8(cursor, (size_t)n);\n      if (st != WL_CODEC_OK) return st;\n");
             writeln!(s, "      {dst}.data[n] = '\\0';").unwrap();
         }
-        writeln!(s, "      memcpy({dst}.data, cursor, (size_t)n);\n      {dst}.length = (size_t)n;\n      cursor += (size_t)n;").unwrap();
+        writeln!(s, "      wl_codec_copy_bytes({dst}.data, cursor, (size_t)n);\n      {dst}.length = (size_t)n;\n      cursor += (size_t)n;").unwrap();
     } else if let ResolvedType::Message { name, .. } = &f.ty {
         s.push_str(get_len);
         writeln!(s, "      if (n > SIZE_MAX) return WL_CODEC_ERR_OVERFLOW;\n      if (n > (size_t)(end - cursor)) return WL_CODEC_ERR_MALFORMED;\n      st = {}_decode_local(cursor, (size_t)n, &{dst});\n      if (st != WL_CODEC_OK) return st;\n      cursor += (size_t)n;",type_name(name)).unwrap();
