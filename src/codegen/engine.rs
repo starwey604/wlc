@@ -2,8 +2,8 @@
 use std::collections::{BTreeSet, HashMap};
 
 use super::{
-    MessageDirections, Symbols, c_identifier, c_type, descriptor, fixed, packed, plan::MessagePlan,
-    positional, type_name,
+    MessageDirections, Symbols, c_identifier, c_type, descriptor, fixed, flat, packed,
+    plan::MessagePlan, positional, type_name,
 };
 use crate::{
     ast::Cardinality,
@@ -15,6 +15,7 @@ use crate::{
 enum Kind {
     DirectFixed(usize),
     DirectPacked,
+    DirectFlat,
     GenericPositional,
     GenericTagged,
 }
@@ -67,6 +68,8 @@ pub(super) fn emit_source(
                 idx
             };
             kinds.push(Kind::DirectFixed(idx));
+        } else if flat::supports(plan) {
+            kinds.push(Kind::DirectFlat);
         } else if plan.profile == CodecProfile::SchemaV1 && plan.packed.is_some() {
             kinds.push(Kind::DirectPacked);
         } else if plan.profile == CodecProfile::PositionalV1 {
@@ -85,7 +88,7 @@ pub(super) fn emit_source(
     let uses_generic_desc = |id: u16| -> bool {
         let dir = directions.get(&id).copied().unwrap_or_default();
         match kind_by_id[&id] {
-            Kind::DirectFixed(_) | Kind::GenericPositional => false,
+            Kind::DirectFixed(_) | Kind::DirectFlat | Kind::GenericPositional => false,
             Kind::DirectPacked => dir.decode,
             Kind::GenericTagged => true,
         }
@@ -101,7 +104,7 @@ pub(super) fn emit_source(
         let emits_fields = match kind {
             Kind::GenericTagged => dir.encode || dir.decode,
             Kind::DirectPacked => dir.decode,
-            Kind::DirectFixed(_) | Kind::GenericPositional => false,
+            Kind::DirectFixed(_) | Kind::DirectFlat | Kind::GenericPositional => false,
         };
         if emits_fields {
             for field in &plan.message.fields {
@@ -138,7 +141,7 @@ pub(super) fn emit_source(
         // descriptor before the wrappers that reference it.
         if needed_desc.contains(&plan.message.id) {
             let emit_fields = match kind {
-                Kind::GenericTagged => true,
+                Kind::GenericTagged | Kind::DirectFlat => true,
                 Kind::GenericPositional => true,
                 Kind::DirectPacked => dir.decode || plan.profile == CodecProfile::PositionalV1,
                 Kind::DirectFixed(_) => plan.profile == CodecProfile::PositionalV1,
@@ -157,6 +160,7 @@ pub(super) fn emit_source(
         }
 
         match kind {
+            Kind::DirectFlat => flat::source(&mut source, plan, dir),
             Kind::DirectFixed(shape_idx) => {
                 let shape = fixed::shape_name(*shape_idx);
                 source.push_str(&fixed::wrappers(plan, &shape, dir, symbols));

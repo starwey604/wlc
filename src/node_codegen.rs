@@ -4,7 +4,7 @@ use crate::{
     ManifestArtifact, SemanticModel,
     ast::Cardinality,
     codec_plan::{CodecPlan, CodecProfile},
-    codegen::{c_identifier, c_type, ordered_messages, type_name, upper_snake},
+    codegen::{c_identifier, c_type, local, type_name, upper_snake},
     node::{Framing, Handlers, Node, NodeError},
     semantic::{MessageSymbol, ResolvedType, Symbol},
 };
@@ -112,6 +112,9 @@ pub(crate) fn check_names(schema: &SemanticModel, nodes: &[Node]) -> Result<(), 
                     "encoded_size",
                     "encode",
                     "decode",
+                    "decode_local",
+                    "pos_decode_local",
+                    "measure_fields",
                     "desc",
                     "fields",
                     "dense",
@@ -274,37 +277,14 @@ pub fn generate_node_c_with_pruning(
     }
     writeln!(c.header, "#include <wirelink/version.h>\n#if WIRELINK_CODEGEN_CONTRACT != {0}\n#error \"WLC requires generated-code contract {0}\"\n#endif", crate::CODEGEN_CONTRACT).unwrap();
     c.source.push_str("\n#include <limits.h>\n");
-    // A Node accepts only finite routes. Bounded bytes may also live in a
-    // nested message; positional-v1 does not admit bytes or nested messages.
-    let mut local = BTreeSet::new();
-    for m in ordered_messages(schema).map_err(|e| NodeError(e.to_string()))? {
-        if m.fields.iter().any(|f| match f.ty {
-            ResolvedType::Bytes => f.max_length.is_some(),
-            ResolvedType::Message { id, .. } => local.contains(&id),
-            _ => false,
-        }) {
-            local.insert(m.id);
-        }
-    }
-    let incoming: BTreeSet<_> = nodes
-        .iter()
-        .flat_map(|n| {
-            n.recv_routes
-                .iter()
-                .map(|r| r.message_id)
-                .chain(n.serves.iter().map(|r| r.request_id))
-                .chain(n.calls.iter().map(|r| r.response_id))
-        })
-        .collect();
-    local.retain(|id| incoming.contains(id));
-    if !local.is_empty() {
-        // Older contract-1 headers still provide the transactional decoder.
-        c.source.push_str("#ifdef WL_CODEC_HAS_LOCAL_DECODE\n#define WLC_NODE_DECODE(m, ...) wl_codec_decode_local(&m##_desc, __VA_ARGS__)\n#else\n#define WLC_NODE_DECODE(m, ...) m##_decode(__VA_ARGS__)\n#endif\n");
-    }
     let mut metadata = Vec::new();
-    for n in nodes {
-        let cap = capacities(schema, n)?;
-        emit_node(schema, n, cap, &local, &mut c.header, &mut c.source);
+    let caps = nodes
+        .iter()
+        .map(|n| capacities(schema, n))
+        .collect::<Result<Vec<_>, _>>()?;
+    local::emit_routes(&mut c.source, schema, nodes);
+    for (n, cap) in nodes.iter().zip(caps) {
+        emit_node(schema, n, cap, &mut c.header, &mut c.source);
         metadata.push(node_metadata(n, cap));
     }
     c.header.push_str(ending);
@@ -351,21 +331,7 @@ fn node_metadata(n: &Node, c: Capacity) -> String {
         c.tx_wire
     )
 }
-fn decode_call(local: &BTreeSet<u16>, id: u16, name: &str, args: &str) -> String {
-    if local.contains(&id) {
-        format!("WLC_NODE_DECODE({name}, {args})")
-    } else {
-        format!("{name}_decode({args})")
-    }
-}
-fn emit_node(
-    schema: &SemanticModel,
-    n: &Node,
-    c: Capacity,
-    local: &BTreeSet<u16>,
-    h: &mut String,
-    s: &mut String,
-) {
+fn emit_node(schema: &SemanticModel, n: &Node, c: Capacity, h: &mut String, s: &mut String) {
     let p = &n.name;
     let upper = upper_snake(p);
     let request_stride = (c.request + 3) & !3;
@@ -528,10 +494,10 @@ wl_err_t {p}_bind_sync_instance({p}_node_t *self, uint32_t instance{tx_arg}{extr
         }
         writeln!(s,"wl_err_t {p}_send_{m}({p}_node_t *self, const {m}_t *message) {{\n  if (self == NULL || message == NULL) return WL_ERR_INVALID_ARG;\n  uint8_t *frame; size_t capacity;\n  wl_err_t error = wl_endpoint_msg_claim(&self->node.core, &frame, &capacity);\n  if (error != WL_OK) return error;\n  size_t length = 0U;\n  if ({m}_encode(message, frame + 4U, capacity - 4U, &length) != WL_CODEC_OK) return WL_ERR_CORRUPT_PAYLOAD;\n  error = wl_wire_frame_seal(frame, capacity, WL_WIRE_MSG, {}U, length);\n  return error == WL_OK ? wl_endpoint_msg_commit(&self->node.core, length + 4U) : error;\n}}",r.message_id).unwrap();
     }
-    emit_calls(n, local, h, s);
+    emit_calls(n, h, s);
     let has_route = !n.calls.is_empty() || !n.serves.is_empty() || !n.recv_routes.is_empty();
     if has_route {
-        emit_route(n, local, s);
+        emit_route(n, s);
     }
     if tx {
         writeln!(
@@ -672,7 +638,7 @@ wl_err_t {p}_bind_sync_instance({p}_node_t *self, uint32_t instance{tx_arg}{extr
         }
     }
 }
-fn emit_calls(n: &Node, local: &BTreeSet<u16>, h: &mut String, s: &mut String) {
+fn emit_calls(n: &Node, h: &mut String, s: &mut String) {
     let p = &n.name;
     for r in &n.calls {
         let rpc = type_name(&r.name);
@@ -692,7 +658,6 @@ fn emit_calls(n: &Node, local: &BTreeSet<u16>, h: &mut String, s: &mut String) {
             String::new()
         };
         writeln!(h,"/* Simplified calls start their timeout on the next step(now). */\nwl_err_t {p}_call_{rpc}({p}_node_t *self, const {req}_t *request{cb});\nwl_err_t {p}_call_{rpc}_ex({p}_node_t *self, const {req}_t *request, uint32_t now, uint32_t timeout_ms, {p}_{rpc}_ex_cb_t callback, void *user, wl_call_handle_t *out);").unwrap();
-        let decode = decode_call(local, r.response_id, &resp, "body, length, &response");
         for ex in [false, true] {
             let suffix = if ex { "_ex" } else { "" };
             let ctx = if ex {
@@ -700,14 +665,14 @@ fn emit_calls(n: &Node, local: &BTreeSet<u16>, h: &mut String, s: &mut String) {
             } else {
                 &format!("({p}_node_t *)core")
             };
-            writeln!(s,"static void {p}_complete_{rpc}{suffix}(wl_endpoint_t *core, const wl_endpoint_call_t *call, wl_rpc_result_t result, const uint8_t *body, size_t length) {{\n  (void)core;\n  {resp}_t response;\n  const {resp}_t *view = NULL;\n  if (result.outcome == WL_RPC_SUCCESS) {{\n    if ({decode} == WL_CODEC_OK) view = &response;\n    else result = (wl_rpc_result_t){{WL_RPC_LOCAL_ERROR, WL_ERR_CORRUPT_PAYLOAD}};\n  }}\n  (({p}_{rpc}{suffix}_cb_t)call->callback)({ctx}, result, view);\n}}").unwrap();
+            writeln!(s,"static void {p}_complete_{rpc}{suffix}(wl_endpoint_t *core, const wl_endpoint_call_t *call, wl_rpc_result_t result, const uint8_t *body, size_t length) {{\n  (void)core;\n  {resp}_t response;\n  const {resp}_t *view = NULL;\n  if (result.outcome == WL_RPC_SUCCESS) {{\n    if ({resp}_decode_local(body, length, &response) == WL_CODEC_OK) view = &response;\n    else result = (wl_rpc_result_t){{WL_RPC_LOCAL_ERROR, WL_ERR_CORRUPT_PAYLOAD}};\n  }}\n  (({p}_{rpc}{suffix}_cb_t)call->callback)({ctx}, result, view);\n}}").unwrap();
         }
         writeln!(s,"static wl_err_t {p}_call_{rpc}_start({p}_node_t *self, const {req}_t *request, uint32_t now, uint32_t timeout, uint8_t has_now, wl_endpoint_complete_fn complete, void (*callback)(void), void *user, wl_call_handle_t *out) {{\n  if (out != NULL) *out = (wl_call_handle_t){{0}};\n  if (self == NULL || request == NULL || callback == NULL || timeout > INT32_MAX) return WL_ERR_INVALID_ARG;\n  if (timeout == 0U) timeout = {}U;\n  uint8_t slot; uint8_t *payload; size_t capacity;\n  wl_err_t error = wl_endpoint_call_claim(&self->node.core, &slot, &payload, &capacity);\n  if (error != WL_OK) return error;\n  size_t length = 0U;\n  if ({req}_encode(request, payload, capacity, &length) != WL_CODEC_OK) return WL_ERR_CORRUPT_PAYLOAD;\n  return wl_endpoint_call_commit(&self->node.core, slot, {}U, {}U, length, now, timeout, has_now, complete, callback, user, out);\n}}",n.timeout_ms,r.request_id,r.response_id).unwrap();
         let callback = r.handler.as_deref().unwrap_or("callback");
         writeln!(s,"wl_err_t {p}_call_{rpc}({p}_node_t *self, const {req}_t *request{cb}) {{\n  return {p}_call_{rpc}_start(self, request, 0U, 0U, 0U, {p}_complete_{rpc}, (void (*)(void)){callback}, self, NULL);\n}}\nwl_err_t {p}_call_{rpc}_ex({p}_node_t *self, const {req}_t *request, uint32_t now, uint32_t timeout_ms, {p}_{rpc}_ex_cb_t callback, void *user, wl_call_handle_t *out) {{\n  return {p}_call_{rpc}_start(self, request, now, timeout_ms, 1U, {p}_complete_{rpc}_ex, (void (*)(void))callback, user, out);\n}}").unwrap();
     }
 }
-fn emit_route(n: &Node, local: &BTreeSet<u16>, s: &mut String) {
+fn emit_route(n: &Node, s: &mut String) {
     let p = &n.name;
     let dynamic = n.handlers == Handlers::Dynamic;
     writeln!(s,"static wl_err_t {p}_route(wl_endpoint_t *core, const wl_wire_frame_t *frame) {{\n  {p}_node_t *self = ({p}_node_t *)core;\n  (void)self;\n  switch (frame->message_id) {{").unwrap();
@@ -731,13 +696,7 @@ fn emit_route(n: &Node, local: &BTreeSet<u16>, s: &mut String) {
             )
             .unwrap();
         }
-        let decode = decode_call(
-            local,
-            r.request_id,
-            &req,
-            "metadata.body, metadata.length, &request",
-        );
-        writeln!(s,"    wl_rpc_metadata_t metadata;\n    wl_err_t error = wl_wire_rpc_read(frame->kind, frame->payload, frame->length, &metadata);\n    if (error != WL_OK) return error;\n    uint8_t slot; uint8_t *payload; size_t capacity;\n    error = wl_endpoint_reply_claim(core, {}U, &metadata, &slot, &payload, &capacity);\n    if (error != WL_OK) return error;\n    {req}_t request;\n    if ({decode} != WL_CODEC_OK) {{\n      wl_endpoint_reply_abort(core, slot); return WL_ERR_CORRUPT_PAYLOAD;\n    }}\n    {resp}_clear(&self->reply.{rpc});",r.response_id).unwrap();
+        writeln!(s,"    wl_rpc_metadata_t metadata;\n    wl_err_t error = wl_wire_rpc_read(frame->kind, frame->payload, frame->length, &metadata);\n    if (error != WL_OK) return error;\n    uint8_t slot; uint8_t *payload; size_t capacity;\n    error = wl_endpoint_reply_claim(core, {}U, &metadata, &slot, &payload, &capacity);\n    if (error != WL_OK) return error;\n    {req}_t request;\n    if ({req}_decode_local(metadata.body, metadata.length, &request) != WL_CODEC_OK) {{\n      wl_endpoint_reply_abort(core, slot); return WL_ERR_CORRUPT_PAYLOAD;\n    }}\n    {resp}_clear(&self->reply.{rpc});",r.response_id).unwrap();
         let handler = if dynamic {
             format!("self->handlers.on_{rpc}")
         } else {
@@ -748,19 +707,14 @@ fn emit_route(n: &Node, local: &BTreeSet<u16>, s: &mut String) {
     }
     for r in &n.recv_routes {
         let m = type_name(&r.message_name);
+        let decode = local::name(&m, r.codec);
         let handler = if dynamic {
             format!("self->handlers.on_{m}")
         } else {
             r.handler.clone().unwrap_or_else(|| format!("{p}_on_{m}"))
         };
         let user = if dynamic { "self->node.user" } else { "self" };
-        let decode = decode_call(
-            local,
-            r.message_id,
-            &m,
-            "frame->payload, frame->length, &message",
-        );
-        writeln!(s,"  case {}U: {{\n    if (frame->kind != WL_WIRE_MSG) return WL_ERR_CORRUPT_PAYLOAD;\n    {m}_t message;\n    if ({decode} != WL_CODEC_OK) return WL_ERR_CORRUPT_PAYLOAD;",r.message_id).unwrap();
+        writeln!(s,"  case {}U: {{\n    if (frame->kind != WL_WIRE_MSG) return WL_ERR_CORRUPT_PAYLOAD;\n    {m}_t message;\n    if ({decode}(frame->payload, frame->length, &message) != WL_CODEC_OK) return WL_ERR_CORRUPT_PAYLOAD;",r.message_id).unwrap();
         writeln!(
             s,
             "    {}{handler}({user}, &message);\n    return WL_OK;\n  }}",

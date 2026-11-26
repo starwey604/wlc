@@ -30,7 +30,46 @@ static int mutate_##name(uint8_t *wire, size_t size) { \
 ATOMICITY(snapshot, SNAPSHOT_MAX_ENCODED_SIZE)
 ATOMICITY(scalars, SCALARS_MAX_ENCODED_SIZE)
 
+static int test_flat(void) {
+  sample_t value, before;
+  static const uint8_t wire[] = {8, 128, 1, 130, 1, 2, 'o', 'k', 138, 1, 1, 42};
+  uint8_t buf[sizeof(wire) + 4];
+  size_t length = 99;
+  memset(&value, 0x55, sizeof(value));
+  sample_clear(&value);
+  CHECK(value.seq == 0 && value.label.length == 0 && value.label.data[0] == 0);
+  CHECK(value.data.length == 0 && value.data.data[1999] == 0x55);
+  memcpy(buf, wire, sizeof(wire));
+  buf[sizeof(wire)] = 24; buf[sizeof(wire)+1] = 1; /* unknown varint */
+  CHECK(sample_decode(buf, sizeof(wire)+2, &value) == WL_CODEC_OK);
+  CHECK(value.seq == 128 && strcmp(value.label.data, "ok") == 0 && value.data.data[0] == 42);
+  CHECK(sample_encoded_size(&value) == sizeof(wire));
+  memset(buf, 0x55, sizeof(buf));
+  CHECK(sample_encode(&value, buf, sizeof(wire)-1, &length) == WL_CODEC_ERR_CAPACITY);
+  CHECK(length == 99 && buf[0] == 0x55);
+  CHECK(sample_encode(&value, buf, sizeof(wire), &length) == WL_CODEC_OK);
+  CHECK(length == sizeof(wire) && memcmp(buf, wire, length) == 0);
+  memcpy(&before, &value, sizeof(value));
+  buf[length] = 8; /* duplicate even without value */
+  CHECK(sample_decode(buf, length+1, &value) == WL_CODEC_ERR_DUPLICATE_FIELD);
+  CHECK(memcmp(&value, &before, sizeof(value)) == 0);
+  CHECK(sample_decode(buf, 3, &value) == WL_CODEC_ERR_MISSING_REQUIRED_FIELD);
+  buf[0] = 10; CHECK(sample_decode(buf, 1, &value) == WL_CODEC_ERR_WIRE_TYPE);
+  memcpy(buf, wire, length); buf[5] = 4;
+  CHECK(sample_decode(buf, 6, &value) == WL_CODEC_ERR_INVALID_VALUE);
+  buf[5] = 3; CHECK(sample_decode(buf, 6, &value) == WL_CODEC_ERR_MALFORMED);
+  buf[5] = 2; buf[6] = 255; CHECK(sample_decode(buf, length, &value) == WL_CODEC_ERR_UTF8);
+  CHECK(memcmp(&value, &before, sizeof(value)) == 0);
+  value.label.data[0] = (char)255;
+  CHECK(sample_encoded_size(&value) == SIZE_MAX);
+  CHECK(sample_encode(&value, buf, 0, &length) == WL_CODEC_ERR_UTF8);
+  value.label.length = 0; value.data.length = 2001;
+  CHECK(sample_encode(&value, buf, sizeof(buf), &length) == WL_CODEC_ERR_INVALID_VALUE);
+  return 0;
+}
+
 int main(void) {
+  CHECK(test_flat() == 0);
   {
     scalars_t scalar; uint8_t encoded[SCALARS_MAX_ENCODED_SIZE]; size_t length;
     scalars_clear(&scalar);

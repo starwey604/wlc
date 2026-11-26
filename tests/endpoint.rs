@@ -276,7 +276,7 @@ fn bounded_bytes_decode_into_private_callback_values_only() {
          message Packet @id(2) { Inner inner @id(1); uint32 seq @id(2); }
          node sub { recv Packet; }",
     );
-    assert!(generated.files["demo.c"].contains("WLC_NODE_DECODE(packet, frame->payload"));
+    assert!(generated.files["demo.c"].contains("packet_decode_local(frame->payload"));
     compile_and_run(
         generated,
         r#"

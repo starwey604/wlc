@@ -18,6 +18,7 @@ message Snapshot @id(3) {
   optional DeviceInfo backup @id(3);
 }
 message Large @id(4) { required bytes<2031> payload @id(1); }
+message Sample @id(8) { uint32 seq @id(1); string<3> label @id(16); bytes<2000> data @id(17); }
 message Unbounded @id(5) { repeated DeviceInfo devices @id(1); }
 message Empty @id(6) {}
 message Scalars @id(7) { required uint32 value @id(1); optional fixed64 wide @id(300); optional float64 real @id(65535); }
@@ -36,6 +37,16 @@ fn bounded_values_own_nested_data_and_keep_wire_semantics() {
     let model = analyze_schema(&parse_schema(SCHEMA).unwrap()).unwrap();
     let generated = generate_c(&model, "owned").unwrap();
     assert_eq!(generated, generate_c(&model, "owned").unwrap());
+    assert!(!generated.source.contains("sample_desc"));
+    assert!(!generated.header.contains("decode_local"));
+    let ast = parse_schema(&format!(
+        "{SCHEMA} node receiver {{ recv Sample; serve Echo(Large) -> Empty; }}"
+    ))
+    .unwrap();
+    let nodes = wlc::node::analyze_nodes(&ast, &model).unwrap();
+    let node = wlc::node_codegen::generate_node_c(&model, &nodes, "owned").unwrap();
+    assert!(node.files["owned.c"].contains("sample_decode_local(frame->payload"));
+    assert!(node.files["owned.c"].contains("large_decode_local(metadata.body"));
     assert!(generated.header.contains("device_info_t *devices;"));
     let directory = tempdir().unwrap();
     for (file, text) in [

@@ -7,7 +7,8 @@ use wlc::{codegen::generate_c_for_nodes, node::analyze_nodes};
 fn readers_preserve_canonical_errors_cursor_and_partial_decode_state() {
     for mode in ["schema_v1", "positional_v1"] {
         let schema = if mode == "schema_v1" {
-            "version 1; message StreamChunk @id(103) { required fixed32 sequence @id(1); required bytes<1024> data @id(2); }"
+            // The nested use supplies a generic descriptor for the independent reference.
+            "version 1; message StreamChunk @id(103) { required fixed32 sequence @id(1); required bytes<1024> data @id(2); } message Envelope @id(104) { StreamChunk chunk @id(1); }"
         } else {
             "version 1; message Scalar @id(1) { required uint64 value @id(1); }"
         };

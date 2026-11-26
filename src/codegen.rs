@@ -14,7 +14,9 @@ use crate::{
 mod descriptor;
 mod engine;
 mod fixed;
+mod flat;
 mod header;
+pub(crate) mod local;
 mod names;
 mod packed;
 pub(crate) mod plan;
