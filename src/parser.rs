@@ -263,6 +263,12 @@ impl Parser {
                         value: value.value.to_string(),
                         span: value.span,
                     }
+                } else if key.value == "rx_unit_align" {
+                    let value = self.integer("an integer for rx_unit_align (1, 64, or 512)")?;
+                    Spanned {
+                        value: value.value.to_string(),
+                        span: value.span,
+                    }
                 } else {
                     self.identifier("node setting value")?
                 };

@@ -25,6 +25,7 @@ struct Capacity {
     tx: u64,
     rx_wire: u64,
     tx_wire: u64,
+    rx_unit_size: u16,
 }
 fn body(model: &SemanticModel, id: u16, codec: CodecProfile) -> Result<u64, NodeError> {
     CodecPlan::selected(model, codec, [id])
@@ -63,6 +64,14 @@ fn capacities(model: &SemanticModel, n: &Node) -> Result<Capacity, NodeError> {
     }
     c.rx_wire = n.framing.bound(c.rx);
     c.tx_wire = n.framing.bound(c.tx);
+    let minimum = c.rx_wire + 1;
+    let rx_unit_size = if n.rx_unit_align > 1 {
+        minimum.next_multiple_of(u64::from(n.rx_unit_align))
+    } else {
+        minimum
+    };
+    c.rx_unit_size = u16::try_from(rx_unit_size)
+        .map_err(|_| NodeError(format!("RX unit size {rx_unit_size} exceeds 65535 bytes")))?;
     Ok(c)
 }
 fn message(schema: &SemanticModel, id: u16) -> &MessageSymbol {
@@ -171,6 +180,7 @@ pub(crate) fn check_names(schema: &SemanticModel, nodes: &[Node]) -> Result<(), 
             "TX_FRAME_MAX",
             "RX_WIRE_MAX",
             "TX_WIRE_MAX",
+            "RX_UNIT_SIZE",
         ] {
             register(&mut names, format!("{}_{suffix}", upper_snake(p)))?;
         }
@@ -315,13 +325,19 @@ pub fn generate_node_c_with_pruning(
     Ok(GeneratedNodeC { files })
 }
 fn node_metadata(n: &Node, c: Capacity) -> String {
+    let align = if n.rx_unit_align > 1 {
+        format!(",\"rx_unit_align\":{}", n.rx_unit_align)
+    } else {
+        String::new()
+    };
     format!(
-        "{{\"name\":\"{}\",\"framing\":\"{}\",\"handlers\":\"{}\",\"timeout_ms\":{},\"rx_slots\":{},\"request_frame_capacity\":{},\"reply_frame_capacity\":{},\"message_frame_capacity\":{},\"rx_frame_capacity\":{},\"tx_frame_capacity\":{},\"rx_wire_capacity\":{},\"tx_wire_capacity\":{}}}",
+        "{{\"name\":\"{}\",\"framing\":\"{}\",\"handlers\":\"{}\",\"timeout_ms\":{},\"rx_slots\":{},\"rx_unit_size\":{}{align},\"request_frame_capacity\":{},\"reply_frame_capacity\":{},\"message_frame_capacity\":{},\"rx_frame_capacity\":{},\"tx_frame_capacity\":{},\"rx_wire_capacity\":{},\"tx_wire_capacity\":{}}}",
         n.name,
         n.framing.name(),
         n.handlers.name(),
         n.timeout_ms,
         n.rx_slots,
+        c.rx_unit_size,
         c.request,
         c.reply,
         c.message,
@@ -344,7 +360,7 @@ fn emit_node(schema: &SemanticModel, n: &Node, c: Capacity, h: &mut String, s: &
     } else {
         "length16_none"
     };
-    writeln!(h,"\ntypedef struct {p}_node {p}_node_t;\n#define {upper}_REQUEST_FRAME_MAX {}U\n#define {upper}_REPLY_FRAME_MAX {}U\n#define {upper}_MESSAGE_FRAME_MAX {}U\n#define {upper}_RX_FRAME_MAX {}U\n#define {upper}_TX_FRAME_MAX {}U\n#define {upper}_RX_WIRE_MAX {}U\n#define {upper}_TX_WIRE_MAX {}U",c.request,c.reply,c.message,c.rx,c.tx,c.rx_wire,c.tx_wire).unwrap();
+    writeln!(h,"\ntypedef struct {p}_node {p}_node_t;\n#define {upper}_REQUEST_FRAME_MAX {}U\n#define {upper}_REPLY_FRAME_MAX {}U\n#define {upper}_MESSAGE_FRAME_MAX {}U\n#define {upper}_RX_FRAME_MAX {}U\n#define {upper}_TX_FRAME_MAX {}U\n#define {upper}_RX_WIRE_MAX {}U\n#define {upper}_TX_WIRE_MAX {}U\n#define {upper}_RX_UNIT_SIZE {}U",c.request,c.reply,c.message,c.rx,c.tx,c.rx_wire,c.tx_wire,c.rx_unit_size).unwrap();
     if tx {
         writeln!(h, "/* Accept and drain the whole frame, or reject it without consuming bytes. */\ntypedef wl_err_t (*{p}_tx_write_fn)({p}_node_t *self, const uint8_t *data, size_t length);").unwrap();
     }
@@ -386,24 +402,28 @@ fn emit_node(schema: &SemanticModel, n: &Node, c: Capacity, h: &mut String, s: &
         }
         writeln!(
             h,
-            "  }} reply;\n  alignas(4) uint8_t replies[WL_ENDPOINT_REPLIES][{reply_stride}];"
+            "  }} reply;\n  alignas(WL_NODE_BUFFER_ALIGN) uint8_t replies[WL_ENDPOINT_REPLIES][{reply_stride}];"
         )
         .unwrap();
     }
     if !n.calls.is_empty() {
         writeln!(
             h,
-            "  alignas(4) uint8_t requests[WL_ENDPOINT_CALLS][{request_stride}];"
+            "  alignas(WL_NODE_BUFFER_ALIGN) uint8_t requests[WL_ENDPOINT_CALLS][{request_stride}];"
         )
         .unwrap();
     }
     if !n.send_routes.is_empty() {
-        writeln!(h, "  alignas(4) uint8_t message[{}];", c.message).unwrap();
+        writeln!(
+            h,
+            "  alignas(WL_NODE_BUFFER_ALIGN) uint8_t message[{}];",
+            c.message
+        )
+        .unwrap();
     }
-    // Default packet-port RX slots are indexed by rx_wire_max + 1, not a padded stride.
     writeln!(
         h,
-        "  alignas(4) uint8_t rx[{}U][{upper}_RX_WIRE_MAX + 1U];",
+        "  alignas(WL_NODE_BUFFER_ALIGN) uint8_t rx[{}U][{upper}_RX_UNIT_SIZE];",
         n.rx_slots
     )
     .unwrap();
@@ -559,6 +579,9 @@ wl_err_t {p}_bind_sync_instance({p}_node_t *self, uint32_t instance{tx_arg}{extr
         if dynamic { "user" } else { "NULL" }
     )
     .unwrap();
+    if n.rx_unit_align > 1 {
+        writeln!(s, "    .rx_unit_size = {upper}_RX_UNIT_SIZE,").unwrap();
+    }
     if stream {
         writeln!(
             s,

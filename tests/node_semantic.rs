@@ -12,7 +12,7 @@ fn nodes(tail: &str) -> Result<Vec<wlc::Node>, String> {
 fn defaults_and_explicit_configuration_have_the_same_model() {
     let a = nodes("rpc Add(Req)->Resp; node sensor { send Tick; recv Tick; call Add; serve Add; }")
         .unwrap();
-    let b=nodes("node sensor { serve Add(Req)->Resp; call Add; recv Tick @codec(schema_v1); send Tick; rx_slots=2; timeout_ms=500; framing=native; codec=schema_v1; handlers=static; }").unwrap();
+    let b=nodes("node sensor { serve Add(Req)->Resp; call Add; recv Tick @codec(schema_v1); send Tick; rx_slots=2; rx_unit_align=1; timeout_ms=500; framing=native; codec=schema_v1; handlers=static; }").unwrap();
     assert_eq!(a, b);
     assert_eq!(a[0].framing, Framing::Native);
     assert_eq!(a[0].handlers, Handlers::Static);
@@ -22,6 +22,13 @@ fn defaults_and_explicit_configuration_have_the_same_model() {
         let configured = nodes(&format!("node n {{ rx_slots={slots}; }}")).unwrap();
         assert_eq!(configured[0].rx_slots, slots);
     }
+    for align in [64, 512] {
+        let configured = nodes(&format!("node n {{ rx_unit_align={align}; }}")).unwrap();
+        assert_eq!(configured[0].rx_unit_align, align);
+        changed.rx_unit_align = align;
+        assert_ne!(wlc::node_identity(&a[0]), wlc::node_identity(&changed));
+    }
+    changed = a[0].clone();
     changed.rx_slots = 4;
     assert_ne!(wlc::node_identity(&a[0]), wlc::node_identity(&changed));
     changed = a[0].clone();
@@ -30,6 +37,11 @@ fn defaults_and_explicit_configuration_have_the_same_model() {
 }
 #[test]
 fn invalid_nodes_fail_before_generation() {
+    assert!(
+        nodes("node n { rx_unit_align=128; }")
+            .unwrap_err()
+            .contains("rx_unit_align must be 1, 64, or 512")
+    );
     for tail in [
         "node n { framing=magic; }",
         "node n { codec=magic; }",
@@ -138,6 +150,7 @@ fn c_namespace_collisions_are_rejected_before_emission() {
         "message M @id(1){} node n {recv M = n_route;}",
         "message M @id(1){string<2> name @id(1);} node n {recv M = m_set_name;}",
         "message M @id(1){} enum E @id(2){N_RX_FRAME_MAX=1;} node n {}",
+        "message M @id(1){} enum E @id(2){N_RX_UNIT_SIZE=1;} node n {}",
         "message M @id(1){} node n {recv M = m_decode;}",
     ] {
         let ast = parse_schema(source).unwrap();

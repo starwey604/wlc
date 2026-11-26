@@ -84,10 +84,11 @@ fn node_dma_storage_layout_compiles_in_c_and_cpp() {
          message Response @id(2) { required bool a @id(1); required bool b @id(2); required bool c @id(3); }
          message Tick @id(3) { required bool bit @id(1); }
          rpc Execute(Request) -> Response;
-         node demo { call Execute; serve Execute; send Tick; }",
+         node demo { rx_unit_align=512; call Execute; serve Execute; send Tick; }",
     );
     let directory = tempdir().unwrap();
     fs::write(directory.path().join("demo.h"), &generated.files["demo.h"]).unwrap();
+    fs::write(directory.path().join("demo.c"), &generated.files["demo.c"]).unwrap();
     for (compiler, standard, filename) in
         [("cc", "c11", "layout.c"), ("c++", "c++20", "layout.cpp")]
     {
@@ -104,11 +105,13 @@ fn node_dma_storage_layout_compiles_in_c_and_cpp() {
                 "-Wextra",
                 "-Wpedantic",
                 "-Werror",
+                "-DWL_NODE_BUFFER_ALIGN=32U",
                 "-fsyntax-only",
                 "-I",
             ])
             .arg(wirelink_root().join("include"))
             .arg(filename)
+            .args((standard == "c11").then_some("demo.c"))
             .output()
             .unwrap();
         assert!(
@@ -209,6 +212,73 @@ fn node_cli_generates_versioned_artifacts_and_rejects_reliable() {
     .unwrap();
     assert!(!run().status.success());
     assert_eq!(original, fs::read(output.join("demo.c")).unwrap());
+}
+
+#[test]
+fn compile_and_plan_use_overrides_on_selected_nodes() {
+    let dir = tempdir().unwrap();
+    let schema = dir.path().join("demo.wl");
+    fs::write(
+        &schema,
+        "message Packet @id(1) { bytes<58> data @id(1); }
+        node first { framing=length16; rx_slots=2; rx_unit_align=512; recv Packet; }
+        node second { recv Packet; }",
+    )
+    .unwrap();
+    let flags = [
+        "--framing",
+        "native",
+        "--rx-slots",
+        "8",
+        "--rx-unit-align",
+        "64",
+    ];
+    let run = |command: &str, selection: &[&str]| {
+        let mut cli = Command::new(env!("CARGO_BIN_EXE_wlc"));
+        cli.arg(command).arg(&schema).args(selection).args(flags);
+        if command == "compile" {
+            cli.arg("--out-dir").arg(dir.path());
+        }
+        let output = cli.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    run("compile", &["--node", "first"]);
+    let header = fs::read_to_string(dir.path().join("demo.h")).unwrap();
+    assert!(!header.contains("second_node_t"));
+    // The native frame is exactly 64 bytes. The sentinel needs a second 64-byte block.
+    assert!(header.contains("#define FIRST_RX_WIRE_MAX 64U"));
+    assert!(header.contains("#define FIRST_RX_UNIT_SIZE 128U"));
+    assert!(header.contains("rx[8U][FIRST_RX_UNIT_SIZE]"));
+    let source = fs::read_to_string(dir.path().join("demo.c")).unwrap();
+    assert!(source.contains(".rx_unit_size = FIRST_RX_UNIT_SIZE"));
+    let plan = run("plan", &["--all-nodes"]);
+    for field in [
+        r#""framing":"native""#,
+        r#""rx_slots":8"#,
+        r#""rx_unit_align":64"#,
+        r#""rx_unit_size":128"#,
+    ] {
+        assert_eq!(plan.matches(field).count(), 2, "{plan}");
+    }
+    for (flag, value) in [
+        ("--framing", "serial"),
+        ("--rx-slots", "3"),
+        ("--rx-unit-align", "128"),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_wlc"))
+            .arg("plan")
+            .arg(&schema)
+            .args(["--all-nodes", flag, value])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(String::from_utf8_lossy(&output.stderr).contains(flag));
+    }
 }
 
 #[test]
@@ -318,7 +388,10 @@ fn selected_stream_connectors_run_static_rpc_and_abort_half_frames() {
     for (framing, connector) in [("cobs_crc16", "cobs_crc16"), ("length16", "length16_none")] {
         let generated = generate(&format!(
             "{SCHEMA} {}",
-            NODE.replace("node demo {", &format!("node demo {{ framing = {framing};"))
+            NODE.replace(
+                "node demo {",
+                &format!("node demo {{ framing = {framing}; rx_unit_align = 64;")
+            )
         ));
         assert!(
             generated.files["demo_manifest.json"].contains(&format!("\"framing\":\"{framing}\""))
@@ -366,6 +439,7 @@ static void done(demo_node_t *self, wl_rpc_result_t result, const response_t *re
 int main(void) {
   static demo_node_t endpoint;
   assert(demo_bind_sync(&endpoint, demo_tx_write) == WL_OK);
+  assert(DEMO_RX_UNIT_SIZE == 64U && wl_packet_rx_unit_size(&endpoint.node.port) == DEMO_RX_UNIT_SIZE);
   request_t request = {.input=INT32_MIN,.name={.length=3,.data={'a',0,'b'}}};
   assert(demo_call_execute(&endpoint,&request,done) == WL_OK);
   memset(&request,0,sizeof(request));

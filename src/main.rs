@@ -5,6 +5,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+use wlc::node::{Framing, Node, NodeError, parse_rx_slots, parse_rx_unit_align, select_nodes};
 #[derive(Parser)]
 #[command(
     version,
@@ -20,6 +21,24 @@ struct Selection {
     node: Option<String>,
     #[arg(long)]
     all_nodes: bool,
+    /// Override framing on each selected node.
+    #[arg(long, value_parser = Framing::parse, value_name = "native|cobs_crc16|length16")]
+    framing: Option<Framing>,
+    /// Override the number of RX slots.
+    #[arg(long, value_parser = parse_rx_slots, value_name = "2|4|8")]
+    rx_slots: Option<u8>,
+    /// Round each RX slot's byte size up to a multiple of this value.
+    #[arg(long, value_parser = parse_rx_unit_align, value_name = "1|64|512")]
+    rx_unit_align: Option<u16>,
+}
+impl Selection {
+    fn select(self, all: &[Node]) -> Result<Vec<Node>, NodeError> {
+        let mut nodes = select_nodes(all, self.node.as_deref(), self.all_nodes)?;
+        for node in &mut nodes {
+            node.apply_overrides(self.framing, self.rx_slots, self.rx_unit_align);
+        }
+        Ok(nodes)
+    }
 }
 #[derive(clap::Subcommand)]
 enum Command {
@@ -150,9 +169,7 @@ fn main() -> Result<()> {
             let (ast, model) = load(&schema)?;
             previous(old, &model)?;
             let all = wlc::analyze_nodes(&ast, &model).map_err(miette::Report::new)?;
-            let nodes =
-                wlc::node::select_nodes(&all, selection.node.as_deref(), selection.all_nodes)
-                    .map_err(miette::Report::new)?;
+            let nodes = selection.select(&all)?;
             let module = stem(&schema);
             let generated =
                 wlc::generate_node_c(&model, &nodes, &module).map_err(miette::Report::new)?;
@@ -196,9 +213,7 @@ fn main() -> Result<()> {
         Command::Plan { schema, selection } => {
             let (ast, model) = load(&schema)?;
             let all = wlc::analyze_nodes(&ast, &model).map_err(miette::Report::new)?;
-            let nodes =
-                wlc::node::select_nodes(&all, selection.node.as_deref(), selection.all_nodes)
-                    .map_err(miette::Report::new)?;
+            let nodes = selection.select(&all)?;
             print!(
                 "{}",
                 wlc::plan_manifest::generate_node_plan_manifest(&model, &nodes)

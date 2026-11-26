@@ -19,11 +19,14 @@ node device {
   framing = native;       // native | cobs_crc16 | length16
   handlers = static;      // static | dynamic
   rx_slots = 4;           // 2（默认）、4 或 8
+  rx_unit_align = 1;      // RX 槽步长（字节）：1（默认）、64 或 512
   timeout_ms = 500;       // 1..2147483647
   serve Read;
   send Sample;
 }
 ```
+
+`compile` 和 `plan` 都可通过 `--framing`、`--rx-slots` 和 `--rx-unit-align` 覆盖所选节点的对应设置。生成的 RX 槽按 `rx_wire_max + 1` 预留哨兵字节后，向上取整到 `rx_unit_align` 的倍数。缓冲区首地址对齐由单独的宏 `WL_NODE_BUFFER_ALIGN` 控制，默认为 4 字节。
 
 使用 生成契约为 1 的 WLC 与 Wirelink。RPC 固定使用 Schema-v1；普通消息可使用 `codec = positional_v1` 或 `@codec(positional_v1)`。节点路由要求有界类型，存储严格按所选 `call` / `serve` / `send` 角色裁剪。
 

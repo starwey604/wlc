@@ -18,6 +18,14 @@ pub enum Framing {
     Length16,
 }
 impl Framing {
+    pub fn parse(value: &str) -> Result<Self, NodeError> {
+        match value {
+            "native" => Ok(Self::Native),
+            "cobs_crc16" => Ok(Self::CobsCrc16),
+            "length16" => Ok(Self::Length16),
+            _ => Err(error("framing must be native, cobs_crc16, or length16")),
+        }
+    }
     pub fn name(self) -> &'static str {
         match self {
             Self::Native => "native",
@@ -78,6 +86,7 @@ pub struct Node {
     pub handlers: Handlers,
     pub timeout_ms: u32,
     pub rx_slots: u8,
+    pub rx_unit_align: u16,
     pub send_routes: Vec<MessageRoute>,
     pub recv_routes: Vec<MessageRoute>,
     pub calls: Vec<RpcRoute>,
@@ -91,6 +100,7 @@ impl Node {
             handlers: Handlers::Static,
             timeout_ms: 500,
             rx_slots: 2,
+            rx_unit_align: 1,
             send_routes: Vec::new(),
             recv_routes: Vec::new(),
             calls: Vec::new(),
@@ -103,6 +113,16 @@ impl Node {
     pub fn has_rpc_server(&self) -> bool {
         !self.serves.is_empty()
     }
+    pub fn apply_overrides(
+        &mut self,
+        framing: Option<Framing>,
+        rx_slots: Option<u8>,
+        rx_unit_align: Option<u16>,
+    ) {
+        self.framing = framing.unwrap_or(self.framing);
+        self.rx_slots = rx_slots.unwrap_or(self.rx_slots);
+        self.rx_unit_align = rx_unit_align.unwrap_or(self.rx_unit_align);
+    }
 }
 #[derive(Clone, Debug, Diagnostic, Error, Eq, PartialEq)]
 #[error("node: {0}")]
@@ -110,6 +130,18 @@ impl Node {
 pub struct NodeError(pub String);
 fn error(s: impl Into<String>) -> NodeError {
     NodeError(s.into())
+}
+pub fn parse_rx_slots(value: &str) -> Result<u8, NodeError> {
+    match value.parse() {
+        Ok(slots @ (2 | 4 | 8)) => Ok(slots),
+        _ => Err(error("rx_slots must be 2, 4, or 8")),
+    }
+}
+pub fn parse_rx_unit_align(value: &str) -> Result<u16, NodeError> {
+    match value.parse() {
+        Ok(align @ (1 | 64 | 512)) => Ok(align),
+        _ => Err(error("rx_unit_align must be 1, 64, or 512")),
+    }
 }
 fn codec(s: &str) -> Result<CodecProfile, NodeError> {
     match s {
@@ -214,18 +246,12 @@ pub fn analyze_nodes(ast: &Schema, model: &SemanticModel) -> Result<Vec<Node>, N
                 return Err(error(format!("duplicate node setting `{}`", key.value)));
             }
             match (key.value.as_str(), value.value.as_str()) {
-                ("framing", "native") => node.framing = Framing::Native,
-                ("framing", "cobs_crc16") => node.framing = Framing::CobsCrc16,
-                ("framing", "length16") => node.framing = Framing::Length16,
+                ("framing", value) => node.framing = Framing::parse(value)?,
                 ("handlers", "static") => node.handlers = Handlers::Static,
                 ("handlers", "dynamic") => node.handlers = Handlers::Dynamic,
                 ("codec", value) => default_codec = codec(value)?,
-                ("rx_slots", value) => {
-                    node.rx_slots = match value.parse::<u8>() {
-                        Ok(slots @ (2 | 4 | 8)) => slots,
-                        _ => return Err(error("rx_slots must be 2, 4, or 8")),
-                    };
-                }
+                ("rx_slots", value) => node.rx_slots = parse_rx_slots(value)?,
+                ("rx_unit_align", value) => node.rx_unit_align = parse_rx_unit_align(value)?,
                 ("timeout_ms", value) => {
                     node.timeout_ms = value
                         .parse::<u32>()

@@ -76,6 +76,10 @@ pub fn node_identity(model: &Node) -> u64 {
     hash.string(model.handlers.name());
     hash.u32(model.timeout_ms);
     hash.u8(model.rx_slots);
+    // Leave the default layout's existing identity byte stream untouched.
+    if model.rx_unit_align != 1 {
+        hash.u16(model.rx_unit_align);
+    }
     for routes in [&model.send_routes, &model.recv_routes] {
         hash.len(routes.len());
         for route in routes {

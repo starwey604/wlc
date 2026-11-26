@@ -19,11 +19,14 @@ node device {
   framing = native;       // native | cobs_crc16 | length16
   handlers = static;      // static | dynamic
   rx_slots = 4;           // 2 (default), 4, or 8
+  rx_unit_align = 1;      // RX stride multiple in bytes: 1 (default), 64, or 512
   timeout_ms = 500;       // 1..2147483647
   serve Read;
   send Sample;
 }
 ```
+
+Use `--framing`, `--rx-slots`, and `--rx-unit-align` with either `compile` or `plan` to override those settings on the selected nodes. Each generated RX slot reserves a sentinel byte and rounds `rx_wire_max + 1` up to a multiple of `rx_unit_align`. The separate C macro `WL_NODE_BUFFER_ALIGN` controls buffer base alignment and defaults to 4 bytes.
 
 Use WLC and Wirelink with codegen contract 1. RPC routes always use Schema-v1; ordinary messages may select `positional_v1` per node or per route. Node routes require bounded types, and TX storage is pruned by declared `call` / `serve` / `send` roles.
 
