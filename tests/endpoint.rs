@@ -222,6 +222,50 @@ int main(void) {
 }
 
 #[test]
+fn bounded_bytes_decode_into_private_callback_values_only() {
+    let generated = generate(
+        "message Inner @id(1) { bytes<64> data @id(1); }
+         message Packet @id(2) { Inner inner @id(1); uint32 seq @id(2); }
+         node sub { recv Packet; }",
+    );
+    assert!(generated.files["demo.c"].contains("WLC_NODE_DECODE(packet, frame->payload"));
+    compile_and_run(
+        generated,
+        r#"
+#include "demo.h"
+#include <assert.h>
+#include <string.h>
+static unsigned calls;
+void sub_on_packet(sub_node_t *self, const packet_t *p) {
+  (void)self;
+  assert(p->seq == 7 && p->inner.data.length == 3);
+  assert(memcmp(p->inner.data.data, "a\0b", 3) == 0);
+  ++calls;
+}
+int main(void) {
+  sub_node_t sub;
+  assert(sub_bind_sync(&sub) == WL_OK);
+  /* Out of order, with an unknown field; the nested bytes are still owned. */
+  uint8_t frame[] = {WL_WIRE_MAGIC, WL_WIRE_MSG, 2, 0, 16,7, 24,1, 10,5, 10,3,'a',0,'b', 16,1};
+  /* A duplicate after the bytes have been decoded must not publish a partial
+   * value or poison the next frame. The public decoder leaves out intact. */
+  packet_t out;
+  unsigned char before[sizeof(out)];
+  memset(&out, 0xa5, sizeof(out)); memcpy(before, &out, sizeof(out));
+  assert(packet_decode(frame+4, sizeof(frame)-4, &out) == WL_CODEC_ERR_DUPLICATE_FIELD);
+  assert(memcmp(&out, before, sizeof(out)) == 0);
+  assert(wl_node_rx_packet(&sub.node, frame, sizeof(frame)) == WL_OK);
+  assert(wl_node_step(&sub.node, 0) == WL_ERR_CORRUPT_PAYLOAD && calls == 0);
+  assert(wl_node_rx_packet(&sub.node, frame, sizeof(frame)-2) == WL_OK);
+  assert(wl_node_step(&sub.node, 1) == WL_OK && calls == 1);
+  return 0;
+}
+"#,
+        None,
+    );
+}
+
+#[test]
 fn selected_stream_connectors_run_static_rpc_and_abort_half_frames() {
     for (framing, connector) in [("cobs_crc16", "cobs_crc16"), ("length16", "length16_none")] {
         let generated = generate(&format!(

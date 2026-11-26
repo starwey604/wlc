@@ -77,6 +77,7 @@ pub struct Node {
     pub framing: Framing,
     pub handlers: Handlers,
     pub timeout_ms: u32,
+    pub rx_slots: u8,
     pub send_routes: Vec<MessageRoute>,
     pub recv_routes: Vec<MessageRoute>,
     pub calls: Vec<RpcRoute>,
@@ -89,6 +90,7 @@ impl Node {
             framing: Framing::Native,
             handlers: Handlers::Static,
             timeout_ms: 500,
+            rx_slots: 2,
             send_routes: Vec::new(),
             recv_routes: Vec::new(),
             calls: Vec::new(),
@@ -218,6 +220,12 @@ pub fn analyze_nodes(ast: &Schema, model: &SemanticModel) -> Result<Vec<Node>, N
                 ("handlers", "static") => node.handlers = Handlers::Static,
                 ("handlers", "dynamic") => node.handlers = Handlers::Dynamic,
                 ("codec", value) => default_codec = codec(value)?,
+                ("rx_slots", value) => {
+                    node.rx_slots = match value.parse::<u8>() {
+                        Ok(slots @ (2 | 4 | 8)) => slots,
+                        _ => return Err(error("rx_slots must be 2, 4, or 8")),
+                    };
+                }
                 ("timeout_ms", value) => {
                     node.timeout_ms = value
                         .parse::<u32>()

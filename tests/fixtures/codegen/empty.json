@@ -9,7 +9,7 @@
   "identity": {
     "algorithm": "fnv1a64-v1",
     "schema": "0x25262b229432ee0b",
-    "node": "0x35011bfb7623b923"
+    "node": "0xfd550b2176aca153"
   },
   "codec_formats": {
     "EMPTY_CODEC_FORMAT": "schema-v1"
@@ -18,8 +18,8 @@
   ],
   "artifact_digest_algorithm": "fnv1a64-domain-bytes-v1",
   "artifacts": [
-    {"path": "business.c", "size": 3500, "digest": "0xdd0df24f2a5d4c84"},
-    {"path": "business.h", "size": 1981, "digest": "0x44205e4c1f149694"},
-    {"path": "business_manifest.json", "size": 854, "digest": "0x7dfb89a7ad777c59"}
+    {"path": "business.c", "size": 3516, "digest": "0xe98896fe570e97ce"},
+    {"path": "business.h", "size": 1965, "digest": "0xa9df06d6ed308d6c"},
+    {"path": "business_manifest.json", "size": 867, "digest": "0xb120d68760ee6776"}
   ]
 }

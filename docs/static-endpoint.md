@@ -18,6 +18,7 @@ rpc Read(ReadRequest) -> ReadResponse;
 node device {
   framing = native;       // native | cobs_crc16 | length16
   handlers = static;      // static | dynamic
+  rx_slots = 4;           // 2 (default), 4, or 8
   timeout_ms = 500;       // 1..2147483647
   serve Read;
   send Sample;
@@ -25,6 +26,8 @@ node device {
 ```
 
 Use WLC and Wirelink with codegen contract 1. RPC routes always use Schema-v1; ordinary messages may select `positional_v1` per node or per route. Node routes require bounded types, and TX storage is pruned by declared `call` / `serve` / `send` roles.
+
+For messages containing `bytes<N>`, the generated Node decodes into the callback’s local value when the core supports it. This also applies to nested fields and RPC requests and responses. A malformed payload never reaches the application as a partially decoded value. The public message decoder keeps its existing failure behavior.
 
 ## Runtime I/O binding
 

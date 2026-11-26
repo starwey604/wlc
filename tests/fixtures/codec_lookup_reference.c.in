@@ -139,6 +139,8 @@ static wl_codec_status_t reference_decode(const wl_codec_desc_t *d,
   bool seen[WL_CODEC_MAX_FIELDS] = {false};
   _Alignas(max_align_t) uint8_t scratch[4096];
   assert(d->struct_size <= sizeof(scratch));
+  /* The bytewise oracle also compares padding and unused inline capacity. */
+  memset(scratch, 0xA5, d->struct_size);
   if (d->has_repeated != 0U) memcpy(scratch, out, d->struct_size);
   wl_codec_clear(d, scratch);
   uint8_t *base = scratch;

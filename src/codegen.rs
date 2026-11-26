@@ -27,7 +27,7 @@ pub(crate) use descriptor::field_descriptor_data;
 use engine::emit_source;
 pub use names::c_identifier;
 pub use names::c_identifier as c_module_name;
-pub(crate) use names::{c_type, is_c_keyword, type_name, upper_snake};
+pub(crate) use names::{c_type, is_c_keyword, ordered_messages, type_name, upper_snake};
 use symbols::Symbols;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

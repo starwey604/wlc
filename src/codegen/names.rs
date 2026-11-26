@@ -36,7 +36,7 @@ pub(crate) fn c_type(ty: &ResolvedType) -> String {
     }
 }
 
-pub(super) fn ordered_messages(model: &SemanticModel) -> Result<Vec<&MessageSymbol>, CodegenError> {
+pub(crate) fn ordered_messages(model: &SemanticModel) -> Result<Vec<&MessageSymbol>, CodegenError> {
     let messages: HashMap<&str, &MessageSymbol> = model
         .declarations
         .iter()

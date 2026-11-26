@@ -257,8 +257,8 @@ impl Parser {
                 });
             } else {
                 self.expect_symbol(TokenKind::Equal, "`=` after node setting")?;
-                let value = if key.value == "timeout_ms" {
-                    let value = self.positive_u32("timeout_ms")?;
+                let value = if matches!(key.value.as_str(), "timeout_ms" | "rx_slots") {
+                    let value = self.positive_u32(&key.value)?;
                     Spanned {
                         value: value.value.to_string(),
                         span: value.span,

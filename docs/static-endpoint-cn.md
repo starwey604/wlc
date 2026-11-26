@@ -18,6 +18,7 @@ rpc Read(ReadRequest) -> ReadResponse;
 node device {
   framing = native;       // native | cobs_crc16 | length16
   handlers = static;      // static | dynamic
+  rx_slots = 4;           // 2（默认）、4 或 8
   timeout_ms = 500;       // 1..2147483647
   serve Read;
   send Sample;
@@ -25,6 +26,8 @@ node device {
 ```
 
 使用 生成契约为 1 的 WLC 与 Wirelink。RPC 固定使用 Schema-v1；普通消息可使用 `codec = positional_v1` 或 `@codec(positional_v1)`。节点路由要求有界类型，存储严格按所选 `call` / `serve` / `send` 角色裁剪。
+
+当消息含有 `bytes<N>` 且 Core 支持直接解码时，生成的 Node 将数据直接写入传给回调的局部对象；嵌套字段、RPC 请求和响应同样适用。畸形报文不会让应用收到半解码的值。公开消息解码函数的失败语义不变。
 
 ## 运行时接线
 

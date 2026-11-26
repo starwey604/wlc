@@ -36,6 +36,39 @@ static uint32_t random32(void) {
   } \
 } while (0)
 
+static void test_ordered_and_fallback(void) {
+  /* Prefix has two required varints and an optional third one. */
+  static const uint8_t ordered[] = {8, 1, 16, 2, 24, 3};
+  static const uint8_t reordered[] = {16, 2, 8, 1, 24, 3};
+  static const uint8_t unknown[] = {8, 1, 34, 1, 99, 16, 2, 24, 3, 40, 0};
+  prefix_t out;
+  const uint8_t *valid[] = {ordered, reordered, unknown};
+  size_t sizes[] = {sizeof(ordered), sizeof(reordered), sizeof(unknown)};
+  for (unsigned i = 0; i < 3; ++i) {
+    assert(prefix_decode(valid[i], sizes[i], &out) == WL_CODEC_OK);
+    assert(out.a == 1 && out.abc == 2 && out.has_ab && out.ab == 3);
+  }
+  assert(prefix_decode(ordered, 4, &out) == WL_CODEC_OK && !out.has_ab);
+
+  static const struct {
+    uint8_t wire[10]; size_t length; wl_codec_status_t status;
+  } errors[] = {
+    {{8,1}, 2, WL_CODEC_ERR_MISSING_REQUIRED_FIELD},
+    {{16,2,8,1,16,2}, 6, WL_CODEC_ERR_DUPLICATE_FIELD},
+    {{8,1,21,0,0,0,0}, 7, WL_CODEC_ERR_WIRE_TYPE},
+    {{8,1,16,128}, 4, WL_CODEC_ERR_MALFORMED},
+    {{8,1,16,128,0}, 5, WL_CODEC_ERR_MALFORMED},
+    {{8,1,16,128,128,128,128,16}, 8, WL_CODEC_ERR_OVERFLOW},
+    {{8,1,16,2,34,4,1}, 7, WL_CODEC_ERR_MALFORMED},
+  };
+  unsigned char saved[sizeof(out)];
+  memcpy(saved, &out, sizeof(out));
+  for (size_t i = 0; i < sizeof(errors)/sizeof(errors[0]); ++i) {
+    assert(prefix_decode(errors[i].wire, errors[i].length, &out) == errors[i].status);
+    assert(memcmp(&out, saved, sizeof(out)) == 0);
+  }
+}
+
 static void test_wire(void) {
   /* Reversed fields, unknown legal types, noncanonical/overwide keys and
    * values, truncation, repeated required/optional fields, float bit patterns (LE). */
@@ -125,6 +158,7 @@ int main(void) {
   const uint8_t member_names[] = {13, 0x78, 0x56, 0x34, 0x12, 21, 1, 0, 0, 0};
   CHECK(wlc_foo, member_names, 5);
   CHECK(request_extra, member_names, sizeof(member_names));
+  test_ordered_and_fallback();
   test_wire();
   return 0;
 }

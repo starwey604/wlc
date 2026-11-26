@@ -9,7 +9,7 @@
   "identity": {
     "algorithm": "fnv1a64-v1",
     "schema": "0xcf57edfa09599916",
-    "node": "0x54c8d3ce1306af4d"
+    "node": "0x52b344518aaa928d"
   },
   "codec_formats": {
     "EVENT_CODEC_FORMAT": "schema-v1",
@@ -29,8 +29,8 @@
   ],
   "artifact_digest_algorithm": "fnv1a64-domain-bytes-v1",
   "artifacts": [
-    {"path": "business.c", "size": 23667, "digest": "0xbf59dfebb3d444ea"},
-    {"path": "business.h", "size": 9045, "digest": "0x2b5fb781aa3df32b"},
-    {"path": "business_manifest.json", "size": 1666, "digest": "0x9f7e4ee151c24f71"}
+    {"path": "business.c", "size": 24069, "digest": "0xd23c5fbce0ed8d6f"},
+    {"path": "business.h", "size": 9029, "digest": "0xe22c487cb70a321f"},
+    {"path": "business_manifest.json", "size": 1679, "digest": "0x0e88e6b5a8b7123b"}
   ]
 }

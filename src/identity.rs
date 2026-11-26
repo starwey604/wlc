@@ -75,6 +75,7 @@ pub fn node_identity(model: &Node) -> u64 {
     hash.string(model.framing.name());
     hash.string(model.handlers.name());
     hash.u32(model.timeout_ms);
+    hash.u8(model.rx_slots);
     for routes in [&model.send_routes, &model.recv_routes] {
         hash.len(routes.len());
         for route in routes {

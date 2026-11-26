@@ -2,7 +2,9 @@
 use std::fmt::Write;
 
 use super::{
-    MessageDirections, Symbols, c_type, descriptor::field_descriptor_data, plan::MessagePlan,
+    MessageDirections, Symbols, c_type,
+    descriptor::field_descriptor_data,
+    plan::{FieldKey, MessagePlan},
     type_name,
 };
 use crate::{
@@ -169,6 +171,39 @@ pub(super) fn emit_shape_default_clear(out: &mut String, plan: &MessagePlan<'_>,
     emit_shape_clear(out, plan, name);
 }
 
+fn expected_key(key: &FieldKey) -> String {
+    if key.length == 1 {
+        format!("cursor != end && *cursor == 0x{:02x}U", key.bytes[0])
+    } else {
+        let mut bytes = String::new();
+        for byte in &key.bytes[..key.length] {
+            write!(bytes, "\\x{byte:02x}").unwrap();
+        }
+        format!(
+            "cursor != end && (size_t)(end - cursor) >= {0}U && memcmp(cursor, \"{bytes}\", {0}U) == 0",
+            key.length
+        )
+    }
+}
+
+// Try the encoder's field order without a key dispatch or seen mask. A miss
+// leaves out untouched, so the regular decoder owns all diagnostics.
+fn emit_ordered_decode(out: &mut String, plan: &MessagePlan<'_>, name: &str) {
+    writeln!(out, "static wl_codec_status_t {name}_ordered(const uint8_t *cursor, const uint8_t *end, void *out) {{\n  {name}_t temp;\n  {name}_clear(&temp);").unwrap();
+    for (i, field) in plan.message.fields.iter().enumerate() {
+        let key = &plan.keys[i];
+        let matches = expected_key(key);
+        writeln!(out, "  if ({matches}) {{\n    cursor += {}U;", key.length).unwrap();
+        emit_scalar_read(out, field, &format!("temp.v{i}"), "    ", false);
+        if field.cardinality == Cardinality::Optional {
+            writeln!(out, "    temp.h{i} = true;\n  }}").unwrap();
+        } else {
+            writeln!(out, "  }} else return WL_CODEC_ERR_MALFORMED;").unwrap();
+        }
+    }
+    writeln!(out, "  if (cursor != end) return WL_CODEC_ERR_MALFORMED;\n  memcpy(out, &temp, sizeof(temp));\n  return WL_CODEC_OK;\n}}\n").unwrap();
+}
+
 fn schema_v1_shape_source(
     plan: &MessagePlan<'_>,
     name: &str,
@@ -315,17 +350,47 @@ fn schema_v1_shape_source(
     }
 
     if directions.decode {
+        let single = plan.keys.len() == 1;
+        if !single {
+            emit_ordered_decode(&mut out, plan, name);
+        }
         writeln!(
             out,
-            "static wl_codec_status_t {name}_decode(const uint8_t *input, size_t length, void *out) {{\n  if (out == NULL || (length != 0U && input == NULL)) return WL_CODEC_ERR_INVALID_VALUE;\n  {name}_t temp;\n  {name}_clear(&temp);\n  uint8_t seen = 0U;\n  const uint8_t *cursor = input;\n  const uint8_t *end = length != 0U ? input + length : input;\n  while (cursor < end) {{\n    uint64_t wide_key = 0U;\n    wl_codec_status_t status = wl_codec_getv(&cursor, end, &wide_key);\n    if (status != WL_CODEC_OK) return status;\n    const uint64_t number = wide_key >> 3U;\n    const uint8_t wire = (uint8_t)(wide_key & 7U);\n    if (number == 0U || number > UINT16_MAX || (wire != 0U && wire != 1U && wire != 2U && wire != 5U))\n      return WL_CODEC_ERR_MALFORMED;\n    switch ((uint16_t)number) {{"
+            "static wl_codec_status_t {name}_decode(const uint8_t *input, size_t length, void *out) {{\n  if (out == NULL || (length != 0U && input == NULL)) return WL_CODEC_ERR_INVALID_VALUE;\n  const uint8_t *cursor = input;\n  const uint8_t *end = length != 0U ? input + length : input;"
+        )
+        .unwrap();
+        if !single {
+            writeln!(out, "  if (cursor != end && {name}_ordered(cursor, end, out) == WL_CODEC_OK) return WL_CODEC_OK;").unwrap();
+        }
+        writeln!(
+            out,
+            "  {name}_t temp;\n  {name}_clear(&temp);\n  uint8_t seen = 0U;"
+        )
+        .unwrap();
+        if single {
+            // With one field the normal value reader is already the full
+            // decoder. Skip key dispatch, without emitting a second reader.
+            let key = &plan.keys[0];
+            writeln!(
+                out,
+                "  if ({}) {{ cursor += {}U; goto first_value; }}",
+                expected_key(key),
+                key.length
+            )
+            .unwrap();
+        }
+        writeln!(
+            out,
+            "  while (cursor < end) {{\n    uint64_t wide_key = 0U;\n    wl_codec_status_t status = wl_codec_getv(&cursor, end, &wide_key);\n    if (status != WL_CODEC_OK) return status;\n    const uint64_t number = wide_key >> 3U;\n    const uint8_t wire = (uint8_t)(wide_key & 7U);\n    if (number == 0U || number > UINT16_MAX || (wire != 0U && wire != 1U && wire != 2U && wire != 5U))\n      return WL_CODEC_ERR_MALFORMED;\n    switch ((uint16_t)number) {{"
         )
         .unwrap();
         for (i, field) in plan.message.fields.iter().enumerate() {
             let wire = plan.keys[i].wire;
             let bit = 1_u8 << i;
+            let value_label = if single { "\n      first_value: ;" } else { "" };
             writeln!(
                 out,
-                "      case {}U: {{\n        if (wire != {wire}U) return WL_CODEC_ERR_WIRE_TYPE;\n        if ((seen & {bit}U) != 0U) return WL_CODEC_ERR_DUPLICATE_FIELD;",
+                "      case {}U: {{\n        if (wire != {wire}U) return WL_CODEC_ERR_WIRE_TYPE;\n        if ((seen & {bit}U) != 0U) return WL_CODEC_ERR_DUPLICATE_FIELD;{value_label}",
                 field.number
             )
             .unwrap();

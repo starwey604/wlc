@@ -12,12 +12,19 @@ fn nodes(tail: &str) -> Result<Vec<wlc::Node>, String> {
 fn defaults_and_explicit_configuration_have_the_same_model() {
     let a = nodes("rpc Add(Req)->Resp; node sensor { send Tick; recv Tick; call Add; serve Add; }")
         .unwrap();
-    let b=nodes("node sensor { serve Add(Req)->Resp; call Add; recv Tick @codec(schema_v1); send Tick; timeout_ms=500; framing=native; codec=schema_v1; handlers=static; }").unwrap();
+    let b=nodes("node sensor { serve Add(Req)->Resp; call Add; recv Tick @codec(schema_v1); send Tick; rx_slots=2; timeout_ms=500; framing=native; codec=schema_v1; handlers=static; }").unwrap();
     assert_eq!(a, b);
     assert_eq!(a[0].framing, Framing::Native);
     assert_eq!(a[0].handlers, Handlers::Static);
     assert_eq!(wlc::node_identity(&a[0]), wlc::node_identity(&b[0]));
     let mut changed = a[0].clone();
+    for slots in [4, 8] {
+        let configured = nodes(&format!("node n {{ rx_slots={slots}; }}")).unwrap();
+        assert_eq!(configured[0].rx_slots, slots);
+    }
+    changed.rx_slots = 4;
+    assert_ne!(wlc::node_identity(&a[0]), wlc::node_identity(&changed));
+    changed = a[0].clone();
     changed.timeout_ms = 501;
     assert_ne!(wlc::node_identity(&a[0]), wlc::node_identity(&changed));
 }
@@ -28,6 +35,9 @@ fn invalid_nodes_fail_before_generation() {
         "node n { codec=magic; }",
         "node n { io=magic; }",
         "node n { handlers=magic; }",
+        "node n { rx_slots=0; }",
+        "node n { rx_slots=3; }",
+        "node n { rx_slots=16; }",
         "node n { timeout_ms=0; }",
         "node n { timeout_ms=2147483648; }",
         "node n { timeout_ms=1; timeout_ms=1; }",

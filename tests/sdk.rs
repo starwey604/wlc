@@ -509,7 +509,7 @@ fn udp_bridge_uses_separate_direction_limits_and_a_receive_sentinel() {
     let header = &generated.files["generated/device.h"];
     assert!(header.contains("#define DEVICE_RX_WIRE_MAX 16U"));
     assert!(header.contains("#define DEVICE_TX_WIRE_MAX 78U"));
-    assert!(header.contains("rx[WL_PACKET_RX_SLOTS][DEVICE_RX_WIRE_MAX + 1U]"));
+    assert!(header.contains("rx[2U][DEVICE_RX_WIRE_MAX + 1U]"));
     let source = &generated.files["generated/device.c"];
     assert!(
         source.contains(".rx_wire_max = DEVICE_RX_WIRE_MAX, .tx_wire_max = DEVICE_TX_WIRE_MAX")
