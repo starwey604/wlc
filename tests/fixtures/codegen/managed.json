@@ -29,8 +29,8 @@
   ],
   "artifact_digest_algorithm": "fnv1a64-domain-bytes-v1",
   "artifacts": [
-    {"path": "business.c", "size": 31118, "digest": "0x0d247dc94f991a7c"},
+    {"path": "business.c", "size": 31157, "digest": "0x734e24d72e01cddb"},
     {"path": "business.h", "size": 9122, "digest": "0x125a487be1c15b60"},
-    {"path": "business_manifest.json", "size": 1679, "digest": "0x7cc85145b0745e82"}
+    {"path": "business_manifest.json", "size": 1679, "digest": "0x658d1ffeea4a99af"}
   ]
 }
